@@ -19,6 +19,7 @@ from persome.evomem import relation_extractor as rx
 from persome.evomem.engine import EvoMemory
 from persome.evomem.person_graph import PersonEvent, PersonGraph
 from persome.evomem.reconciler import Reconciler
+from persome.store import entries as entries_store
 from persome.store import fts
 from persome.store import relation_edges as edges
 
@@ -221,6 +222,39 @@ def test_terminal_intents_become_activity_points(ac_root):
     assert "user_committed" in provs.values() and "inferred" in provs.values()
     # open/armed 一条都没进：participates_in 只有 3 条
     assert res.written_count >= 3
+
+
+def test_durable_event_entry_becomes_sourced_activity_edge(ac_root):
+    with fts.cursor() as conn:
+        entries_store.create_file(
+            conn,
+            name="event-2026-07-10.md",
+            description="Synthetic activity",
+            tags=["event"],
+        )
+        entry_id = entries_store.append_entry(
+            conn,
+            name="event-2026-07-10.md",
+            content="Reviewed the Persome runtime architecture.",
+            tags=["work"],
+        )
+        conn.execute("DROP TABLE intents")
+
+    result = rx.run_relation_extraction(
+        _on(), memory=_mem(), llm_call=_empty_llm, conn_factory=fts.cursor
+    )
+    with fts.cursor() as conn:
+        row = conn.execute(
+            "SELECT dst_identity, source_kind, source_id, source_receipt "
+            "FROM relation_edges WHERE predicate='participates_in'"
+        ).fetchone()
+    assert result.deterministic_count == 1
+    assert tuple(row) == (
+        f"event:entry:{entry_id}",
+        "entry",
+        entry_id,
+        f"⟨{entry_id}:event-2026-07-10.md⟩",
+    )
 
 
 def test_resolved_rejected_is_not_an_activity(ac_root):

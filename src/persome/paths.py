@@ -32,7 +32,9 @@ def app_data_root() -> Path:
     ``PERSOME_ROOT`` at ``<app data dir>/chronicle``, so the app's JSON sits in the parent;
     a bare CLI/dev run with no override has ``root()`` already == ``~/.persome``. An explicit
     ``PERSOME_APP_DATA_DIR`` override wins when set."""
-    override = (os.environ.get("PERSOME_APP_DATA_DIR") or os.environ.get("MENS_APP_DATA_DIR"))  # Mens is the legacy name
+    override = os.environ.get("PERSOME_APP_DATA_DIR") or os.environ.get(
+        "MENS_APP_DATA_DIR"
+    )  # Mens is the legacy name
     if override:
         return Path(override).expanduser().resolve()
     r = root()
@@ -49,6 +51,19 @@ def capture_buffer_dir() -> Path:
 
 def logs_dir() -> Path:
     return root() / "logs"
+
+
+def exports_dir() -> Path:
+    """Generated, user-shareable artifacts such as the paper model snapshot."""
+    return root() / "exports"
+
+
+def model_build_lock() -> Path:
+    return root() / "model-build.lock"
+
+
+def model_build_manifest() -> Path:
+    return root() / "model-build.json"
 
 
 def ocr_samples_dir() -> Path:

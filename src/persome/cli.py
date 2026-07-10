@@ -198,7 +198,9 @@ def _watch_parent_death() -> None:
     so the daemon truly "dies with the app". No-op when ``PERSOME_PARENT_PID`` is unset (e.g. a plain
     ``persome start`` from a terminal, where the daemon is meant to outlive the shell).
     """
-    raw = (os.environ.get("PERSOME_PARENT_PID") or os.environ.get("MENS_PARENT_PID"))  # Mens is the legacy name
+    raw = os.environ.get("PERSOME_PARENT_PID") or os.environ.get(
+        "MENS_PARENT_PID"
+    )  # Mens is the legacy name
     if not raw:
         return
     try:
@@ -1913,6 +1915,78 @@ def timeline_list(
 
 writer_app = typer.Typer(help="Writer subcommands.")
 app.add_typer(writer_app, name="writer")
+
+model_app = typer.Typer(help="Build, inspect, and export the personal model.")
+app.add_typer(model_app, name="model")
+
+
+@model_app.command("build")
+def model_build(
+    wait_seconds: float = typer.Option(
+        30.0, "--wait-seconds", min=0.0, help="Seconds to wait for another build."
+    ),
+    no_wait: bool = typer.Option(False, "--no-wait", help="Return busy immediately."),
+) -> None:
+    """Run the shared one-shot Point/Line/Face/Volume/Root build."""
+    from .model import ModelBuildBusy, run_model_build
+
+    cfg = _init()
+    try:
+        result = run_model_build(cfg, wait_seconds=0.0 if no_wait else wait_seconds)
+    except ModelBuildBusy as exc:
+        console.print(f"[yellow]busy: {exc}[/yellow]")
+        raise typer.Exit(2) from exc
+    counts = result.stats
+    console.print(
+        f"[bold]model build: {result.status}[/bold]  "
+        f"points={counts['points']} lines="
+        f"{counts['evolution_lines'] + counts['relation_lines']} "
+        f"faces={counts['faces']} volumes={counts['volumes']} roots={counts['roots']}"
+    )
+    console.print(f"manifest: {result.manifest_path}")
+
+
+@model_app.command("export")
+def model_export(
+    out: str = typer.Option("", "--out", help="Output JSON path (default: root exports dir)."),
+    raw: bool = typer.Option(False, "--raw", help="Include unredacted local text."),
+) -> None:
+    """Export the current versioned model snapshot; redacted by default."""
+    from .model import export_snapshot, load_last_manifest
+
+    _init()
+    if raw:
+        console.print("[yellow]warning: --raw may contain sensitive personal data[/yellow]")
+    target = Path(out).expanduser() if out else None
+    with fts.cursor() as conn:
+        path = export_snapshot(
+            conn,
+            out_path=target,
+            redact=not raw,
+            build_metadata=load_last_manifest(),
+        )
+    console.print(f"model snapshot: {path}")
+
+
+@model_app.command("status")
+def model_status_cmd() -> None:
+    """Show live model readiness, geometry counts, and the last build id."""
+    from .model import load_last_manifest, model_status
+
+    _init()
+    with fts.cursor() as conn:
+        status = model_status(conn)
+    last = load_last_manifest()
+    counts = status["stats"]
+    console.print(
+        f"[bold]model: {'ready' if status['ready'] else 'not ready'}[/bold]  "
+        f"points={counts['points']} lines="
+        f"{counts['evolution_lines'] + counts['relation_lines']} "
+        f"faces={counts['faces']} volumes={counts['volumes']} roots={counts['roots']}"
+    )
+    if status["issues"]:
+        console.print(f"issues: {', '.join(status['issues'])}")
+    console.print(f"last build: {last.get('build_id') if last else 'none'}")
 
 
 @writer_app.command("run")

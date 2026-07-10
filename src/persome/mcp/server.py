@@ -6,7 +6,7 @@ depending on `[mcp] transport`. Exposes:
 
   Compressed memory (Markdown layer):
     list_memories, read_memory, search, verify_fact, behavior_patterns,
-    entity_graph, read_receipt, recent_activity
+    get_model_snapshot, entity_graph, read_receipt, recent_activity
   Raw captures (S1 buffer):
     current_context, search_captures, read_recent_capture
   Reference:
@@ -25,7 +25,6 @@ from ..config import load as load_config
 from ..intent import store as intent_store
 from ..logger import get
 from ..prompts import load as load_prompt
-from ..store import cooldown_suppressions as cooldown_suppressions_store
 from ..store import files as files_mod
 from ..store import fts
 from ..store import parser_ticks as parser_ticks_store
@@ -126,6 +125,13 @@ def _read_memory(  # type: ignore[no-untyped-def]
             for e in entries
         ],
     }
+
+
+def _get_model_snapshot(conn, *, redact: bool = True) -> dict[str, Any]:  # type: ignore[no-untyped-def]
+    """Project the live personal model through the same versioned contract as CLI export."""
+    from ..model import build_snapshot, load_last_manifest
+
+    return build_snapshot(conn, redact=redact, build_metadata=load_last_manifest())
 
 
 def _search(  # type: ignore[no-untyped-def]
@@ -1040,6 +1046,18 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
         with fts.cursor() as conn:
             return json.dumps(_behavior_patterns(conn), ensure_ascii=False)
 
+    @server.tool()
+    def get_model_snapshot(redact: bool = True) -> str:
+        """Return the versioned Point/Line/Face/Volume/Root personal-model snapshot.
+
+        This is the stable paper/runtime boundary used by viewers and benchmarks. It includes
+        build metadata, provenance receipts, geometry counts, and the singleton Root. The call is
+        local, read-only, and uncached. ``redact=true`` is the safe default; pass false only when
+        the user explicitly needs their unredacted local model.
+        """
+        with fts.cursor() as conn:
+            return json.dumps(_get_model_snapshot(conn, redact=redact), ensure_ascii=False)
+
     if getattr(cfg.mcp, "read_receipt_enabled", True):
 
         @server.tool()
@@ -1655,7 +1673,9 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
                 req = getattr(ctx.request_context, "request", None)
                 if req is None:
                     return ""
-                raw = req.headers.get("x-persome-task-id", "") or req.headers.get("x-mens-task-id", "")  # Mens is the legacy name
+                raw = req.headers.get("x-persome-task-id", "") or req.headers.get(
+                    "x-mens-task-id", ""
+                )  # Mens is the legacy name
                 return raw.strip()
             except Exception:  # noqa: BLE001 — never let header parsing break a tool
                 return ""
@@ -1728,7 +1748,9 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
                 req = getattr(ctx.request_context, "request", None)
                 if req is None:
                     return False
-                raw = req.headers.get("x-persome-actuation", "") or req.headers.get("x-mens-actuation", "")  # Mens is the legacy name
+                raw = req.headers.get("x-persome-actuation", "") or req.headers.get(
+                    "x-mens-actuation", ""
+                )  # Mens is the legacy name
                 return raw.strip().lower() == "deny"
             except Exception:  # noqa: BLE001 — never let header parsing break a tool
                 return False

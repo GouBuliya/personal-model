@@ -150,6 +150,25 @@ class TestStabilityGateAndPromotion:
         assert _row(conn, fid)["status"] == "active"
         assert faces.maybe_promote(conn, fid) is True  # idempotent
 
+    def test_volume_promotes_after_two_stable_cross_domain_resamples(self, conn):
+        fid = faces.record_face(
+            conn,
+            source="emergent",
+            signature="跨域规律",
+            members=["schema-a", "schema-b"],
+            level=2,
+        )
+        assert faces.maybe_promote(conn, fid) is False
+        faces.record_face(
+            conn,
+            source="emergent",
+            signature="跨域规律",
+            members=["schema-a", "schema-b"],
+            level=2,
+        )
+        assert faces.maybe_promote(conn, fid) is True
+        assert _row(conn, fid)["status"] == "active"
+
     def test_unknown_face_promote_is_false(self, conn):
         assert faces.maybe_promote(conn, "face-nope") is False
 
@@ -215,7 +234,9 @@ class TestProductionHooks:
             )
 
         cfg = config_mod.load(ac_root / "config.toml")
-        cfg.memory_delta.apply_enabled = False  # 测 entries 源挖掘；apply_enabled=True 下 mine 读 evo_nodes
+        cfg.memory_delta.apply_enabled = (
+            False  # 测 entries 源挖掘；apply_enabled=True 下 mine 读 evo_nodes
+        )
         facts = ["用 uv 而非 pip", "用 ruff 取代 black", "拒绝 litellm", "偏好 CLI 工具"]
         with fts.cursor() as c:
             entries_mod.create_file(c, name="project-tooling.md", description="d", tags=["t"])

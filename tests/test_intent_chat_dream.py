@@ -1,10 +1,11 @@
 """P3 — chat write-back converges to the unified store; dream/pattern consume
-the unified intent stream.
+their current activity sources.
 
 Mechanism-level coverage:
 - chat-extracted memory lands in the structured ``entries`` store + FTS (so
   ``search_memory`` finds it), with type→prefix mapping and content dedup
-- pattern_detector + dream render recognized intents as a candidate section
+- pattern_detector renders durable event memory with receipts
+- dream keeps rendering the legacy recognized-intent section until Wave 1 removal
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from datetime import datetime, timedelta
 from persome.intent import sink
 from persome.intent import store as intent_store
 from persome.intent.ontology import Intent, IntentEvidence
+from persome.store import entries as entries_store
 from persome.store import fts
 
 # ─── Half A: chat write-back → unified store ────────────────────────────────
@@ -81,7 +83,7 @@ def test_chat_memory_content_dedup(ac_root):
     assert len(parsed.entries) == 1
 
 
-# ─── Half B: dream / pattern_detector consume the unified intent stream ──────
+# ─── Half B: dream / pattern_detector consume their activity sources ─────────
 
 
 def _seed_intent(conn, scope, text, ts):
@@ -98,24 +100,36 @@ def _seed_intent(conn, scope, text, ts):
     )
 
 
-def test_pattern_detector_renders_intents(ac_root):
+def test_pattern_detector_renders_durable_event_memory(ac_root):
     from persome.writer import pattern_detector as pd
 
     now = datetime.now().astimezone()
     with fts.cursor() as conn:
-        _seed_intent(conn, "meeting-a", "下周三和张三对齐预算", now.isoformat())
+        entries_store.create_file(
+            conn,
+            name="event-2026-07-10.md",
+            description="Synthetic completed activity",
+            tags=["event"],
+        )
+        entry_id = entries_store.append_entry(
+            conn,
+            name="event-2026-07-10.md",
+            content="Reviewed the Persome runtime architecture.",
+            tags=["work"],
+        )
         candidates = pd._collect_candidates(
             conn,
             lookback_start=now - timedelta(days=7),
             window_end=now + timedelta(minutes=1),
             min_occurrences=2,
         )
-        assert "intents" in candidates
+        assert "event_memory" in candidates
         ctx = pd._assemble_context(
             candidates=candidates, event_daily_path="event-x.md", session_id="s1"
         )
-        assert "unified intent stream" in ctx
-        assert "下周三和张三对齐预算" in ctx
+        assert "Durable event memory" in ctx
+        assert "Reviewed the Persome runtime architecture." in ctx
+        assert f"⟨{entry_id}:event-2026-07-10.md⟩" in ctx
 
 
 def test_dream_renders_intents(ac_root):

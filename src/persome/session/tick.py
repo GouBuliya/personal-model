@@ -16,7 +16,6 @@ Three asyncio tasks live here:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 
 from .. import events as events_mod
@@ -80,7 +79,6 @@ def _prune_telemetry_tables() -> dict[str, int]:
         deleted["intent_fold_ticks"] = intent_fold_ticks_store.prune(conn)
         deleted["outcomes"] = outcomes_store.prune(conn)
     return deleted
-
 
 
 def build_manager(cfg: Config) -> SessionManager:
@@ -847,13 +845,14 @@ def _run_evomem_enrichment_once(cfg: Config) -> None:
     layer is isolated in its own try so one failing never blocks the other.
     """
     from ..evomem.engine import EvoMemory
-    from ..evomem.person_graph import IntentPersonNameSource, PersonGraph
+    from ..evomem.person_graph import PersonGraph
+    from ..model.entity_source import MemoryPersonNameSource
     from ..writer import case_extractor
 
     if getattr(cfg, "person_graph_enabled", False):
         try:
             touched = PersonGraph(
-                EvoMemory(), cfg=cfg, name_source=IntentPersonNameSource()
+                EvoMemory(), cfg=cfg, name_source=MemoryPersonNameSource()
             ).ingest()
             logger.info("evomem enrichment: person graph ingested %d update(s)", len(touched))
         except Exception as exc:  # noqa: BLE001 — best-effort enrichment, never crash the tick

@@ -383,7 +383,7 @@ CREATE TABLE relation_edges (
     observations INTEGER NOT NULL DEFAULT 1,  -- 强度=支撑该关系的证据数（event 蒸馏计数，单调不减）
     last_observed_at TEXT,              -- 最近一次证据强化时刻（ISO8601）
     recall_count INTEGER NOT NULL DEFAULT 0  -- 读也是强化（§3.3 testing effect）：树链走过这条边即 +1
-, src_kind TEXT, dst_kind TEXT, polarity TEXT NOT NULL DEFAULT '0');
+, src_kind TEXT, dst_kind TEXT, polarity TEXT NOT NULL DEFAULT '0', source_kind TEXT, source_id TEXT, source_receipt TEXT);
 
 CREATE INDEX ix_edges_dst ON relation_edges(dst_identity, valid_from);
 

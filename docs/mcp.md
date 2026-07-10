@@ -24,6 +24,7 @@ stdio is still available for clients that only speak it (`persome mcp`).
 The instructions teach the client there are **two layers** of memory and that compressed memory rarely tells the whole story:
 
 - **Compressed memory** (Markdown files) — the durable, distilled layer. Tools: `list_memories`, `read_memory`, `search`, `recent_activity`.
+- **Personal model** (Point/Line/Face/Volume/Root) — the versioned model projection. Tool: `get_model_snapshot`.
 - **Raw captures** (the S1 buffer) — what was literally on screen. Tools: `current_context`, `search_captures`, `read_recent_capture`.
 
 The canonical flows spelled out for the client are:
@@ -206,6 +207,13 @@ Returns `null` if nothing matches. Otherwise:
 *"Return the memory organization spec (file naming, what each prefix means). Rarely needed at query time."*
 
 Returns the verbatim contents of `prompts/schema.md`. For normal "look up a fact" flows, prefer `search` / `list_memories` — `get_schema` is really only useful if the agent needs to reason about *where* a new fact would be stored, or explain the memory layout to the user.
+
+### `get_model_snapshot(redact=true)`
+
+Returns the same versioned Point/Line/Face/Volume/Root contract as `persome model export`, including
+the last build manifest, evidence receipts, singleton Root, and geometry/redaction counts. The tool
+is read-only and does not write a public cache. Redaction is on by default; unredacted local content
+requires an explicit `redact=false` call.
 
 ### `list_intents(scope?, status?, limit=50)`
 
