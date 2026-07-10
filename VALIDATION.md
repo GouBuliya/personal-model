@@ -49,6 +49,7 @@ uv run ruff format --check .
 uv run python scripts/secret_scan.py
 uv run python scripts/pii_scan.py
 uv run python scripts/language_scan.py
+uv run python scripts/check_doc_links.py
 ```
 
 `macos` tests need Accessibility permission or compiled Swift helpers.

@@ -1,26 +1,29 @@
 # Documentation index
 
 Code is the source of truth. Root documents define the public Runtime contract;
-this directory explains implementation details for maintainers.
+this directory explains operation and implementation details.
 
 ## Public documents
 
 | Document | Purpose |
 |---|---|
-| [`../README.md`](../README.md) | Install, run, and understand the Runtime. |
+| [`../README.md`](../README.md) | Product experience, sample, installation, and Runtime overview. |
 | [`../ARCHITECTURE.md`](../ARCHITECTURE.md) | Runtime boundary and end-to-end data flow. |
 | [`../MODEL_FORMAT.md`](../MODEL_FORMAT.md) | Versioned personal-model snapshot contract. |
 | [`../MCP.md`](../MCP.md) | Public MCP tools and trust boundary. |
 | [`../SECURITY_PRIVACY.md`](../SECURITY_PRIVACY.md) | Data, egress, redaction, and threat model. |
 | [`../VALIDATION.md`](../VALIDATION.md) | Offline gates and clean-package verification. |
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | Development workflow and DCO policy. |
+| [`operations.md`](operations.md) | Platform, permissions, paths, data control, and uninstall. |
+| [`mcp-clients.md`](mcp-clients.md) | Claude Code, Codex, Cursor, and Desktop setup. |
+| [`benchmarks.md`](benchmarks.md) | Runtime evidence, experience targets, and research limits. |
 
 ## Runtime implementation
 
 | Document | Purpose |
 |---|---|
 | [`architecture.md`](architecture.md) | Detailed pipeline, task registry, storage, and code map. |
-| [`capture.md`](capture.md) | AX/OCR ingestion and app-specific attention extraction. |
+| [`capture.md`](capture.md) | AX/OCR ingestion and attention extraction. |
 | [`timeline.md`](timeline.md) | Minute-window aggregation and evidence preservation. |
 | [`session.md`](session.md) | Session cuts, active flush, retry, and trailing finalization. |
 | [`writer.md`](writer.md) | Point/Line writing plus Face, Volume, and Root construction. |
@@ -41,5 +44,5 @@ this directory explains implementation details for maintainers.
   dated design note.
 - Regenerate `openapi.json` and `db-schema.sql` after intentional contract
   changes, then run their drift tests.
-- Keep all committed examples and fixtures synthetic and run
-  `scripts/pii_scan.py` before pushing.
+- Keep committed examples synthetic and run `scripts/secret_scan.py`,
+  `scripts/pii_scan.py`, and `scripts/language_scan.py` before pushing.

@@ -39,6 +39,7 @@ uv run ruff check .
 uv run ruff format --check .
 uv run python scripts/secret_scan.py
 uv run python scripts/language_scan.py
+uv run python scripts/check_doc_links.py
 ```
 
 To inspect coverage locally:

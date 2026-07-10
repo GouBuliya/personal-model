@@ -64,6 +64,29 @@ jobs:
       - name: English-language source gate
         run: uv run python scripts/language_scan.py
 
+      - name: Documentation links and assets
+        run: uv run python scripts/check_doc_links.py
+
+      - name: Synthetic MCP transport smoke
+        env:
+          PERSOME_LLM_MOCK: "1"
+        run: |
+          uv run python scripts/sample_demo.py --no-open --port 18743 >/tmp/persome-sample.log 2>&1 &
+          sample_pid=$!
+          trap 'kill "$sample_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18743/health >/dev/null; then
+              break
+            fi
+            if ! kill -0 "$sample_pid" 2>/dev/null; then
+              cat /tmp/persome-sample.log
+              exit 1
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:18743/health >/dev/null
+          uv run python scripts/verify_sample_mcp.py --url http://127.0.0.1:18743/mcp
+
   package:
     name: package smoke
     runs-on: ubuntu-latest
@@ -90,9 +113,17 @@ jobs:
 
           bundled = files("persome") / "_bundled"
           required = (
+              "build-mac-ax-helper.sh",
+              "build-mac-ax-watcher.sh",
               "mac-ax-helper.swift",
               "mac-ax-watcher.swift",
+              "mac-url-handlers.swift",
+              "model_assets/LICENSE",
               "model_assets/three.module.js",
+              "model_assets/viewer.css",
+              "model_assets/viewer.js",
+              "model_assets/jsm/controls/OrbitControls.js",
+              "model_assets/jsm/renderers/CSS2DRenderer.js",
               "ocr_models/PP-OCRv6_tiny_det/inference.pdiparams",
               "ocr_models/PP-OCRv6_tiny_rec/inference.pdiparams",
           )

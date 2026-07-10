@@ -88,8 +88,12 @@ belief through the model's correction path. Previous states keep receipts so a
 change is auditable and reversible. Rebuild operations derive current indexes
 from the selected write authority; they do not erase provenance history.
 
-To remove the entire local model, stop the daemon and delete the configured
-`PERSOME_ROOT`. Backups under that root must be handled with the same care.
+For irreversible deletion, stop the daemon and run `persome clean memory` or
+`persome clean all`. The memory command also removes canonical evomem state,
+relations, geometry, exports, projections, and backups. The all command also
+removes captures, timeline/session state, Chat history, logs, and SQLite files
+while preserving config, env, the installed virtualenv, and custom skills. See
+[operations and data control](docs/operations.md).
 
 ## Export caveat
 

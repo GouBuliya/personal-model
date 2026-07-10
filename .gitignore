@@ -35,6 +35,7 @@ resources/mac-ax-actuator
 # Ad-hoc logs / scratch
 *.log
 scratch/
+output/
 
 .env
 scripts/pii_names.local.txt

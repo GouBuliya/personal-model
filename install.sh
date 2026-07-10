@@ -433,8 +433,12 @@ Virtualenv   : ${VENV_DIR}
 CLI shim     : ${INSTALL_BIN_DIR}/persome
 
 Next steps:
-  1. Grant Accessibility permission to your terminal:
+  1. Grant Accessibility permission to your terminal so Persome can read the
+     focused app's AX text and structure:
      System Settings -> Privacy & Security -> Accessibility
+     Screen Recording is optional. Grant it only for local OCR fallback or
+     encrypted screenshot retention; AX collection continues without it.
+     Persome does not require Full Disk Access or Automation permission.
   2. Start the daemon:
      persome start
   3. Check status:
