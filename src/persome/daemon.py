@@ -243,7 +243,7 @@ async def _run(cfg: Config, *, capture_only: bool = False, hard_exit: bool = Fal
     # endpoint is configured (``embeddings_client.available()``) so the
     # default-ON ship stays SAFE without creds: byte-identical BM25, no
     # vector_queue growth. #557 design principle: MCP-side callers get the
-    # 满血版 memory — the SAME function runs in MCP ``build_server``, so the
+
     # standalone stdio server and the in-daemon HTTP server serve the same
     # full-power read stack as the daemon itself.
     from .store import fts as fts_hybrid

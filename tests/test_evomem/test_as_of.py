@@ -1,11 +1,4 @@
-"""as-of-T node resolution (`evomem/as_of.py`) — the §1.4 bitemporal contract.
-
-Deterministic, zero-LLM. Fixtures write real evo_nodes rows through NodeStore
-(the same write path production uses) with pinned gmt_created timestamps, then
-replay: transaction-clock (created/superseded at T), validity-clock filter
-("他三月的老板"), fail-open on missing windows, chain resolution from any
-version id, dangling pointers, and scope isolation.
-"""
+"Tests for test as of."
 
 from __future__ import annotations
 
@@ -23,7 +16,7 @@ def _node(nid: str, content: str, *, created: str, **kw) -> MemoryNode:
         content=content,
         layer=MemoryLayer.L2_FACT,
         gmt_created=datetime.fromisoformat(created),
-        file_name=kw.pop("file_name", "person-张伟.md"),
+        file_name=kw.pop("file_name", "person-\u5f20\u4f1f.md"),
         **kw,
     )
 
@@ -40,25 +33,41 @@ def _conn(ac_root):
 class TestNodesAsOf:
     def test_replays_transaction_clock(self, ac_root):
         store = NodeStore()
-        store.save(_node("a", "张伟是后端工程师", created="2026-02-01T10:00:00"))
-        new = _node("b", "张伟是后端负责人", created="2026-04-01T10:00:00", supersedes=["a"])
+        store.save(
+            _node(
+                "a",
+                "\u5f20\u4f1f\u662f\u540e\u7aef\u5de5\u7a0b\u5e08",
+                created="2026-02-01T10:00:00",
+            )
+        )
+        new = _node(
+            "b",
+            "\u5f20\u4f1f\u662f\u540e\u7aef\u8d1f\u8d23\u4eba",
+            created="2026-04-01T10:00:00",
+            supersedes=["a"],
+        )
         store.save_and_supersede(new, old_id="a")
         with _conn(ac_root) as conn:
             # March: only the old version existed un-superseded
-            march = nodes_as_of(conn, file_name="person-张伟.md", t=_t("2026-03-15T00:00:00"))
+            march = nodes_as_of(
+                conn, file_name="person-\u5f20\u4f1f.md", t=_t("2026-03-15T00:00:00")
+            )
             assert [n.node_id for n in march] == ["a"]
             # May: the successor has replaced it
-            may = nodes_as_of(conn, file_name="person-张伟.md", t=_t("2026-05-01T00:00:00"))
+            may = nodes_as_of(conn, file_name="person-\u5f20\u4f1f.md", t=_t("2026-05-01T00:00:00"))
             assert [n.node_id for n in may] == ["b"]
             # January: nothing written yet
-            assert nodes_as_of(conn, file_name="person-张伟.md", t=_t("2026-01-01T00:00:00")) == []
+            assert (
+                nodes_as_of(conn, file_name="person-\u5f20\u4f1f.md", t=_t("2026-01-01T00:00:00"))
+                == []
+            )
 
     def test_validity_window_filters_when_present(self, ac_root):
         store = NodeStore()
         store.save(
             _node(
                 "boss-q1",
-                "张伟的老板是 Lily",
+                "\u5f20\u4f1f\u7684\u8001\u677f\u662f Lily",
                 created="2026-01-05T00:00:00",
                 valid_from="2026-01-01T00:00:00",
                 valid_until="2026-03-31T23:59:00",
@@ -67,37 +76,46 @@ class TestNodesAsOf:
         store.save(
             _node(
                 "boss-q2",
-                "张伟的老板是 Bob",
+                "\u5f20\u4f1f\u7684\u8001\u677f\u662f Bob",
                 created="2026-01-05T00:00:00",
                 valid_from="2026-04-01T00:00:00",
             )
         )
         with _conn(ac_root) as conn:
-            march = nodes_as_of(conn, file_name="person-张伟.md", t=_t("2026-03-01T00:00:00"))
-            assert [n.node_id for n in march] == ["boss-q1"]  # 他三月的老板
-            june = nodes_as_of(conn, file_name="person-张伟.md", t=_t("2026-06-01T00:00:00"))
+            march = nodes_as_of(
+                conn, file_name="person-\u5f20\u4f1f.md", t=_t("2026-03-01T00:00:00")
+            )
+            assert [n.node_id for n in march] == ["boss-q1"]
+            june = nodes_as_of(
+                conn, file_name="person-\u5f20\u4f1f.md", t=_t("2026-06-01T00:00:00")
+            )
             assert [n.node_id for n in june] == ["boss-q2"]
 
     def test_unwindowed_nodes_pass_fail_open(self, ac_root):
         store = NodeStore()
-        store.save(_node("a", "无窗口事实", created="2026-02-01T00:00:00"))
+        store.save(_node("a", "\u65e0\u7a97\u53e3\u4e8b\u5b9e", created="2026-02-01T00:00:00"))
         with _conn(ac_root) as conn:
-            got = nodes_as_of(conn, file_name="person-张伟.md", t=_t("2026-12-01T00:00:00"))
+            got = nodes_as_of(conn, file_name="person-\u5f20\u4f1f.md", t=_t("2026-12-01T00:00:00"))
         assert [n.node_id for n in got] == ["a"]
 
     def test_mixed_timezone_never_explodes(self, ac_root):
         store = NodeStore()
-        store.save(_node("a", "aware 写入", created="2026-02-01T10:00:00+08:00"))
+        store.save(_node("a", "aware \u5199\u5165", created="2026-02-01T10:00:00+08:00"))
         with _conn(ac_root) as conn:
-            got = nodes_as_of(conn, file_name="person-张伟.md", t=_t("2026-03-01T00:00:00"))
+            got = nodes_as_of(conn, file_name="person-\u5f20\u4f1f.md", t=_t("2026-03-01T00:00:00"))
         assert [n.node_id for n in got] == ["a"]
 
     def test_scope_isolation(self, ac_root):
-        NodeStore(user_id="u1").save(_node("a", "u1 的事实", created="2026-02-01T00:00:00"))
+        NodeStore(user_id="u1").save(
+            _node("a", "u1 \u7684\u4e8b\u5b9e", created="2026-02-01T00:00:00")
+        )
         with _conn(ac_root) as conn:
-            assert nodes_as_of(conn, file_name="person-张伟.md", t=_t("2026-03-01T00:00:00")) == []
+            assert (
+                nodes_as_of(conn, file_name="person-\u5f20\u4f1f.md", t=_t("2026-03-01T00:00:00"))
+                == []
+            )
             got = nodes_as_of(
-                conn, file_name="person-张伟.md", t=_t("2026-03-01T00:00:00"), user_id="u1"
+                conn, file_name="person-\u5f20\u4f1f.md", t=_t("2026-03-01T00:00:00"), user_id="u1"
             )
         assert [n.node_id for n in got] == ["a"]
 

@@ -1,11 +1,10 @@
 # PyInstaller spec for persome (macOS, single arch).
 #
-# 走 spec 而不是 CLI flag：部分依赖（requests/urllib3 的 contrib 子树）
-# 是动态导入的，collect_all / collect_submodules
-# 在枚举阶段把它们显式收进来，静态扫描看不到。LLM 通路现在全走 Anthropic SDK
-# （httpx 传输），不再有 litellm/tiktoken 的特殊处理。
+# Use a spec because several dependencies dynamically import modules that a
+# static scan cannot see. collect_all and collect_submodules include them
+# explicitly. LLM traffic uses the Anthropic SDK over httpx.
 #
-# 调用方式（build_python_bundle.sh 会做）：
+# Invocation used by build_python_bundle.sh:
 #   pyinstaller --noconfirm \
 #     --workpath build/python-bundle/.work \
 #     --distpath build/python-bundle/.dist \
@@ -53,7 +52,7 @@ datas, binaries, hiddenimports = _merge(
     collect_all("shapely"),
 )
 
-# persome dist-info（运行时通过 importlib.metadata 探测版本）
+# persome dist-info, used by importlib.metadata at runtime
 datas += copy_metadata("persome-core")
 
 # PaddleOCR OCR model weights (PP-OCRv6 tiny tier, bundled ~6MB)
@@ -63,14 +62,12 @@ datas += [("ocr_models", "ocr_models")]
 #  pregate defaults to regex. To ship it, `pip install onnxruntime tokenizers`,
 #  add collect_all("onnxruntime") above, and datas += [("gate_models","gate_models")].)
 
-# PaddleX 在创建 OCR pipeline 时用 importlib.metadata.version(<dep>) 探测每个依赖是否
-# 可用（paddlex/utils/deps.py:is_dep_available）；PyInstaller 默认不收第三方包的
-# dist-info，导致这些探测全部抛 PackageNotFoundError → "A dependency error occurred
-# during pipeline creation"。OCR(-core) extra 声明的依赖必须连 metadata 一起收，
-# 同时把纯 Python 的小包（不是 collect_all 传递闭包里的）显式收进来。
+# PaddleX probes dependencies through importlib.metadata.version while creating
+# an OCR pipeline. PyInstaller omits third-party dist-info by default, so OCR
+# dependencies and their metadata must be collected explicitly.
 for _dep in (
     "paddlex", "paddleocr", "paddlepaddle",
-    # ocr / ocr-core extra（paddlex 在 pipeline 创建时逐个 version() 探测）
+    # OCR dependencies probed through version() during pipeline creation.
     "opencv-contrib-python", "pyclipper", "pypdfium2", "python-bidi",
     "shapely", "imagesize", "lxml", "scikit-learn", "scipy",
     "safetensors", "einops", "ftfy", "regex",
@@ -90,10 +87,9 @@ for _mod in ("imagesize", "pyclipper", "bidi", "einops", "ftfy",
     except Exception:
         pass
 
-# HTTP 栈：Anthropic SDK 走 httpx；OCR/web-search 等路径走 requests。
-# requests/urllib3 的 contrib 子树是动态导入的，必须 collect_all 否则
-# 响应解压（gzip/zstandard/brotli）链路缺件，会冒 "Error -3 while
-# decompressing data: incorrect header check"。
+# HTTP stack: the Anthropic SDK uses httpx; OCR and optional web paths use
+# requests. requests/urllib3 contrib modules are dynamic and must be collected
+# so gzip, zstandard, and brotli responses can be decompressed.
 hiddenimports += collect_submodules("httpx")
 hiddenimports += collect_submodules("pydantic")
 datas_r, binaries_r, hidden_r = collect_all("requests")
@@ -118,7 +114,7 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=["pyi_rthook_ssl.py"],
     excludes=[
-        # AWS providers — 走 deepseek/openai 用不到，省 70MB+
+        # AWS providers are unused and add more than 70 MB.
         "botocore",
         "boto3",
         "sagemaker",
@@ -132,7 +128,7 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 # The bootloader filename is what macOS shows in TCC prompts / the Privacy
 # panes: a bare executable has no Info.plist, so the OS falls back to the
 # filename. The daemon is the process that requests Accessibility, so name it
-# "Persome" — users see "Persome … 想要监控", not "persome". The COLLECT dir
+# Use "Persome" so macOS permission prompts show the product name. The COLLECT dir
 # below stays "persome", so the on-disk layout (and every path that
 # references it) is unchanged; only the inner binary is renamed.
 exe = EXE(

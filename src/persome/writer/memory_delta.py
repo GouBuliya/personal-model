@@ -48,7 +48,7 @@ STAGE = "memory_delta"
 _HEADS = ("entities", "assertions", "relations", "events")
 _ENTITY_KINDS = frozenset({"person", "org", "project", "artifact"})
 _PREDICATES = frozenset(p.value for p in edges_store.Predicate)
-_POLARITIES = frozenset({"+", "-", "0"})  # §4.1 极性闭集（默认 0；quote 明确带极性才 ±）
+_POLARITIES = frozenset({"+", "-", "0"})
 
 
 def _norm_polarity(item: dict) -> str:
@@ -73,7 +73,7 @@ def _default_llm_call(cfg: Any, stage: str, messages: list[dict[str, Any]]) -> A
 class DeltaResult:
     session_id: str
     written: bool = False
-    applied: bool = False  # §4.2 apply 通道跑了（apply_enabled）
+    applied: bool = False
     delta_id: int = 0
     counts: dict[str, int] = field(default_factory=dict)
     dropped: int = 0
@@ -95,7 +95,7 @@ def _safe_json(text: str) -> dict:
 
 
 def _load_roster(cfg: Any) -> list[tuple[str, list[str]]]:
-    """Known identities (canonical, aliases) from person_graph — the 选择题 menu.
+    """Return known canonical identities and aliases as the resolution menu.
 
     Fail-open: any read error → empty roster (the delta then only carries
     ``new_entity`` items; nothing breaks).
@@ -117,7 +117,7 @@ def _render_roster(roster: list[tuple[str, list[str]]]) -> str:
         return "(no known identities yet)"
     lines = []
     for canonical, aliases in roster:
-        alias_part = f"（aliases: {', '.join(aliases)}）" if aliases else ""
+        alias_part = f" (aliases: {', '.join(aliases)})" if aliases else ""
         lines.append(f"- {canonical}{alias_part}")
     return "\n".join(lines)
 
@@ -162,7 +162,7 @@ def _canonicalize(
 ) -> dict[str, str] | None:
     """§4.1/§4.3: resolve one identity object through the ONE funnel.
 
-    Returns the CANONICALIZED identity — ``{"ref": canonical}`` (a "张总" ref is
+    Returns the canonical identity in ``{"ref": canonical}`` form (an honorific
     rewritten to the roster canonical it resolved to; a ``new_entity`` that
     turns out to be a known identity is folded to its ``ref``) or
     ``{"new_entity": name}`` for a genuinely unknown name that appears verbatim
@@ -198,7 +198,7 @@ def gate_delta(
     """Deterministic gates over the LLM's delta. Returns (clean, dropped).
 
     Identity fields pass through the ONE funnel (§4.3) and come out
-    CANONICALIZED — a "张总" ref lands as the roster canonical, a known name
+    canonicalized: an honorific reference lands on the roster canonical, a known name
     posing as ``new_entity`` folds to its ``ref`` — so everything downstream
     (the parity eval, the future apply path) reads one identity space.
     """
@@ -287,10 +287,6 @@ def gate_delta(
         else:
             dropped += 1
 
-    # ② 确定性共现 knows —— subsume legacy relation_extractor 的确定性腿：同一 session 出现的
-    # 每对 person 互相 knows。live LLM 抽共现关系不稳（--real parity 实测 relations 漏 <legacy
-    # 1.0），而共现是确定性、免费、高召回——补进 payload 保证 delta relations ⊇ legacy，退役无
-    # 召回损失（LLM 只加富关系 reports_to/part_of/directed）。门控（默认 on）。
     if cooccurrence:
         persons = sorted(
             {
@@ -318,7 +314,7 @@ def gate_delta(
                         "src": {"ref": persons[i]},
                         "dst": {"ref": persons[j]},
                         "predicate": "knows",
-                        "label": "共现",
+                        "label": "co-occurs",
                         "quote": "",
                         "confidence": 0.6,
                         "polarity": "0",
@@ -367,9 +363,7 @@ def run_after_session(
     roster_entries = _load_roster(cfg)
     roster = identity_mod.Roster.build(roster_entries)
     session_text = _render_blocks(blocks)
-    # prompt cache（§ 缓存自动生效）：system prompt 跨全部 session 恒定 → 挂 cache_control
-    # 跨 772 次命中；roster 短窗内稳定（随抽取缓慢增长）→ 单独一块，前缀 system+roster
-    # 一起缓存；session_events 每场变，独立成块不缓存。热路缓存把重放的输入 token 时间砍掉。
+
     _cache = {"type": "ephemeral"}
     messages: list[dict[str, Any]] = [
         {
@@ -433,9 +427,6 @@ def run_after_session(
         result.skipped_reason = "persist_failed"
         return result
 
-    # §4.2 确定性 apply：shadow 存档之后（保住平价双跑），把 gated delta 铸成真实点/边。
-    # 三段分离（LLM 提取 → shadow insert → 确定性 apply）；fail-open：apply 失败只记日志，
-    # 绝不扰动 session 末链，也不影响已存的 shadow 行。
     if getattr(cfg.memory_delta, "apply_enabled", False):
         try:
             from . import delta_apply
@@ -454,7 +445,7 @@ def run_after_session(
                 ar.events_minted,
             )
             result.applied = True
-        except Exception:  # noqa: BLE001 — apply 失败绝不冒泡到 session 末链
+        except Exception:  # noqa: BLE001 — apply
             with fts.cursor() as conn:
                 deltas_store.set_apply_status(conn, delta_id, "failed")
             logger.warning("memory_delta %s: apply failed", session_id, exc_info=True)

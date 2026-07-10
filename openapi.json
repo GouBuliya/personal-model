@@ -12,7 +12,7 @@
           "system"
         ],
         "summary": "Health",
-        "description": "健康检查，返回服务存活状态。",
+        "description": "Return the service liveness status.",
         "operationId": "health_health_get",
         "responses": {
           "200": {
@@ -34,7 +34,7 @@
           "system"
         ],
         "summary": "Permissions",
-        "description": "返回 daemon 自身需要的 macOS 权限实时状态。\n\n辅助功能（Accessibility）由 **daemon 进程**申请——真正读 AX 树的\n``mac-ax-helper`` / ``mac-ax-watcher`` 都由 daemon 派生，TCC 按 daemon 的\n身份记授权。GUI app 自己从不读 AX 树，所以引导页应轮询本端点反映 daemon\n的真实信任态，而不是在 app 进程里自查（那会多出一个冗余 TCC 主体、多弹一次框）。\n\n``accessibility`` 取值 ``granted`` / ``denied``（非 macOS 主机恒为 ``denied``）。",
+        "description": "Return the daemon's current macOS permission state.\n\nAccessibility belongs to the daemon process because it launches the AX\nhelpers that read the tree. A GUI onboarding flow should poll this endpoint\ninstead of creating a second TCC identity. ``accessibility`` is ``granted``\nor ``denied`` and is always ``denied`` on non-macOS hosts.",
         "operationId": "permissions_permissions_get",
         "responses": {
           "200": {
@@ -56,7 +56,7 @@
           "system"
         ],
         "summary": "Status",
-        "description": "获取完整运行状态，包括版本、守护进程状态、运行时长、捕获状态、记忆统计、各阶段 LLM 连通性等。",
+        "description": "Return version, daemon, capture, memory, and LLM connectivity status.",
         "operationId": "status_status_get",
         "responses": {
           "200": {
@@ -166,7 +166,7 @@
           "model"
         ],
         "summary": "Model Node",
-        "description": "Raw receipts behind one graph node (§2.1 每个向量指回符号收据 — the\nclick-through from the 记忆图 to the symbolic layer). Lazy per-node fetch\nso the graph payload stays lean. Zero-LLM, read-only, fail-open:\n\n- ``event:<source-kind>:<source-id>`` → the canonical Activity source;\n- any other identity → the latest ACTIVE evo_nodes of its typed entity file\n  entity file (newest first, bounded, truncated) — the consolidation\n  trail the point was distilled from.",
+        "description": "Return the symbolic receipts behind one graph node.\n\nThis is the click-through from the visual graph to the symbolic layer. Lazy per-node fetch\nso the graph payload stays lean. Zero-LLM, read-only, fail-open:\n\n- ``event:<source-kind>:<source-id>`` → the canonical Activity source;\n- any other identity → the latest ACTIVE evo_nodes of its typed entity file\n  entity file (newest first, bounded, truncated) — the consolidation\n  trail the point was distilled from.",
         "operationId": "model_node_model_node_get",
         "parameters": [
           {
@@ -211,7 +211,7 @@
           "chat"
         ],
         "summary": "List Sessions",
-        "description": "列出所有聊天会话，包括活跃会话和已持久化到磁盘的会话。",
+        "description": "List active and persisted chat sessions.",
         "operationId": "list_sessions_chat_sessions_get",
         "responses": {
           "200": {
@@ -231,7 +231,7 @@
           "chat"
         ],
         "summary": "Create Session",
-        "description": "创建一个新的聊天会话，返回会话 ID 和初始信息。",
+        "description": "Create a chat session and return its initial metadata.",
         "operationId": "create_session_chat_sessions_post",
         "responses": {
           "200": {
@@ -253,7 +253,7 @@
           "chat"
         ],
         "summary": "Get Session",
-        "description": "获取指定会话的详情，包括消息历史。",
+        "description": "Return session metadata and message history.",
         "operationId": "get_session_chat_sessions__session_id__get",
         "parameters": [
           {
@@ -262,10 +262,10 @@
             "required": true,
             "schema": {
               "type": "string",
-              "description": "会话 ID（8 位短 UUID）",
+              "description": "Eight-character session UUID",
               "title": "Session Id"
             },
-            "description": "会话 ID（8 位短 UUID）"
+            "description": "Eight-character session UUID"
           }
         ],
         "responses": {
@@ -296,7 +296,7 @@
           "chat"
         ],
         "summary": "Delete Session",
-        "description": "删除指定会话及其持久化文件。",
+        "description": "Delete a session and its persisted file.",
         "operationId": "delete_session_chat_sessions__session_id__delete",
         "parameters": [
           {
@@ -305,10 +305,10 @@
             "required": true,
             "schema": {
               "type": "string",
-              "description": "会话 ID（8 位短 UUID）",
+              "description": "Eight-character session UUID",
               "title": "Session Id"
             },
-            "description": "会话 ID（8 位短 UUID）"
+            "description": "Eight-character session UUID"
           }
         ],
         "responses": {
@@ -341,7 +341,7 @@
           "chat"
         ],
         "summary": "Get Session Messages",
-        "description": "获取指定会话的消息历史（不含 system 消息）。",
+        "description": "Return the session message history without the system message.",
         "operationId": "get_session_messages_chat_sessions__session_id__messages_get",
         "parameters": [
           {
@@ -350,10 +350,10 @@
             "required": true,
             "schema": {
               "type": "string",
-              "description": "会话 ID（8 位短 UUID）",
+              "description": "Eight-character session UUID",
               "title": "Session Id"
             },
-            "description": "会话 ID（8 位短 UUID）"
+            "description": "Eight-character session UUID"
           }
         ],
         "responses": {
@@ -384,7 +384,7 @@
           "chat"
         ],
         "summary": "Send Message",
-        "description": "向指定会话发送一条消息，以 SSE 流式回放 assistant token、工具调用。\n\nSSE 帧类型见 :data:`SendMessageEvent`：\n- ``reply``      增量 token（``content`` 字段）\n- ``tool_call``  工具调用开始（``name`` + ``arguments``）\n- ``tool_result``工具调用结果（``name`` + ``content``）\n- ``error``      本轮失败（``message`` 字段）\n- ``done``       本轮正常结束\n\nSession 持久化在 stream 结束时执行。客户端断开时会取消正在跑的 LLM 任务。",
+        "description": "Send a message and stream assistant tokens and tool events over SSE.\n\nEvent types are defined by :data:`SendMessageEvent`: ``reply`` carries\nincremental text; ``tool_call`` and ``tool_result`` bracket a tool\ninvocation; ``error`` reports turn failure; and ``done`` completes the\nturn. The session is persisted when the stream ends. Disconnecting the\nclient cancels the active LLM task.",
         "operationId": "send_message_chat_sessions__session_id__messages_post",
         "parameters": [
           {
@@ -393,10 +393,10 @@
             "required": true,
             "schema": {
               "type": "string",
-              "description": "会话 ID（8 位短 UUID）",
+              "description": "Eight-character session UUID",
               "title": "Session Id"
             },
-            "description": "会话 ID（8 位短 UUID）"
+            "description": "Eight-character session UUID"
           }
         ],
         "requestBody": {
@@ -411,7 +411,7 @@
         },
         "responses": {
           "200": {
-            "description": "Server-Sent Events 流。每帧为 ``data: <json>\\n\\n``，其中 ``<json>`` 形如 ``SendMessageEvent`` 联合体。流以 ``data: [DONE]\\n\\n`` 结束。",
+            "description": "Server-Sent Events stream. Each frame is ``data: <json>\\n\\n``, where ``<json>`` matches the ``SendMessageEvent`` union. The stream ends with ``data: [DONE]\\n\\n``.",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -420,7 +420,7 @@
                       "properties": {
                         "type": {
                           "const": "done",
-                          "description": "事件类型常量；表示本轮 SSE 正常完成",
+                          "description": "Event type constant for a completed SSE turn",
                           "title": "Type",
                           "type": "string"
                         },
@@ -433,7 +433,7 @@
                               "type": "null"
                             }
                           ],
-                          "description": "本轮首 token 到达耗时（毫秒，time-to-first-token）；无 token 流出时为 null",
+                          "description": "Time to first token in milliseconds; null when no token was emitted",
                           "title": "Ttft Ms"
                         }
                       },
@@ -447,12 +447,12 @@
                       "properties": {
                         "type": {
                           "const": "error",
-                          "description": "事件类型常量",
+                          "description": "Event type constant",
                           "title": "Type",
                           "type": "string"
                         },
                         "message": {
-                          "description": "错误描述",
+                          "description": "Error description",
                           "title": "Message",
                           "type": "string"
                         }
@@ -468,12 +468,12 @@
                       "properties": {
                         "type": {
                           "const": "reasoning",
-                          "description": "事件类型常量",
+                          "description": "Event type constant",
                           "title": "Type",
                           "type": "string"
                         },
                         "content": {
-                          "description": "增量 thinking / 推理片段（extended thinking）",
+                          "description": "Incremental extended-thinking text",
                           "title": "Content",
                           "type": "string"
                         }
@@ -489,12 +489,12 @@
                       "properties": {
                         "type": {
                           "const": "reply",
-                          "description": "事件类型常量",
+                          "description": "Event type constant",
                           "title": "Type",
                           "type": "string"
                         },
                         "content": {
-                          "description": "增量 token 文本片段",
+                          "description": "Incremental token text",
                           "title": "Content",
                           "type": "string"
                         }
@@ -510,18 +510,18 @@
                       "properties": {
                         "type": {
                           "const": "tool_call",
-                          "description": "事件类型常量",
+                          "description": "Event type constant",
                           "title": "Type",
                           "type": "string"
                         },
                         "name": {
-                          "description": "工具调用名称",
+                          "description": "Tool name",
                           "title": "Name",
                           "type": "string"
                         },
                         "arguments": {
                           "additionalProperties": true,
-                          "description": "工具调用参数",
+                          "description": "Tool arguments",
                           "title": "Arguments",
                           "type": "object"
                         }
@@ -538,17 +538,17 @@
                       "properties": {
                         "type": {
                           "const": "tool_result",
-                          "description": "事件类型常量",
+                          "description": "Event type constant",
                           "title": "Type",
                           "type": "string"
                         },
                         "name": {
-                          "description": "工具调用名称",
+                          "description": "Tool name",
                           "title": "Name",
                           "type": "string"
                         },
                         "content": {
-                          "description": "工具调用结果字符串",
+                          "description": "Tool result text",
                           "title": "Content",
                           "type": "string"
                         }
@@ -607,7 +607,7 @@
           "success": {
             "type": "boolean",
             "title": "Success",
-            "description": "请求是否成功",
+            "description": "Whether the request succeeded",
             "default": true
           },
           "data": {
@@ -628,7 +628,7 @@
               }
             ],
             "title": "Data",
-            "description": "响应数据"
+            "description": "Response payload"
           }
         },
         "type": "object",
@@ -647,7 +647,7 @@
               }
             ],
             "title": "Timestamp",
-            "description": "ISO8601 采集时间；缺省则服务端补"
+            "description": "ISO 8601 capture time; generated by the server when omitted"
           },
           "trigger": {
             "anyOf": [
@@ -660,7 +660,7 @@
               }
             ],
             "title": "Trigger",
-            "description": "触发元数据 {event_type, bundle_id, window_title, details?}"
+            "description": "Trigger metadata: {event_type, bundle_id, window_title, details?}"
           },
           "window_meta": {
             "additionalProperties": true,
@@ -679,7 +679,7 @@
               }
             ],
             "title": "Ax Tree",
-            "description": "AX 树 raw_json（apps→windows→elements），缺省视为 AX 不可用"
+            "description": "Raw AX tree: {apps -> windows -> elements}; omission means AX is unavailable"
           },
           "ax_metadata": {
             "anyOf": [
@@ -692,7 +692,7 @@
               }
             ],
             "title": "Ax Metadata",
-            "description": "AX 采集元数据"
+            "description": "AX capture metadata"
           },
           "screenshot": {
             "anyOf": [
@@ -705,7 +705,7 @@
               }
             ],
             "title": "Screenshot",
-            "description": "{image_base64, mime_type, width, height}（明文，由服务端按配置加密落盘）"
+            "description": "{image_base64, mime_type, width, height}; plaintext in transit and encrypted at rest according to server configuration"
           },
           "ocr_jpeg_b64": {
             "anyOf": [
@@ -717,7 +717,7 @@
               }
             ],
             "title": "Ocr Jpeg B64",
-            "description": "AX 贫瘠窗口的焦点窗口截图 JPEG（base64），供本地 OCR 兜底"
+            "description": "Base64 focused-window JPEG for local OCR when AX text is insufficient"
           },
           "ocr_tier": {
             "anyOf": [
@@ -729,12 +729,12 @@
               }
             ],
             "title": "Ocr Tier",
-            "description": "OCR 档位覆盖；缺省用配置值"
+            "description": "Per-capture OCR tier override; uses configuration when omitted"
           }
         },
         "type": "object",
         "title": "CaptureIngestBody",
-        "description": "Swift \"Persome\" 主程序推送的一帧 capture（``capture.source = \"ingest\"`` 模式）。\n\n采集层（AX 树 + 焦点窗口截图）已搬进持有 Accessibility / Screen-Recording 的 Swift\n进程；daemon 收到后只跑富化与落库，自身不再需要任何系统权限。字段与\ndaemon 自采路径 ``_build_capture`` 的产物对齐，缺省宽松（缺字段降级，不崩）。"
+        "description": "One capture frame pushed by a trusted Swift producer.\n\nThe Swift process owns Accessibility and Screen Recording permissions and\nsupplies the AX tree plus an optional focused-window screenshot. The daemon\nperforms enrichment and persistence. Fields align with the native\n``_build_capture`` output and degrade safely when optional data is absent."
       },
       "HTTPValidationError": {
         "properties": {
@@ -754,7 +754,7 @@
           "content": {
             "type": "string",
             "title": "Content",
-            "description": "用户消息内容"
+            "description": "User message content"
           }
         },
         "type": "object",

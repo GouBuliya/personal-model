@@ -43,14 +43,6 @@ def _ensure_prefix(path_name: str) -> str:
 
 
 def _norm_occurred_at(occurred_at: str | None) -> str | None:
-    """Normalize ``occurred_at`` to a whitespace-free ISO string, or ``None``.
-
-    heading colon-tags 按空白分词解析（``store/files.py:_parse_entries``），含内部空白的
-    值会被切断 → 增量路径存全值、rebuild 只剩首段，打破 ``entry_metadata`` ≡ rebuild 不变量
-    （issue #434）。这里把常见的「日期␣时间」首个空格归一为 ``T``；若归一后仍含任何空白
-    （多空格 / 时区后缀等异常形态），返回 ``None``（== 未标注），保证落盘的值必能字节级
-    round-trip。**两个写口（markdown tag + ``set_entry_metadata``）都过这一关，值才一致。**
-    """
     if not occurred_at or not occurred_at.strip():
         return None
     norm = occurred_at.strip().replace(" ", "T", 1)
@@ -91,13 +83,6 @@ def derived_append_rows(
     conflicted: bool = False,
     occurred_at: str | None = None,
 ) -> None:
-    """一次 append 的派生表序列（entries/entry_temporal/entry_metadata）。
-
-    **两种写权共用**（PR-6b）：markdown 主写模式由 :func:`append_entry` 在文件锁内
-    调用；evomem 主写模式由 ``evomem/inversion.py`` 在真相写（evo_nodes）落定后
-    调用——派生行的取值与顺序只存在一份，两条路径的 FTS 检索投影不可能各自漂移
-    （§1.4「entries 表降级为检索投影」的 by-construction 等价保证）。
-    """
     fts.insert_entry(
         conn,
         id=entry_id,
@@ -142,10 +127,6 @@ def derived_supersede_rows(
     conflicted: bool = False,
     occurred_at: str | None = None,
 ) -> None:
-    """一次 supersede 的派生表序列（退役旧 + 落新 + 链接 + 检索统计承继）。
-
-    与 :func:`derived_append_rows` 同款的两写权共用收口（PR-6b）。
-    """
     fts.mark_superseded(conn, old_entry_id)
     conn.execute(
         "UPDATE entry_temporal SET valid_until=? WHERE entry_id=? AND valid_until IS NULL",
@@ -195,7 +176,6 @@ def derived_supersede_rows(
 
 
 def derived_retire_rows(conn: sqlite3.Connection, *, entry_id: str, ts: str) -> None:
-    """一次孤儿退役（DELETE / ABSTRACT 源）的派生表序列。两写权共用（PR-6b）。"""
     fts.mark_superseded(conn, entry_id)
     conn.execute(
         "UPDATE entry_temporal SET valid_until=? WHERE entry_id=? AND valid_until IS NULL",
@@ -217,10 +197,7 @@ def create_file(
     # Integrity freeze seam (evomem SSOT switch §3.3 #7): with the default
     # config the flag is never set, so this is a pure no-op flag check.
     evo_integrity.ensure_writes_allowed()
-    # 写权反转 dispatch（PR-6b §4.4）：write_authority="evomem" 且目标文件属
-    # evo_nodes 范围（非 event-*/子目录）时，本写口动词改由反转写路承接——真相落
-    # evo_nodes、FTS 表降级为检索投影、markdown 由投影器再生成。默认
-    # "markdown" = 纯 flag 检查，下方 legacy 路径与现状字节等价（P0）。
+
     if evo_inversion.routes_to_engine(name):
         return evo_inversion.create_file(
             conn, name=name, description=description, tags=tags, status=status
@@ -269,7 +246,7 @@ def set_file_status(conn: sqlite3.Connection, *, name: str, status: str) -> None
     the inverse) without drift.
     """
     evo_integrity.ensure_writes_allowed()
-    if evo_inversion.routes_to_engine(name):  # 写权反转 dispatch（PR-6b）
+    if evo_inversion.routes_to_engine(name):
         return evo_inversion.set_file_status(conn, name=name, status=status)
     path = files_mod.memory_path(name)
     if not path.exists():
@@ -302,7 +279,7 @@ def append_entry(
     derived table. All default → no tag, no row (byte-identical to before).
     """
     evo_integrity.ensure_writes_allowed()
-    if evo_inversion.routes_to_engine(name):  # 写权反转 dispatch（PR-6b）
+    if evo_inversion.routes_to_engine(name):
         return evo_inversion.append_entry(
             conn,
             name=name,
@@ -318,8 +295,6 @@ def append_entry(
         raise FileNotFoundError(f"{path.name} does not exist; call create_file first")
     prefix = _ensure_prefix(name)
 
-    # 规整一次，两个写口（markdown tag + set_entry_metadata）共用同一值，否则 DB 存原始
-    # 空格值、markdown/rebuild 存归一值，反而把不变量打破在另一侧（issue #434）。
     occurred_at = _norm_occurred_at(occurred_at)
 
     ts = _now_iso_minute()
@@ -384,9 +359,7 @@ def append_entry(
                 needs_compact=1 if post.metadata.get("needs_compact") else 0,
             ),
         )
-        # 影子写 hook（SSOT 切换 §4.2，PR-3）：锁尾增量镜像进 evo_nodes。绝不抛出、
-        # 绝不回滚主写；关闭（[evomem] shadow_write_enabled=false）= 纯 flag 检查，
-        # 主写路径行为与现状等价。挂在锁内使文件内容与刚写完的派生表状态一致。
+
         evo_shadow.after_write(conn, name=name, entry_ids=[entry_id])
     return entry_id
 
@@ -449,20 +422,8 @@ def supersede_entry(
     conflicted: bool = False,
     occurred_at: str | None = None,
 ) -> str:
-    """Mark old entry superseded and append the new one. Returns new entry id.
-
-    ``refined_from`` (EVO-02 双标签法): when set, the new entry additionally
-    carries a ``#refined-from:{refined_from}`` provenance tag on its heading,
-    marking this supersede as a *refinement* (sharpening) rather than a
-    contradiction. The fold/chain mechanics are unchanged — the old entry still
-    gets ``#superseded-by:{new}`` and is folded out, the new entry is the chain
-    head — so a refinement now退役 the old version (对齐上游/engine.py) while a
-    trail renderer can read the ``refined-from`` tag to distinguish ``← [精炼自]``
-    from a contradiction's ``← [曾]``. ``None`` (every existing SUPERSEDE caller)
-    → byte-identical to before: no extra tag is written.
-    """
     evo_integrity.ensure_writes_allowed()
-    if evo_inversion.routes_to_engine(name):  # 写权反转 dispatch（PR-6b）
+    if evo_inversion.routes_to_engine(name):
         return evo_inversion.supersede_entry(
             conn,
             name=name,
@@ -497,7 +458,7 @@ def supersede_entry(
         # the old entry's tags). A refinement adds an orthogonal ``refined-from``
         # provenance tag on TOP of that base — additive only, so the supersede
         # chain mechanics (#superseded-by back-map, fold) are untouched.
-        # 规整一次，markdown tag 与 set_entry_metadata 共用同一值（issue #434）。
+
         occurred_at = _norm_occurred_at(occurred_at)
 
         new_tags = list(tags or target.tags)
@@ -567,36 +528,14 @@ def supersede_entry(
                 needs_compact=1 if post.metadata.get("needs_compact") else 0,
             ),
         )
-        # 影子写 hook（§4.2）：supersede 影响新旧两个节点——旧节点 shadow + 双向
-        # 指针/refined_from 出处由共享映射从刚写下的 markdown tag 再生，与 backfill
-        # 对既有链的判定一致。失败/滞后只记 miss，主写不受影响。
+
         evo_shadow.after_write(conn, name=name, entry_ids=[old_entry_id, new_id])
     return new_id
 
 
 def mark_entry_deleted(conn: sqlite3.Connection, *, name: str, entry_id: str) -> None:
-    """Logically retire an entry: strike its markdown body, mark FTS superseded.
-
-    This is ``supersede_entry`` *without a replacement* — the DELETE landing
-    (retire with no successor) and the ABSTRACT source-retire landing (each source
-    after the synthesized entry is appended). The body is wrapped in ``~~...~~`` in the
-    markdown file so the retirement is **markdown-durable**: ``rebuild_index``'s
-    ``_body_is_striked`` re-detects the strike and re-derives ``superseded=1`` from
-    markdown, the SSOT. A FTS-only ``mark_superseded`` would silently revive the
-    entry on the next rebuild (markdown is the truth, the column is a projection).
-
-    No ``#superseded-by`` heading tag is written (there is no successor id), so the
-    entry stays off the evolution chain — it is just a retired leaf. Idempotent:
-    re-striking an already-struck body is a no-op.
-
-    NOTE (EVO-02 双标签法): UPDATE no longer routes through here. It now退役 the old
-    version via ``supersede_entry(..., refined_from=old)`` — a real supersede chain
-    head with a ``#refined-from`` provenance tag — rather than the orphan strike
-    path, so the old version is folded out of recall (对齐上游/engine.py) and the
-    refinement is distinguishable from a contradiction in the evolution trail.
-    """
     evo_integrity.ensure_writes_allowed()
-    if evo_inversion.routes_to_engine(name):  # 写权反转 dispatch（PR-6b）
+    if evo_inversion.routes_to_engine(name):
         return evo_inversion.mark_entry_deleted(conn, name=name, entry_id=entry_id)
     path = files_mod.memory_path(name)
     if not path.exists():
@@ -640,36 +579,17 @@ def mark_entry_deleted(conn: sqlite3.Connection, *, name: str, entry_id: str) ->
         # FTS + temporal: mirror supersede_entry's retire half (no new entry).
         ts = _now_iso_minute()
         derived_retire_rows(conn, entry_id=entry_id, ts=ts)
-        # 影子写 hook（§4.2）：DELETE 的影子 = 该节点按 markdown 终态重映射（孤儿
-        # strike → status=shadow, is_latest=0，与 backfill 三态判定逐字一致——含
-        # refined-from 强制活跃分支，保证「增量 == 全量重跑」不变式）。
+
         evo_shadow.after_write(conn, name=name, entry_ids=[entry_id])
 
 
 def rebuild_index(conn: sqlite3.Connection) -> tuple[int, int]:
-    """检索投影重建器（SSOT 切换设计 §2，PR-7 重定义）：从**当前写权的真相**重放
-    entries（FTS）/ entry_metadata / files 检索投影。Returns (files, entries)。
-
-    - ``write_authority="markdown"``（默认，§6 回滚杠杆）：markdown 是 SSOT——
-      行为与历史 rebuild 一致：DELETE 后从 ``memory/*.md`` 全量重放三表
-      （:func:`_rebuild_from_markdown`，原 from-markdown 全量逻辑）。
-    - ``write_authority="evomem"``：evo_nodes 是 SSOT——entries/entry_metadata
-      从 evo_nodes 投影（``superseded = 0 iff is_latest=1 AND status='active'``，
-      §1.4/Q7 派生规则），files 行保留为文件级元数据真相只刷新 entry_count；
-      **Q2 豁免类（event-*）与任何不在 evo_nodes 的 markdown 文件**（历史遗留 /
-      legacy 直写口）仍从 markdown 直读——混合重建（:func:`_rebuild_from_evo_nodes`）。
-
-    真相层自身的恢复不走这里：evo_nodes 损坏 → 从快照恢复（§3.2）或
-    ``persome evomem-restore-from-markdown``（§3.4 有损灾难恢复，
-    ``evomem/restore.py:import_from_markdown``）。
-    """
     if evo_inversion.evomem_active():
         return _rebuild_from_evo_nodes(conn)
     return _rebuild_from_markdown(conn)
 
 
 def _ingest_markdown_file(conn: sqlite3.Connection, path: Path, prefix: str) -> int:
-    """单文件 markdown 直读重放（files 行 + entries + entry_metadata），返回条目数。"""
     parsed = files_mod.read_file(path)
     fts.upsert_file(
         conn,
@@ -714,7 +634,6 @@ def _ingest_markdown_file(conn: sqlite3.Connection, path: Path, prefix: str) -> 
 
 
 def _rebuild_from_markdown(conn: sqlite3.Connection) -> tuple[int, int]:
-    """markdown 主写模式的全量重放（原 rebuild_index 逻辑）。幂等。"""
     conn.execute("DELETE FROM entries")
     conn.execute("DELETE FROM files")
     conn.execute("DELETE FROM entry_metadata")
@@ -732,15 +651,6 @@ def _rebuild_from_markdown(conn: sqlite3.Connection) -> tuple[int, int]:
 
 
 def _rebuild_from_evo_nodes(conn: sqlite3.Connection) -> tuple[int, int]:
-    """evomem 主写模式的混合重建（§2 表「rebuild_index 重定义」）。幂等。
-
-    entries/entry_metadata 重放自 evo_nodes（真相侧，scope=default per Q4），
-    heading 时间戳 / tag 渲染与 markdown 投影器同源（``projector._heading_ts`` /
-    ``_render_tags``），``superseded`` 按 §1.4/Q7 派生。event-*（Q2 豁免，链真相
-    从不进 evo_nodes）与任何无节点的 markdown 文件仍从 markdown 直读。files 行
-    在本模式下是文件级元数据的真相（inversion 写口维护），**不**被 DELETE——
-    仅刷新 entry_count；缺行的 evo 文件从盘上 frontmatter 兜底补行。
-    """
     from ..evomem.models import MemoryStatus
     from ..evomem.store import _row_to_node
     from . import projector
@@ -753,7 +663,7 @@ def _rebuild_from_evo_nodes(conn: sqlite3.Connection) -> tuple[int, int]:
     ).fetchall():
         node = _row_to_node(r)
         if not node.file_name:
-            continue  # 未路由节点不投影
+            continue
         groups.setdefault(node.file_name, []).append(node)
 
     file_count = 0
@@ -790,7 +700,6 @@ def _rebuild_from_evo_nodes(conn: sqlite3.Connection) -> tuple[int, int]:
         if row is not None:
             conn.execute("UPDATE files SET entry_count=? WHERE path=?", (len(nodes), file_name))
         else:
-            # files 行缺失（真相元数据丢了）：盘上投影的 frontmatter 兜底补行。
             path = files_mod.memory_path(file_name)
             if path.exists():
                 parsed = files_mod.read_file(path)
@@ -825,7 +734,6 @@ def _rebuild_from_evo_nodes(conn: sqlite3.Connection) -> tuple[int, int]:
                 )
         file_count += 1
 
-    # Q2 豁免类与未入 evo_nodes 的文件：markdown 直读（与 legacy 重放同一形态）。
     for path in files_mod.list_memory_files():
         if path.name in groups:
             continue
@@ -837,7 +745,6 @@ def _rebuild_from_evo_nodes(conn: sqlite3.Connection) -> tuple[int, int]:
         entry_count += _ingest_markdown_file(conn, path, prefix)
         file_count += 1
 
-    # files 行收敛 (#578): this mode does NOT `DELETE FROM files` (files rows are
     # the file-level metadata truth). But a row that once had nodes, now has NONE
     # in evo_nodes (all moved out / file deleted) AND is not on disk falls into
     # neither `groups` nor `list_memory_files()` above — so its stale entry_count

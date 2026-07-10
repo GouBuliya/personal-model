@@ -177,7 +177,7 @@ func isEnhancedUserInterfaceEnabled(_ appElement: AXUIElement) -> Bool {
 func activateElectronAX(pid: pid_t, name: String, bundleId: String, reason: String) {
     let appElement = AXUIElementCreateApplication(pid)
 
-    // Broad, safe force-enable for every app (the user-named "AXManualAccessibility 强开").
+    // Broad, safe force-enable for every app through AXManualAccessibility.
     let manualErr = AXUIElementSetAttributeValue(
         appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue
     )
@@ -234,7 +234,7 @@ func getWindowTitle(_ appElement: AXUIElement) -> String {
 //    privacy-sensitive keylogger shape) and also sidesteps IME composition
 //    noise — by the time the debounce fires, the IME has already committed
 //    the composed text to AXValue, so the Chinese user who typed
-//    ``ni hao <space>`` sees ``你好`` in the payload rather than the raw pinyin.
+//    committed input appears in the payload rather than its intermediate composition.
 //
 // Secure text fields (password inputs) are redacted at emit time via
 // ``isSecureElement``. Bundle-level exclusion is handled downstream by the

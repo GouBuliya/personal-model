@@ -285,10 +285,7 @@ def tool_list_chat_sessions(args: dict[str, Any]) -> Any:
 
 
 def tool_set_user_name(args: dict[str, Any]) -> Any:
-    # 写权反转（PR-6b，SSOT 切换设计 §1.3/§5）：write_authority="evomem" 时下面的
-    # create_file/append_entry 经 store/entries.py 的 choke-point dispatch 走
-    # evomem engine 落 evo_nodes（user-profile → L4_IDENTITY），markdown 由投影
-    # 器再生成。逐站输出等价由 tests/test_evomem/test_inversion_stations.py 钉死。
+
     name = (args.get("name") or "").strip()
     if not name:
         return {"error": "name cannot be empty"}

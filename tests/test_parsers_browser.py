@@ -32,7 +32,7 @@ def test_parsed_conversation_satisfies_structured_content():
 
 
 def test_webpage_satisfies_structured_content():
-    page = WebPage(app="Tabbit浏览器", title="t", items=(WebItem(None, ("hi",)),))
+    page = WebPage(app="Tabbit\u6d4f\u89c8\u5668", title="t", items=(WebItem(None, ("hi",)),))
     assert isinstance(page, StructuredContent)
 
 
@@ -43,24 +43,24 @@ def test_webpage_satisfies_structured_content():
 
 def test_webpage_render_structured_xml():
     page = WebPage(
-        app="Tabbit浏览器",
+        app="Tabbit\u6d4f\u89c8\u5668",
         title="Issues · acme-dev/acme-mono",
         url="https://github.com/acme-dev/acme-mono/issues",
         items=(
             WebItem(
-                "feat(app): 升级失败回滚",
+                "feat(app): \u5347\u7ea7\u5931\u8d25\u56de\u6eda",
                 ("area:distribution · type:tech-debt", "#200 · opened"),
             ),
         ),
     )
     out = page.render()
-    assert out.startswith('<web_page app="Tabbit浏览器"')
+    assert out.startswith('<web_page app="Tabbit\u6d4f\u89c8\u5668"')
     assert 'url="https://github.com/acme-dev/acme-mono/issues"' in out
     assert 'title="Issues · acme-dev/acme-mono"' in out
     assert out.index("url=") < out.index("title=")
     # The item nests its heading + text lines.
     assert "<item>" in out and "</item>" in out
-    assert "<heading>feat(app): 升级失败回滚</heading>" in out
+    assert "<heading>feat(app): \u5347\u7ea7\u5931\u8d25\u56de\u6eda</heading>" in out
     assert "<text>area:distribution · type:tech-debt</text>" in out
     assert "<text>#200 · opened</text>" in out
     assert out.rstrip().endswith("</web_page>")
@@ -119,19 +119,29 @@ def test_merge_lines_collapses_echo_to_longer():
 def test_merge_lines_seamless_join_for_cjk_prose():
     # A CJK sentence the browser split into runs must read back as one sentence —
     # no `·` injected mid-sentence.
-    merged = _merge_lines(["寻找创新这件事本身", "变成了一套可工业化的流程。"])
-    assert merged == ["寻找创新这件事本身变成了一套可工业化的流程。"]
+    merged = _merge_lines(
+        [
+            "\u5bfb\u627e\u521b\u65b0\u8fd9\u4ef6\u4e8b\u672c\u8eab",
+            "\u53d8\u6210\u4e86\u4e00\u5957\u53ef\u5de5\u4e1a\u5316\u7684\u6d41\u7a0b\u3002",
+        ]
+    )
+    assert merged == [
+        "\u5bfb\u627e\u521b\u65b0\u8fd9\u4ef6\u4e8b\u672c\u8eab\u53d8\u6210\u4e86\u4e00\u5957\u53ef\u5de5\u4e1a\u5316\u7684\u6d41\u7a0b\u3002"
+    ]
     assert "·" not in merged[0]
 
     merged2 = _merge_lines(
         [
-            '而真正让这套东西"可规模化"的,是底层的两个杠杆',
-            ":一是",
-            "推荐算法作为可复用的核心基础设施",
+            '\u800c\u771f\u6b63\u8ba9\u8fd9\u5957\u4e1c\u897f"\u53ef\u89c4\u6a21\u5316"\u7684,\u662f\u5e95\u5c42\u7684\u4e24\u4e2a\u6760\u6746',
+            ":\u4e00\u662f",
+            "\u63a8\u8350\u7b97\u6cd5\u4f5c\u4e3a\u53ef\u590d\u7528\u7684\u6838\u5fc3\u57fa\u7840\u8bbe\u65bd",
         ]
     )
     assert "·" not in merged2[0]
-    assert "杠杆:一是推荐算法作为可复用的核心基础设施" in merged2[0]
+    assert (
+        "\u6760\u6746:\u4e00\u662f\u63a8\u8350\u7b97\u6cd5\u4f5c\u4e3a\u53ef\u590d\u7528\u7684\u6838\u5fc3\u57fa\u7840\u8bbe\u65bd"
+        in merged2[0]
+    )
 
 
 def test_merge_lines_label_join_stays_for_latin_meta():
@@ -169,7 +179,7 @@ def test_is_nav_item_keeps_issue_record():
         ("opened", False),
         ("5 days ago", False),
     ]
-    assert _is_nav_item("feat(app): 升级失败回滚", True, lines) is False
+    assert _is_nav_item("feat(app): \u5347\u7ea7\u5931\u8d25\u56de\u6eda", True, lines) is False
 
 
 def test_is_nav_item_keeps_long_prose():
@@ -271,7 +281,11 @@ def tabbit():
     issue = {
         "role": "AXGroup",
         "children": [
-            {"role": "AXHeading", "title": "feat(app): 升级失败回滚", "children": []},
+            {
+                "role": "AXHeading",
+                "title": "feat(app): \u5347\u7ea7\u5931\u8d25\u56de\u6eda",
+                "children": [],
+            },
             {"role": "AXLink", "children": [_text("area:distribution")]},
             {"role": "AXLink", "children": [_text("type:tech-debt")]},
             _text("Status: Open."),
@@ -298,9 +312,11 @@ def sun():
             {"role": "AXHeading", "title": "You said:", "children": []},
             _text("How can a local Runtime preserve provenance?"),
             {"role": "AXHeading", "title": "Claude responded:", "children": []},
-            _text("寻找创新这件事本身"),
-            _text("变成了一套可工业化的流程。"),
-            _text("推荐算法作为可复用的核心基础设施可以保留字节级来源记录。"),
+            _text("\u5bfb\u627e\u521b\u65b0\u8fd9\u4ef6\u4e8b\u672c\u8eab"),
+            _text("\u53d8\u6210\u4e86\u4e00\u5957\u53ef\u5de5\u4e1a\u5316\u7684\u6d41\u7a0b\u3002"),
+            _text(
+                "\u63a8\u8350\u7b97\u6cd5\u4f5c\u4e3a\u53ef\u590d\u7528\u7684\u6838\u5fc3\u57fa\u7840\u8bbe\u65bd\u53ef\u4ee5\u4fdd\u7559\u5b57\u8282\u7ea7\u6765\u6e90\u8bb0\u5f55\u3002"
+            ),
         ],
     )
 
@@ -326,7 +342,11 @@ def test_tabbit_issues_grouped_into_items(tabbit):
 
     # Find the item whose heading is the first issue title.
     issue = next(
-        (it for it in page.items if it.heading and "升级失败回滚" in it.heading),
+        (
+            it
+            for it in page.items
+            if it.heading and "\u5347\u7ea7\u5931\u8d25\u56de\u6eda" in it.heading
+        ),
         None,
     )
     assert issue is not None, "issue title did not become an item heading"
@@ -347,7 +367,11 @@ def test_tabbit_fragments_merged_not_split(tabbit):
     parser = BrowserParser()
     page = parser.parse(tabbit["ax_tree"], window_title=tabbit["window_meta"]["title"])
     assert page is not None
-    issue = next(it for it in page.items if it.heading and "升级失败回滚" in it.heading)
+    issue = next(
+        it
+        for it in page.items
+        if it.heading and "\u5347\u7ea7\u5931\u8d25\u56de\u6eda" in it.heading
+    )
     # The status/author/time fragments live on a single merged line.
     meta = next((ln for ln in issue.lines if "DemoUserX" in ln), None)
     assert meta is not None
@@ -386,7 +410,7 @@ def test_sun_url_and_conversation_items(sun):
     assert any("responded" in h for h in headings)
     # The answer prose is grouped under its turn (a body line survives).
     answer = next(it for it in page.items if it.heading and "responded" in it.heading)
-    assert any("字节" in ln for ln in answer.lines)
+    assert any("\u5b57\u8282" in ln for ln in answer.lines)
 
 
 def test_sun_cjk_prose_joined_seamlessly(sun):
@@ -397,10 +421,17 @@ def test_sun_cjk_prose_joined_seamlessly(sun):
     assert page is not None
     answer = next(it for it in page.items if it.heading and "responded" in it.heading)
     # This sentence was split across two fragments — it must now be contiguous.
-    assert any("寻找创新这件事本身变成了一套可工业化的流程。" in ln for ln in answer.lines)
+    assert any(
+        "\u5bfb\u627e\u521b\u65b0\u8fd9\u4ef6\u4e8b\u672c\u8eab\u53d8\u6210\u4e86\u4e00\u5957\u53ef\u5de5\u4e1a\u5316\u7684\u6d41\u7a0b\u3002"
+        in ln
+        for ln in answer.lines
+    )
     # No mid-sentence `·` glued into a CJK prose line.
     for ln in answer.lines:
-        if "推荐算法作为可复用的核心基础设施" in ln:
+        if (
+            "\u63a8\u8350\u7b97\u6cd5\u4f5c\u4e3a\u53ef\u590d\u7528\u7684\u6838\u5fc3\u57fa\u7840\u8bbe\u65bd"
+            in ln
+        ):
             assert "·" not in ln
 
 

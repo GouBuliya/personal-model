@@ -1,33 +1,36 @@
-你在为一个「针对单个人的意图预测器」写它**永远常驻**的顶层自我认知——root。
+Write the always-resident **Root** for a predictive model of one person.
 
-root 是整张记忆图的 apex：读它，就知道**这个人是谁、当下最要紧的是什么、正在推进哪几件大事**。
-它是所有更细记忆（体/面/点/事实）的入口——其余一切都按需 recall，只有 root 常驻。所以 root 必须
-是**被最大压缩的一段人物速写**，不是清单堆砌。
+Root is the apex of the memory graph. It should reveal who the person is, what
+matters most to them, and which major efforts currently define their trajectory.
+All finer-grained memory is retrieved on demand, so Root must be a maximally
+compressed portrait rather than an inventory.
 
-## 你拿到的材料
+## Inputs
 
-- **活跃体**：跨域涌现的高层心智规律（apex 的主料）——每条以 `⟨体签名⟩` 给出
-- **活跃面**：稳定的单域行为规律 top-k
-- **耐久 profile**：身份 / 偏好 / 项目
+- **Active Volumes:** high-level mental patterns emerging across domains. Each
+  is supplied with a `⟨volume signature⟩` handle.
+- **Active Faces:** the strongest stable patterns within individual domains.
+- **Durable profile:** identities, preferences, and projects.
 
-## 写作要求
+## Requirements
 
-1. **一段连贯叙事**（不是 bullet 清单）：以「这个人」为主语，把体/面/profile 融成一个**有主次**的整体——
-   先点出他是谁、核心在意什么，再带出当前在推进的大事与稳定习惯。次要的略写或不写。
-2. **≤ {{BUDGET}} token**，越紧越好。宁可少写、写准，不要为凑满而稀释。
-3. **可下钻**：叙事里提到某个高层规律时，顺手用 `⟨体签名⟩` 挂上把手（原样引用给你的体签名），
-   让读者能从 root 往下钻到那个体。
-4. **只用材料里有的**：绝不发明材料里没有的人名、组织、项目或事实。材料没提到的，root 里就不出现。
-   宁可笼统，不要编造。
-5. **写「是谁/最要紧」，不写「现在这一刻在干嘛」**——瞬时屏幕状态是另一条常驻通道（attention）的事，
-   root 只承载稳定的人物内核。
+1. Write one coherent narrative, not a bullet list. Center it on "this person,"
+   establish who they are and what they care about, then connect their major
+   current efforts and stable habits. Omit secondary details when necessary.
+2. Stay within {{BUDGET}} tokens. Prefer short and precise over complete but
+   diluted.
+3. Keep it navigable. When mentioning a high-level pattern, attach the exact
+   `⟨volume signature⟩` supplied for that pattern.
+4. Use only supplied evidence. Never invent a person, organization, project,
+   or fact. Generalize rather than fabricate.
+5. Describe durable identity and priorities, not the screen activity happening
+   at this instant. Current attention is exposed through a separate channel.
+6. Write in the dominant language of the supplied evidence.
 
-## 输出
+## Output
 
-严格输出 JSON：
+Return strict JSON and nothing else:
 
 ```json
-{"apex": "……一段 ≤ {{BUDGET}} token 的人物速写，句中按需挂 ⟨体签名⟩ 把手……"}
+{"apex": "<a coherent portrait within {{BUDGET}} tokens, with volume handles where useful>"}
 ```
-
-只输出这个 JSON，不要额外解释。

@@ -3,6 +3,10 @@
 Prompts in `src/persome/prompts/` are executable behavior. Change them only
 against a stated success criterion and a reproducible test.
 
+Prompt instructions are maintained in English. When a stage writes personal
+memory or model prose, its contract must preserve the source language or use the
+dominant language of the supplied evidence; do not hard-code an output language.
+
 ## Before editing
 
 1. Name the failed behavior and the stage that owns it.
@@ -40,7 +44,7 @@ contradictory.
 - Re-run the end-to-end consumer, not only the local stage.
 - Treat judge/rubric prompts as measurement instruments. Changing one requires
   a new baseline.
-- Run the offline gate and PII scan before committing.
+- Run the offline, PII, and repository-language gates before committing.
 
 ## Checklist
 

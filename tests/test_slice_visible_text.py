@@ -119,7 +119,7 @@ def test_cmux_tail_truncated_keeps_injected_terminal_content() -> None:
     # then the injected real terminal surface at the TAIL. Tail-truncation
     # must keep the terminal content and drop the chrome — otherwise the
     # default head-slice would keep the sidebar and cut the actual work.
-    chrome = "workspace 1/6 workspace 2/6 update available 切换侧边栏 " * 4
+    chrome = "workspace 1/6 workspace 2/6 update available \u5207\u6362\u4fa7\u8fb9\u680f " * 4
     terminal = "### [cmux terminal] ❯ pytest -k attention ... 12 passed real work here"
     text = chrome + terminal
     result = _slice_visible_text(text, "", "com.cmuxterm.app", LIMIT)

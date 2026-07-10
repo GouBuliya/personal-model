@@ -130,12 +130,6 @@ _FOCUS_EXCERPT_CHARS = 8000
 
 
 def _focus_excerpt(parsed: list[tuple[Path, dict]]) -> str:
-    """Raw visible_text of the window's most recent capture, head-truncated.
-
-    Stored verbatim on the block as a lossless fallback session modeling can
-    read — so a message body the LLM normalizer dropped
-    (e.g. a counterpart's "周五3点开会?") is still recoverable downstream.
-    """
     for _p, data in reversed(parsed):
         vt = data.get("visible_text")
         if vt is None:
@@ -597,7 +591,7 @@ def produce_block_for_window(
         # Parser-hit telemetry (general observability): one tick per window that
         # had something parseable. Records hit/miss/fallback bucketed by bundle
         # so we can prove the per-app parsers are firing and catch semantic-class
-        # drift (e.g. 飞书 UI revision) as hit→miss decay. Never blocks block
+
         # production: a telemetry write failure is logged and swallowed.
         if parser_outcome is not None:
             try:

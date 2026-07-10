@@ -27,8 +27,8 @@ def test_chat_memory_writes_through_entries_and_is_searchable(ac_root):
             {
                 "type": "user",
                 "name": "coffee-habit",
-                "description": "用户的咖啡偏好",
-                "content": "用户每天早上喝手冲耶加雪菲 pourover coffee",
+                "description": "\u7528\u6237\u7684\u5496\u5561\u504f\u597d",
+                "content": "\u7528\u6237\u6bcf\u5929\u65e9\u4e0a\u559d\u624b\u51b2\u8036\u52a0\u96ea\u83f2 pourover coffee",
             },
         )
         # landed in the structured entries store (not an orphan markdown file):
@@ -52,12 +52,18 @@ def test_chat_memory_type_to_prefix_mapping(ac_root):
 
     with fts.cursor() as conn:
         # feedback → user-, reference → topic-, plain name gets prefixed
-        cme._write_memory(conn, {"type": "feedback", "name": "be-concise", "content": "回答要简洁"})
         cme._write_memory(
-            conn, {"type": "reference", "name": "api-docs", "content": "见 openapi.json"}
+            conn,
+            {"type": "feedback", "name": "be-concise", "content": "\u56de\u7b54\u8981\u7b80\u6d01"},
+        )
+        cme._write_memory(
+            conn, {"type": "reference", "name": "api-docs", "content": "\u89c1 openapi.json"}
         )
         # already-prefixed names are kept as-is (no double prefix)
-        cme._write_memory(conn, {"type": "user", "name": "user-goals", "content": "今年学法语"})
+        cme._write_memory(
+            conn,
+            {"type": "user", "name": "user-goals", "content": "\u4eca\u5e74\u5b66\u6cd5\u8bed"},
+        )
 
     assert files_mod.memory_path("user-be-concise").exists()
     assert files_mod.memory_path("topic-api-docs").exists()
@@ -69,7 +75,7 @@ def test_chat_memory_content_dedup(ac_root):
     from persome.chat import memory_extractor as cme
     from persome.store import files as files_mod
 
-    mem = {"type": "user", "name": "user-fact", "content": "用户住在上海"}
+    mem = {"type": "user", "name": "user-fact", "content": "\u7528\u6237\u4f4f\u5728\u4e0a\u6d77"}
     with fts.cursor() as conn:
         cme._write_memory(conn, mem)
         cme._write_memory(conn, dict(mem))  # identical → must not append twice

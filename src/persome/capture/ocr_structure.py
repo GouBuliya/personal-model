@@ -26,8 +26,9 @@ import re
 
 # Surface-form time tokens in a WeChat conversation list (right-aligned per row).
 TIME = re.compile(
-    r"^(昨天|今天|星期[一二三四五六日天]|周[一二三四五六日]|"
-    r"\d{1,2}:\d{2}|\d{1,2}/\d{1,2}|\d+月\d+日|\d{4}-\d{1,2}-\d{1,2})"
+    r"^(\u6628\u5929|\u4eca\u5929|\u661f\u671f[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u65e5\u5929]|"
+    r"\u5468[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u65e5]|\d{1,2}:\d{2}|\d{1,2}/\d{1,2}|"
+    r"\d+\u6708\d+\u65e5|\d{4}-\d{1,2}-\d{1,2})"
 )
 
 # WeChat desktop column boundaries, in the reference 960-px-wide window (scaled to actual).
@@ -73,13 +74,11 @@ def _rowify(items: list[dict], tol: float) -> list[list[dict]]:
 
 
 def _wechat_divider(items: list[dict], img_w: int, nav: float) -> float:
-    """侧栏↔对话分界 x —— 自适应侧栏宽度(从 nav 右扫第一条显著空白竖带的中心)。
+    """Find the adaptive boundary between the sidebar and message pane.
 
-    侧栏宽度是用户可独立拖动、与窗口宽解耦的变量;固定 `_WECHAT_LIST*scale` 在拖窄时
-    丢整个会话列表、拖宽时把对话误入列表(消融实测 baseline 3/10 张 0 项崩溃)。改为
-    每图自适应:把 box 的 [x0,x1] 投影到 x 轴打覆盖,跳过最左导航栏 + 侧栏内容后,取
-    **第一条** ≥`min_gap` 的空白带中心 —— 对话区内部"我↔对方"气泡空白虽更宽却更靠右,
-    所以取"第一条"而非"最宽"(后者会被气泡间隙骗,实测准确率反降)。fail-open 到旧固定比例。
+    Starting after the navigation rail, use the first significant uncovered
+    vertical band rather than the widest one; wider gaps can occur between
+    left- and right-aligned message bubbles. Fall back to the reference ratio.
     """
     scale = img_w / 960
     fallback = _WECHAT_LIST * scale
@@ -95,19 +94,16 @@ def _wechat_divider(items: list[dict], img_w: int, nav: float) -> float:
         for x in range(a, b + 1):
             covered[x] = 1
         right_most = max(right_most, b)
-    min_gap = max(12, int(img_w * 0.015))  # 沟0 实测 20-25px;阈值取窗口 1.5%
+    min_gap = max(12, int(img_w * 0.015))
     x = nav_i
-    while x <= w and covered[x] == 0:  # 跳到侧栏起点(第一列内容)
+    while x <= w and covered[x] == 0:
         x += 1
-    while x <= w:  # 侧栏内容之后,第一条 ≥min_gap 且右侧仍有内容的空白带
+    while x <= w:
         if covered[x] == 0:
             start = x
             while x <= w and covered[x] == 0:
                 x += 1
             if x - start >= min_gap and start < right_most:
-                # 沟左侧必须是「列表」(≥4 行左对齐内容)才算侧栏右界。否则该沟只是行内
-                # 空白(名字↔时间)或一个无侧栏的纯对话页 —— 不接受,继续找 / 回退先验。
-                # 真实侧栏几十行(自适应生效);稀疏/无侧栏 → 退回固定 330*scale。
                 left = [it for it in items if nav_i <= it["cx"] < start]
                 if len(_rowify(left, tol=14 * scale)) >= 4:
                     return (start + x) / 2
@@ -119,7 +115,7 @@ def _wechat_divider(items: list[dict], img_w: int, nav: float) -> float:
 def _structure_wechat(items: list[dict], img_w: int) -> dict:
     scale = img_w / 960
     nav = _WECHAT_NAV * scale
-    lst = _wechat_divider(items, img_w, nav)  # 自适应分界,替代固定 _WECHAT_LIST*scale
+    lst = _wechat_divider(items, img_w, nav)
     side = [it for it in items if nav <= it["cx"] < lst]
     conv = [it for it in items if it["cx"] >= lst]
 
@@ -147,10 +143,10 @@ def _structure_wechat(items: list[dict], img_w: int) -> dict:
     conversation = _structure_wechat_conversation(conv, img_w, scale, lst)
 
     return {
-        "app": "微信",
+        "app": "WeChat",
         "layout": "wechat-desktop",
         "geom_version": GEOM_VERSION,
-        "sidebar": {"label": "会话列表", "chats": chats},
+        "sidebar": {"label": "conversation list", "chats": chats},
         "conversation": conversation,
     }
 
@@ -178,7 +174,7 @@ def _structure_wechat_conversation(conv: list[dict], img_w: int, scale: float, l
         if r
     ]
     if not merged:
-        return {"label": "主对话区", "name": None, "lines": []}
+        return {"label": "message pane", "name": None, "lines": []}
 
     midline = (lst + img_w) / 2
 
@@ -194,9 +190,11 @@ def _structure_wechat_conversation(conv: list[dict], img_w: int, scale: float, l
         if TIME.match(m["text"]):
             lines.append({"name": "timeline", "text": m["text"]})
         else:
-            lines.append({"name": "我" if m["cx"] > midline else "对方", "text": m["text"]})
+            lines.append(
+                {"name": "self" if m["cx"] > midline else "counterpart", "text": m["text"]}
+            )
 
-    return {"label": "主对话区", "name": name, "lines": lines}
+    return {"label": "message pane", "name": name, "lines": lines}
 
 
 def _structure_generic(items: list[dict], img_w: int) -> dict:
@@ -245,18 +243,18 @@ def structure(
 def to_markdown(struct: dict) -> str:
     """Render a structured dict to compact, field-labeled Markdown for downstream LLM/FTS.
 
-    Field labels are explicit (联系人/时间/消息预览) so the text is self-describing — a
+    Field labels are explicit (contact/time/message preview) so the text is self-describing — a
     reader (or the model) knows each segment's role without guessing.
     """
     if not struct:
         return ""
     out: list[str] = []
     if struct.get("layout") == "wechat-desktop":
-        out.append("# 微信")
+        out.append("# WeChat")
         chats = struct.get("sidebar", {}).get("chats", [])
         if chats:
-            out.append("\n## [会话列表]")
-            out.append("| 联系人 | 时间 | 消息预览 |")
+            out.append("\n## [Conversation list]")
+            out.append("| Contact | Time | Message preview |")
             out.append("|---|---|---|")
             for c in chats:
                 out.append(
@@ -265,19 +263,19 @@ def to_markdown(struct: dict) -> str:
         conv = struct.get("conversation", {})
         lines = conv.get("lines", [])
         if lines or conv.get("name"):
-            header = "## [主对话区]"
+            header = "## [Message pane]"
             if conv.get("name"):
-                header += f" 对话: {conv['name']}"
+                header += f" Conversation: {conv['name']}"
             out.append("\n" + header)
             for ln in lines:
                 if isinstance(ln, dict):  # v2 typed line {name, text}
                     spk = ln.get("name", "")
-                    tag = "时间" if spk == "timeline" else spk
+                    tag = "time" if spk == "timeline" else spk
                     out.append(f"- [{tag}] {ln.get('text', '')}")
                 else:  # v1 plain string — defensive back-compat
                     out.append(f"- {ln}")
     else:  # generic
         for i, reg in enumerate(struct.get("regions", []), 1):
-            out.append(f"## [区域{i}] (x≈{reg.get('x', 0)})")
+            out.append(f"## [Region {i}] (x≈{reg.get('x', 0)})")
             out.extend(f"- {ln}" for ln in reg.get("lines", []))
     return "\n".join(out).strip()

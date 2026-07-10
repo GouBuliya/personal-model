@@ -36,10 +36,10 @@ _CONTAINER_ROLES = frozenset({"AXGroup", "AXScrollArea", "AXSplitGroup", "AXSpli
 _CONTENT_ROLES = frozenset({"AXStaticText", "AXLink", "AXHeading", "AXCell", "AXRow", "AXText"})
 # Roles counted in the chrome digest, with a human label.
 _CHROME_COUNT = {
-    "AXButton": "按钮",
-    "AXRadioButton": "标签/选项",
-    "AXPopUpButton": "菜单/扩展",
-    "AXCheckBox": "勾选",
+    "AXButton": "buttons",
+    "AXRadioButton": "tabs/options",
+    "AXPopUpButton": "menus/expanders",
+    "AXCheckBox": "checkboxes",
 }
 
 _REPEAT_MIN = 3  # ≥ this many same-shape siblings → flatten as a list
@@ -99,7 +99,7 @@ def _walk(
         if role in _CHROME_COUNT:
             # A button/tab/menu is an AFFORDANCE (something the user *could* do),
             # not content or a to-do. Emitting its label as a line makes the LLM
-            # hallucinate intents from nav (measured: "记笔记/收藏/订阅/设置" read
+
             # as to-dos). Fold into the digest only; the count signals "N buttons
             # available" without polluting the content stream.
             digest[role] = digest.get(role, 0) + 1
@@ -144,7 +144,9 @@ def _tally_chrome(el: dict[str, Any], digest: dict[str, int]) -> None:
 
 def _digest_line(digest: dict[str, int]) -> str:
     parts = [f"{digest[r]} {label}" for r, label in _CHROME_COUNT.items() if digest.get(r)]
-    return ("[外壳已折叠：" + " · ".join(parts) + " · 完整结构见 ax_tree]") if parts else ""
+    return (
+        ("[chrome folded: " + " · ".join(parts) + " · full structure in ax_tree]") if parts else ""
+    )
 
 
 def resolve_app(app_data: dict[str, Any]) -> str | None:

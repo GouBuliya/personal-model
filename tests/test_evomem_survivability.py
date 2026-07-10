@@ -1,9 +1,4 @@
-"""evomem SSOT 切换 PR-1 生存性设施测试（设计稿 §3.2/§3.3）。
-
-覆盖：链不变式自检七条（happy + violation）、写口冻结 seam（默认不冻结）、
-报警通路（结构化错误日志可注入验证）、每日快照（创建 / 同日重跑 / 坏快照报警不覆盖 /
-保留策略）、WAL checkpoint 调用，以及 P0：config 全关时 daily tick 行为与现状一致。
-"""
+"Tests for test evomem survivability."
 
 from __future__ import annotations
 
@@ -102,13 +97,11 @@ def _checks_named(violations: list[integrity.Violation], name: str) -> list[inte
 
 
 def test_checks_pass_on_fresh_root(ac_root: Path) -> None:
-    """空库（无 evo_nodes 表、无 entries）平凡通过——backfill 前的干净状态。"""
     with fts.cursor() as conn:
         assert integrity.run_checks(conn) == []
 
 
 def test_checks_pass_on_real_writes(evo_table: Path) -> None:
-    """真实写路径（append/supersede + NodeStore supersede 链）不产生任何违例。"""
     with fts.cursor() as conn:
         entries.create_file(conn, name="project-x.md", description="d", tags=[])
         e1 = entries.append_entry(conn, name="project-x.md", content="v1", tags=[])
@@ -125,8 +118,7 @@ def test_checks_pass_on_real_writes(evo_table: Path) -> None:
 
     with fts.cursor() as conn:
         violations = integrity.run_checks(conn)
-    # evo 投影对账（heads vs entries 行数）在 backfill 前必然 count 不齐 —— 但该检查
-    # 只在 evo_nodes 非空时运行，且属 alert-only 类；结构性检查必须全绿。
+
     assert [v for v in violations if v.structural] == []
 
 
@@ -203,7 +195,6 @@ def test_malformed_pointer_json_detected(evo_table: Path) -> None:
 
 
 def test_evo_projection_skipped_while_evo_empty(ac_root: Path) -> None:
-    """evo_nodes 为空（backfill 前）时投影对账跳过，不产生误报。"""
     with fts.cursor() as conn:
         entries.create_file(conn, name="project-z.md", description="d", tags=[])
         entries.append_entry(conn, name="project-z.md", content="x", tags=[])
@@ -286,11 +277,10 @@ def test_projection_violation_never_freezes(evo_table: Path, alerts: list) -> No
         _insert_evo(conn, "lonely-head")  # 1 active head vs 2 live entries → check 6
     violations = integrity.check_and_handle(source="test", freeze_on_failure=True)
     assert violations and not any(v.structural for v in violations)
-    assert integrity.write_frozen() is None  # 投影坏 = 可自愈，只报警
+    assert integrity.write_frozen() is None
 
 
 def test_inject_violation_exercises_alert_pipeline(ac_root: Path, alerts: list) -> None:
-    """人为注入失败的测试口（§4.3 判据 4：报警通路可验证）。"""
     fake = integrity.Violation("drill", "manual alert drill", structural=False)
     violations = integrity.check_and_handle(source="drill", inject_violation=fake)
     assert fake in violations
@@ -378,8 +368,6 @@ def test_bad_snapshot_alerts_and_never_overwrites_good_one(
 def test_structural_only_snapshot_tolerates_alert_only_findings(
     ac_root: Path, alerts: list, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """PR-2 变更前快照：alert-only（check 6 投影对账类）发现照常报警但不否决快照；
-    结构性违例仍然否决。每日 tick 的默认行为（任何违例都否决）不变。"""
     alert_only = [integrity.Violation("projection_reconciliation", "count drift", False)]
     monkeypatch.setattr(integrity, "verify_snapshot", lambda path: list(alert_only))
     # Default (daily-tick) semantics: any violation rejects the snapshot.
@@ -419,10 +407,10 @@ def test_retention_policy(ac_root: Path) -> None:
         p = mk(d)
         age = (today - d).days
         if age < 7 or (d.weekday() == 0 and age < 28):
-            keep_expected.append(p)  # 近 7 日逐日 + 近 4 周逐周（周一）
+            keep_expected.append(p)
         else:
             drop_expected.append(p)
-    future = mk(today + timedelta(days=1))  # 时钟回拨防御：未来日期保留
+    future = mk(today + timedelta(days=1))
     unrelated = bdir / "evo-junk.db"
     unrelated.write_bytes(b"x")
 
@@ -435,9 +423,6 @@ def test_retention_policy(ac_root: Path) -> None:
     for p in [*keep_expected, future]:
         assert p.exists(), p.name
     assert unrelated.exists()
-
-
-# ─── daily tick wiring + P0 (config off = 现状) ──────────────────────────────
 
 
 class _FakeManager:
@@ -484,7 +469,7 @@ async def test_daily_tick_runs_checkpoint_snapshot_and_check(
     cfg.reducer.enabled = False  # skip the reducer catch-up sleep
     calls = {"checkpoint": 0, "backup": 0, "integrity": 0}
     await _run_one_tick(cfg, monkeypatch, calls)
-    assert calls["checkpoint"] >= 1  # WAL 纪律：tick 末尾 wal_checkpoint(TRUNCATE)
+    assert calls["checkpoint"] >= 1
     assert calls["backup"] >= 1
     assert calls["integrity"] >= 1
 
@@ -492,14 +477,13 @@ async def test_daily_tick_runs_checkpoint_snapshot_and_check(
 async def test_daily_tick_p0_byte_equivalent_when_disabled(
     ac_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P0：[evomem] 全关时，tick 只做现状动作（checkpoint），不碰任何新设施。"""
     cfg = Config()
     cfg.reducer.enabled = False
     cfg.evomem.snapshot_enabled = False
     cfg.evomem.integrity_check_enabled = False
     calls = {"checkpoint": 0, "backup": 0, "integrity": 0}
     await _run_one_tick(cfg, monkeypatch, calls)
-    assert calls["checkpoint"] >= 1  # 现状行为保留
+    assert calls["checkpoint"] >= 1
     assert calls["backup"] == 0
     assert calls["integrity"] == 0
 

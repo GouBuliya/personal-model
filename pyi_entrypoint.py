@@ -1,7 +1,7 @@
-"""PyInstaller 入口。`persome.cli:app` 是一个 typer App，包装一下即可。
+"""PyInstaller entry point for the Typer CLI.
 
-SSL_CERT_FILE 必须在所有 import 之前设置，否则 PyInstaller 打包环境中
-HTTPS 客户端（anthropic SDK / httpx）会因找不到系统 CA 证书而 SSL 握手失败。
+``SSL_CERT_FILE`` must be set before imports so HTTPS clients can locate the
+bundled CA certificates in a frozen application.
 """
 
 import os

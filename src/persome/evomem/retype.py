@@ -89,7 +89,6 @@ def _rename_everywhere(conn, old: str, new: str) -> RetypeResult:
 
 
 def retype_entity(name: str, kind: str) -> RetypeResult:
-    """Verdict「是点，但 kind 不对」: person-<name>.md → <prefix><name>.md."""
     prefix = KIND_PREFIX.get(kind)
     if prefix is None:
         raise ValueError(f"retype: kind {kind!r} not in {sorted(KIND_PREFIX)}")
@@ -104,7 +103,6 @@ def retype_entity(name: str, kind: str) -> RetypeResult:
 
 
 def shadow_entity(name: str) -> RetypeResult:
-    """Verdict「不是点 / 未消解角色」: retire the lineage to shadow (receipts stay)."""
     with fts.cursor() as conn:
         old = _find_entity_file(conn, name)
         if old is None:
@@ -128,7 +126,7 @@ class _OneShotSource:
 
 
 def merge_alias(name: str, keeper: str, cfg: Any, *, memory: Any | None = None) -> RetypeResult:
-    """Verdict「是点，但不是新点」: fold ``name`` as an alias of ``keeper``
+    """Fold ``name`` into ``keeper`` when both identify the same Point
     through person_graph's own fold (the single write path), then shadow the
     duplicate lineage."""
     from .engine import EvoMemory
@@ -145,7 +143,7 @@ def merge_alias(name: str, keeper: str, cfg: Any, *, memory: Any | None = None) 
             [
                 PersonEvent(
                     name=keeper,
-                    summary=f"人裁别名合并：{name} 与其同指称",
+                    summary=f"Human-reviewed alias merge: {name} identifies the same entity",
                     occurred_at=datetime.now(UTC),
                     aliases=[name],
                     confidence=1.0,

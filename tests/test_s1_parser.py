@@ -261,7 +261,7 @@ def test_enrich_browser_narrows_to_page_and_folds_chrome() -> None:
         assert "The Real Article Heading" in vt
         assert "Body paragraph the user is actually reading." in vt
         # chrome folded to a digest, NOT dumped as bullets
-        assert "浏览器外壳已折叠" in vt
+        assert "browser chrome folded" in vt
         assert "Bookmark One" not in vt and "Bookmark Two" not in vt
         assert "Tab A" not in vt and "Tab B" not in vt
     finally:
@@ -298,7 +298,7 @@ def test_enrich_browser_without_webarea_falls_open() -> None:
         }
         s1_parser.enrich(capture)
         # no web area → whole render (chrome digest not applied)
-        assert "浏览器外壳已折叠" not in capture["visible_text"]
+        assert "\u6d4f\u89c8\u5668\u5916\u58f3\u5df2\u6298\u53e0" not in capture["visible_text"]
     finally:
         browser_detect.set_http_handlers_for_test(None)
 

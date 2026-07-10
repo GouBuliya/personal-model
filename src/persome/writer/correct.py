@@ -11,7 +11,7 @@ add ∧ retract).
 
 Backprop framing: the error shows up at the OUTPUT (recall/apex said X, user says X is wrong);
 retrieval traces it back to the SOURCE facts (credit assignment); we supersede the source
-(update the weight), NOT the apex (the activation). Forward re-derivation (面→体→root) then
+(update the weight), NOT the apex (the activation). Forward re-derivation (Face to Volume to Root) then
 propagates the fix. supersede-not-delete = a negative signal (shift recall away), receipts survive.
 
 The update is logged as a feedback signal — a user's "this is wrong" is the most valuable label.
@@ -71,9 +71,9 @@ _IDENTITY_PREFIXES = ("user-", "person-", "org-", "project-", "tool-", "topic-",
 def _candidates(cfg: Any, conn: sqlite3.Connection, query: str, cap: int = 16) -> list[Any]:
     """Credit assignment (backprop): trace the wrong output back to the SOURCE fact entries.
 
-    A raw-sentence BM25 search misses them (a correction's tokens — '不是'/'名字'/'Dev群' — rank
+    A raw-sentence BM25 search can miss them because correction terms rank
     unrelated entries). So drive retrieval by the ENTITY the correction is about: ``scan_mentions``
-    pulls roster entities out of the signal (桃子…), then a substring scan over LIVE entries finds
+    pulls roster entities out of the signal, then a substring scan over live entries finds
     every source fact naming it (identity files first). fts.search is a lexical fallback. Reusing
     the recall path's entity head for the backward pass — same machinery, both directions."""
     out: dict[str, Any] = {}
@@ -206,21 +206,23 @@ def update_memory(
     implies (which beliefs to supersede/replace at the source, or an entity-level op) → applied
     through the SAME executor as observation (``delta_apply``, ⊖ supersede leg). ``source`` marks
     the update's authority (user = supervised label). Injectable ``llm_call`` for tests; ``dry_run``
-    previews. NEVER raises (fail-open). Downstream (面→体→root) re-derives off the updated SSOT."""
+    previews. Never raises. Downstream Face, Volume, and Root structures re-derive from the updated truth."""
     signal = (signal or "").strip()
     if not signal:
         return UpdateResult("noop", reason="empty", ok=False)
     try:
         hits = _candidates(cfg, conn, signal)  # credit assignment: output error → source weights
-        cand_text = "\n".join(f"- [{h.path}#{h.id}] {h.content[:200]}" for h in hits) or "(无候选)"
+        cand_text = (
+            "\n".join(f"- [{h.path}#{h.id}] {h.content[:200]}" for h in hits) or "(no candidates)"
+        )
         call = llm_call or _build_llm_call(cfg)
         messages = [
             {"role": "system", "content": _PROMPT_PATH.read_text(encoding="utf-8")},
             {
                 "role": "user",
-                "content": f"## 权威新信息（{source}）\n{signal}\n\n"
-                f"## 候选源记忆条目（[文件#id] 正文 — 追溯误差到源权重）\n{cand_text}\n\n"
-                "按系统提示计算这次记忆更新，输出 JSON。",
+                "content": f"## Authoritative information ({source})\n{signal}\n\n"
+                f"## Candidate source memories ([file#id] body)\n{cand_text}\n\n"
+                "Compute the memory update and return the JSON defined by the system prompt.",
             },
         ]
         parsed = parse_json_object(_content_of(call(messages))) or {}

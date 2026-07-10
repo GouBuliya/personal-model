@@ -188,7 +188,6 @@ def _search(  # type: ignore[no-untyped-def]
             "id": h.id,
             "path": h.path,
             "timestamp": h.timestamp,
-            # 轴D staleness signal (issue #557): how old this memory is, in days —
             # the consumer's cheapest fact-check. A version number / status /
             # responsibility recalled from a 20-day-old entry is a CLAIM ABOUT THE
             # PAST, not the present; verify before reporting it as current.
@@ -202,16 +201,14 @@ def _search(  # type: ignore[no-untyped-def]
         faces = _related_faces_for(h.content, h.path, face_index)
         if faces:
             # E1.5 — the hit's EXPLANATION: promoted regularities covering this
-            # very fact (level-1 面 via member_key membership — the same
-            # deterministic link Phase 3's utility credit walks; level-2 体 by
+
             # path, opt-in via include_bodies). Present only when a face
             # actually covers the hit; the resident layer as a whole stays
-            # behavior_patterns()'s job (§3.1 塔顶常驻，不随检索重复交付).
+
             row["related_faces"] = faces
         results.append(row)
     out: dict[str, Any] = {"query": query, "results": results}
     if chains_text:
-        # §3.4 链交付：路径即叙事 + 收据指针（⟨entry_id:path⟩ = §2.1 渐进披露把手）
         out["chains"] = chains_text
     return out
 
@@ -219,16 +216,15 @@ def _search(  # type: ignore[no-untyped-def]
 def _face_membership_index(  # type: ignore[no-untyped-def]
     conn, *, include_bodies: bool = False
 ) -> dict[str, dict[str, list[dict[str, Any]]]]:
-    """Membership index for the E1.5 recall↔schema 关联 — 面 by default, 体 opt-in.
+    """Build the recall-to-schema membership index: Faces by default, Volumes opt-in.
 
-    Level-1 面: ``members`` IS the fact bodies' member_key hashes → a fact hit's
+    Level-1 Faces store fact-body member-key hashes, so a fact hit's
     covering regularity is a deterministic lookup (the read-side twin of the
     membership link Phase 3's utility credit walks on the write side). Level-2
-    体: ``members`` are the parent SCHEMA FILE names (there is no stored 面→体
-    pointer today — parent_face is unpopulated), so the honest deterministic
-    coverage for a 体 is BY PATH — it covers hits coming from its member schema
-    files' md 投影. Fail-open: a store predating ``schema_faces`` (or a bad
-    members blob) yields an empty index, never an error."""
+    Level-2 Volumes store parent schema file names because no direct Face-to-Volume
+    pointer exists yet. Volume coverage is therefore path-based. A store predating
+    ``schema_faces`` or containing malformed members fails open to an empty
+    index rather than raising."""
     from ..store import schema_faces as faces_store
 
     index: dict[str, dict[str, list[dict[str, Any]]]] = {"by_member": {}, "by_path": {}}
@@ -272,7 +268,7 @@ def _related_faces_for(
 
 
 def _behavior_patterns(conn) -> dict[str, Any]:  # type: ignore[no-untyped-def]
-    """§3.1 常驻投影 over MCP (issue #557 follow-up).
+    """Return the resident personal-model projection over MCP.
 
     The learned behavior model — the level-3 root apex ("who is this person")
     plus the promoted (both-provenance + resampling-stable) schema faces — used
@@ -326,7 +322,7 @@ def _verify_fact(  # type: ignore[no-untyped-def]
     top_k: int = 8,
     fresh_within_days: int = 7,
 ) -> dict[str, Any]:
-    """轴D 事实校验 (issue #557) — deterministic, zero-LLM.
+    """Check claim freshness deterministically without an LLM.
 
     Pulls the freshest LIVE evidence for a claim through the production read
     entrance and reports each hit's age; the caller (an LLM agent) does the
@@ -357,16 +353,17 @@ def _verify_fact(  # type: ignore[no-untyped-def]
     freshest = min(ages) if ages else None
     stale = freshest is None or freshest > fresh_within_days
     if not evidence:
-        note = "记忆中没有相关证据——不要凭空陈述该论断。"
+        note = "No related evidence exists in memory. Do not state this claim as fact."
     elif stale:
         note = (
-            f"最新相关证据已是 {freshest} 天前。版本号/状态/职责/进行中事项这类"
-            "随时间变化的事实可能已过时：只把它作为当时的状态陈述，或先向用户/最新来源核实。"
+            f"The freshest related evidence is {freshest} day(s) old. Time-sensitive "
+            "facts such as versions, status, ownership, and active work may be stale. "
+            "Present this only as historical state or verify it with a current source."
         )
     else:
         note = (
-            f"存在 {freshest} 天内的新鲜证据。请逐条核对证据内容是否真的支持该论断"
-            "（工具只保证时效，不判断语义）。"
+            f"Evidence exists within {freshest} day(s). Read each item to confirm that "
+            "it supports the claim; this tool checks freshness, not semantics."
         )
     return {
         "claim": claim,
@@ -378,14 +375,14 @@ def _verify_fact(  # type: ignore[no-untyped-def]
 
 
 def _read_receipt(conn, *, entry_id: str) -> dict[str, Any]:  # type: ignore[no-untyped-def]
-    """E1.3 — dereference one ``⟨entry_id:path⟩`` receipt handle (§2.1 渐进披露).
+    """Dereference one ``⟨entry_id:path⟩`` receipt handle.
 
     The chain delivery hands out receipt POINTERS; this is the one-hop
     drill-down that turns a pointer into the entry itself plus the breadcrumbs
     to the NEXT disclosure layer (nearby captures → ``read_recent_capture`` /
     capture receipts). Superseded entries are readable — a receipt is
     archaeology, not a claim about the present — and are labeled as such.
-    Reading a receipt reinforces it (读即强化)."""
+    Reading a receipt reinforces it."""
     row = conn.execute(
         "SELECT id, path, timestamp, tags, content, superseded FROM entries WHERE id = ?",
         (entry_id,),
@@ -462,7 +459,10 @@ def _entity_graph(  # type: ignore[no-untyped-def]
         return {
             "resolved": None,
             "layer": res.layer,
-            "note": f"'{name}' 未能消解为已知身份——图里还没有这个人/物，或提法歧义（不硬猜）。",
+            "note": (
+                f"'{name}' did not resolve to a known identity. The graph may not contain "
+                "it yet, or the name may be ambiguous; no guess was made."
+            ),
         }
     canonical = res.canonical
     assert canonical is not None
@@ -643,7 +643,7 @@ top-down — who they are (resident), what happened (recall), what was on screen
 - `search(query, paths?, since?, until?, top_k?, breadth?, entities?, include_bodies?)`
   — semantic + keyword recall over distilled facts. Natural language works; you do
   not need the user's original phrasing. Knobs:
-  - `entities=["张伟"]` when you KNOW who the question is about (aliases resolve;
+  - `entities=["Alex"]` when you KNOW who the question is about (aliases resolve;
     unknown names are ignored) — stronger than hoping the name appears in `query`.
   - `breadth=0.3–0.7` for survey/research questions (diverse angles over
     near-duplicate top hits); leave 0 when grounding a specific fact.
@@ -740,7 +740,7 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
     from mcp.server.fastmcp import FastMCP  # lazy import
 
     cfg = cfg or load_config()
-    # #557 design principle: MCP-side callers get the 满血版 memory. The read-path
+
     # module gates (hybrid dense, pool weights, tags/recency) default to legacy
     # values at import time and were historically wired only at daemon boot — so
     # the standalone `persome mcp` stdio server silently served BM25-only. Wiring
@@ -832,8 +832,8 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
     def correct_memory(correction: str) -> str:
         """Update the user's memory when they tell you something in it is WRONG.
 
-        Call this the moment the user corrects a belief about themselves — "桃子 isn't my
-        name, it's a colleague", "研发群 is an org not a person", "小张 and 张三 are the same
+        Call this the moment the user corrects a belief about themselves — "Peach isn't my
+        name, it's a colleague", "Research Team is an org, not a person", "Alex J. and Alex Jones are the same
         person", "I don't live in Beijing anymore". Pass their correction verbatim. This is a
         directed memory UPDATE (manage memory like model weights): it traces the wrong belief
         back to its source facts, supersedes them through the memory choke-point (receipts kept —
@@ -885,8 +885,8 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
         When a hit is covered by a learned behavior regularity, it carries
         `related_faces` — the promoted pattern(s) that EXPLAIN this fact (with
         evidence counts); use them to generalize beyond the single entry. By
-        default only the fact-level regularities (level-1 面) are attached;
-        pass `include_bodies=true` to also attach the higher-level 体
+        default only fact-level regularities (level-1 Faces) are attached;
+        pass `include_bodies=true` to also attach higher-level Volumes
         (level 2 — cross-domain fusions) covering schema-file hits.
 
         Examples (natural language works — don't reduce to bare keywords):
@@ -903,7 +903,7 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
         for survey/research-style questions where you want diverse angles
         instead of near-duplicate top hits. `entities` arms the who-lookup
         directly when you KNOW who the question is about (e.g.
-        `entities=["张伟"]` while the query text paraphrases) — unknown names
+        `entities=["Alex"]` while the query text paraphrases) — unknown names
         are ignored, never an error.
         """
         with fts.cursor() as conn:
@@ -937,7 +937,7 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
         Use for: personalizing tone/framing, predicting what the user wants
         next, daily recaps, choosing defaults that match their working style.
         This layer is NOT reachable via `search` (it lives above the entry
-        store) — searching "行为模式" finds nothing; call this instead. Cheap
+        store), so searching for "behavior pattern" finds nothing; call this instead. Cheap
         (one SQLite read, no LLM). Empty `root`+`faces` just means the nightly
         schema synthesis hasn't accumulated enough signal yet.
         """
@@ -1017,7 +1017,7 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
         relevance and can surface a WEEKS-OLD entry that reads like the present.
 
         Pass the claim you are about to state (natural language, e.g.
-        `verify_fact(claim="当前版本是 0.3.9")`). Returns the freshest live
+        `verify_fact(claim="the current version is 0.3.9")`). Returns the freshest live
         evidence with per-entry `age_days`, plus `stale` (no evidence within
         `fresh_within_days`) and a `note` telling you how to treat it. The tool
         judges TIME only — read the evidence to judge semantics yourself: if the
@@ -1036,12 +1036,12 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
         limit: int = 20,
         prefix_filter: list[str] | None = None,
     ) -> str:
-        """**ALWAYS CALL** when the user references "yesterday / last week / earlier / 刚才 / 上周" etc.
+        """**ALWAYS CALL** when the user references yesterday, last week, earlier, or recently.
 
         Newest-first cross-file feed of recent memory entries. Best tool for
         open-ended "what's new / what has the user been up to" questions:
 
-          "what happened today?" / "今天做了啥？"
+          "what happened today?"
           "what was I doing yesterday afternoon?"
           "anything recent about <topic>?"
           "catch me up on this week"
@@ -1215,9 +1215,9 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
 
         Two high-value trigger patterns:
           1. Present-tense: *"right now / currently / just now / what am I /
-             what's open / 现在 / 刚才 / 我在"* — this is the tool.
+             what's open"* — this is the tool.
           2. Pronoun with no in-conversation antecedent: *"that / this / it /
-             the bug / the error / the file / 那个 / 这个 / 这段 / 这个问题"* —
+             the bug / the error / the file"* —
              the user is pointing at their screen, not at chat history.
 
         Never reply with "I don't have code/context to look at" or ask the user
@@ -1229,7 +1229,7 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
         context you would get if every chat turn began with the user narrating
         their environment. Triggers include:
 
-          - "what am I working on?" / "我在干嘛？"
+          - "what am I working on?"
           - "what's open in front of me?"
           - "is the deploy log still streaming?"
           - "summarize the doc I'm reading"

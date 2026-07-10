@@ -1,13 +1,4 @@
-"""Tests for the case-extraction slow loop (E2: error→resolution「问题→解法卡」).
-
-Covers:
-- a timeline with a real error→resolution span → one {problem, solution} card
-  lands at L5_KNOWLEDGE and is queryable from the evomem store;
-- an error with no following resolution → no half card (deterministic pre-filter
-  drops it before any LLM call);
-- plain log noise → nothing extracted (pre-filter blocks it);
-- switch off (default) → no-op / no output.
-"""
+"Tests for test case extraction."
 
 from __future__ import annotations
 
@@ -74,15 +65,15 @@ def test_prefilter_pairs_error_with_following_resolution() -> None:
         start_time=datetime.now().astimezone(),
         end_time=datetime.now().astimezone() + timedelta(minutes=1),
         entries=[
-            "运行 pytest 时报错 ModuleNotFoundError: no module named foo",
-            "检查发现是依赖没装",
-            "pip install foo 后跑通了，测试全部通过",
+            "\u8fd0\u884c pytest \u65f6\u62a5\u9519 ModuleNotFoundError: no module named foo",
+            "\u68c0\u67e5\u53d1\u73b0\u662f\u4f9d\u8d56\u6ca1\u88c5",
+            "pip install foo \u540e\u8dd1\u901a\u4e86\uff0c\u6d4b\u8bd5\u5168\u90e8\u901a\u8fc7",
         ],
     )
     candidates = case_extractor.find_candidates([block])
     assert len(candidates) == 1
-    assert "报错" in candidates[0].error_text or "error" in candidates[0].error_text.lower()
-    assert "通过" in candidates[0].resolution_text
+    assert "\u62a5\u9519" in candidates[0].error_text or "error" in candidates[0].error_text.lower()
+    assert "\u901a\u8fc7" in candidates[0].resolution_text
 
 
 def test_prefilter_drops_error_without_resolution() -> None:
@@ -90,9 +81,9 @@ def test_prefilter_drops_error_without_resolution() -> None:
         start_time=datetime.now().astimezone(),
         end_time=datetime.now().astimezone() + timedelta(minutes=1),
         entries=[
-            "构建失败 build failed with exit code 1",
-            "又试了一次还是不行",
-            "去吃饭了",
+            "\u6784\u5efa\u5931\u8d25 build failed with exit code 1",
+            "\u53c8\u8bd5\u4e86\u4e00\u6b21\u8fd8\u662f\u4e0d\u884c",
+            "\u53bb\u5403\u996d\u4e86",
         ],
     )
     # An error with no resolution signal in the window → no candidate (no half card).
@@ -104,9 +95,9 @@ def test_prefilter_ignores_plain_noise() -> None:
         start_time=datetime.now().astimezone(),
         end_time=datetime.now().astimezone() + timedelta(minutes=1),
         entries=[
-            "打开了 Safari 浏览网页",
-            "在微信里回复了张三",
-            "看了一会儿文档",
+            "\u6253\u5f00\u4e86 Safari \u6d4f\u89c8\u7f51\u9875",
+            "\u5728\u5fae\u4fe1\u91cc\u56de\u590d\u4e86\u5f20\u4e09",
+            "\u770b\u4e86\u4e00\u4f1a\u513f\u6587\u6863",
         ],
     )
     assert case_extractor.find_candidates([block]) == []
@@ -118,13 +109,18 @@ def test_prefilter_ignores_plain_noise() -> None:
 def test_extraction_writes_problem_solution_card_to_l5(ac_root) -> None:
     _insert_block(
         [
-            "运行测试时出现 exception: connection refused",
-            "排查发现服务没起来",
-            "先 docker compose up 把依赖起来，测试就通过了",
+            "\u8fd0\u884c\u6d4b\u8bd5\u65f6\u51fa\u73b0 exception: connection refused",
+            "\u6392\u67e5\u53d1\u73b0\u670d\u52a1\u6ca1\u8d77\u6765",
+            "\u5148 docker compose up \u628a\u4f9d\u8d56\u8d77\u6765\uff0c\u6d4b\u8bd5\u5c31\u901a\u8fc7\u4e86",
         ]
     )
     llm = _scripted_llm(
-        [{"problem": "测试时连接被拒绝", "solution": "先用 docker compose up 起依赖再跑测试"}]
+        [
+            {
+                "problem": "\u6d4b\u8bd5\u65f6\u8fde\u63a5\u88ab\u62d2\u7edd",
+                "solution": "\u5148\u7528 docker compose up \u8d77\u4f9d\u8d56\u518d\u8dd1\u6d4b\u8bd5",
+            }
+        ]
     )
     mem = EvoMemory()
     result = case_extractor.run_case_extraction(_cfg(enabled=True), llm_call=llm, memory=mem)
@@ -140,7 +136,7 @@ def test_extraction_writes_problem_solution_card_to_l5(ac_root) -> None:
     assert node.layer == MemoryLayer.L5_KNOWLEDGE
     assert node.file_name == case_extractor.CASE_FILE
     assert "docker compose up" in node.content
-    assert "连接被拒绝" in node.content
+    assert "\u8fde\u63a5\u88ab\u62d2\u7edd" in node.content
 
     # Re-querying the active heads also surfaces it.
     heads = mem.store.all_latest()
@@ -150,8 +146,8 @@ def test_extraction_writes_problem_solution_card_to_l5(ac_root) -> None:
 def test_error_without_resolution_produces_no_card(ac_root) -> None:
     _insert_block(
         [
-            "部署失败 deploy failed: permission denied",
-            "试了好几次都不行",
+            "\u90e8\u7f72\u5931\u8d25 deploy failed: permission denied",
+            "\u8bd5\u4e86\u597d\u51e0\u6b21\u90fd\u4e0d\u884c",
         ]
     )
     llm = _scripted_llm([{"problem": "x", "solution": "y"}])  # should never be consumed
@@ -169,9 +165,9 @@ def test_error_without_resolution_produces_no_card(ac_root) -> None:
 def test_noise_only_timeline_extracts_nothing(ac_root) -> None:
     _insert_block(
         [
-            "浏览了一些新闻",
-            "回复了几封邮件",
-            "整理了桌面文件",
+            "\u6d4f\u89c8\u4e86\u4e00\u4e9b\u65b0\u95fb",
+            "\u56de\u590d\u4e86\u51e0\u5c01\u90ae\u4ef6",
+            "\u6574\u7406\u4e86\u684c\u9762\u6587\u4ef6",
         ]
     )
     llm = _scripted_llm([{"problem": "x", "solution": "y"}])
@@ -188,8 +184,8 @@ def test_half_card_from_llm_is_dropped(ac_root) -> None:
     """A candidate whose LLM card is missing problem or solution → no node."""
     _insert_block(
         [
-            "编译报错 compile error: undefined symbol",
-            "改了头文件引用后修复了，build 成功",
+            "\u7f16\u8bd1\u62a5\u9519 compile error: undefined symbol",
+            "\u6539\u4e86\u5934\u6587\u4ef6\u5f15\u7528\u540e\u4fee\u590d\u4e86\uff0cbuild \u6210\u529f",
         ]
     )
     # LLM returns an empty/half card (model judged it not a real problem→solution).
@@ -211,8 +207,8 @@ def test_half_card_from_llm_is_dropped(ac_root) -> None:
 def test_disabled_is_noop(ac_root) -> None:
     _insert_block(
         [
-            "测试报错 test failed",
-            "修好了，全部通过 resolved",
+            "\u6d4b\u8bd5\u62a5\u9519 test failed",
+            "\u4fee\u597d\u4e86\uff0c\u5168\u90e8\u901a\u8fc7 resolved",
         ]
     )
     llm = _scripted_llm([{"problem": "p", "solution": "s"}])
@@ -229,7 +225,7 @@ def test_disabled_is_noop(ac_root) -> None:
 
 def test_default_getattr_off(ac_root) -> None:
     """A cfg lacking the attribute entirely defaults to OFF (getattr fallback)."""
-    _insert_block(["报错 error happened", "修复了 fixed"])
+    _insert_block(["\u62a5\u9519 error happened", "\u4fee\u590d\u4e86 fixed"])
     cfg_without_attr = SimpleNamespace()  # no case_extraction_enabled
     result = case_extractor.run_case_extraction(cfg_without_attr)
     assert result.committed is False

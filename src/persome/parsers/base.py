@@ -64,15 +64,6 @@ def _esc_attr(s: str) -> str:
 
 @dataclass(frozen=True)
 class Message:
-    """One message (or feed-card preview) extracted from an app's AX tree.
-
-    ``body`` is always present (the meaningful text). ``sender`` and
-    ``timestamp_text`` are best-effort: ``None`` when the AX tree does not
-    expose them. ``timestamp_text`` is the *verbatim* on-screen label
-    (e.g. ``"12:20"``, ``"昨天"``, ``"5月27日"``) — parsers do not normalize it
-    to an absolute time; downstream stages decide whether they need it.
-    """
-
     sender: str | None
     body: str
     timestamp_text: str | None = None
@@ -101,29 +92,6 @@ class ParsedConversation:
     previews: list[Message] = field(default_factory=list)
 
     def render(self) -> str:
-        """Render to the ``focus_structured`` text fed to session modeling.
-
-        Emits **XML** (Anthropic's recommended way to give a model structured
-        context — explicit tag boundaries beat ad-hoc delimiters). Two distinct
-        sections so unrelated conversations never blur into one::
-
-            <screen_conversation app="feishu">
-            <current_conversation name="沈砚舟">
-            <message dir="received" sender="蓝蓝">…</message>
-            <message dir="sent">…</message>
-            </current_conversation>
-            <other_conversations note="每条=不同对话的最新一条未读预览，非当前会话的连续消息">
-            <preview sender="温子墨" time="11:27">晚上8点约一个会议…</preview>
-            </other_conversations>
-            </screen_conversation>
-
-        ``<current_conversation name>`` carries ``thread_title`` so the model
-        sees *which* conversation is open. ``<preview>`` entries are other
-        chats' latest unread messages — not turns of the current thread — and
-        carry no direction. All text/attributes are XML-escaped. Returns ``""``
-        when there is nothing at all (the caller then falls back to the legacy
-        normalized text).
-        """
         if not self.messages and not self.previews:
             return ""
 
@@ -142,7 +110,7 @@ class ParsedConversation:
 
         if self.previews:
             lines.append(
-                '<other_conversations note="每条=不同对话的最新一条未读预览，非当前会话的连续消息">'
+                '<other_conversations note="each item is the latest unread preview from a different conversation, not a turn in the current thread">'
             )
             lines.extend(self._preview_tag(m) for m in self.previews)
             lines.append("</other_conversations>")
@@ -162,7 +130,7 @@ class ParsedConversation:
 
     @classmethod
     def _message_tag(cls, msg: Message) -> str:
-        """A current-conversation turn: ``<message dir=… sender=…>正文</message>``."""
+        """Render one current-conversation turn as an XML message element."""
         attrs = f' dir="{_DIRECTION_ATTR.get(msg.direction, "unknown")}"'
         attrs += cls._attrs([("sender", msg.sender), ("time", msg.timestamp_text)])
         return f"<message{attrs}>{_esc_text(msg.body.strip())}</message>"

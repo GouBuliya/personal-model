@@ -1,15 +1,16 @@
-# 记忆降精蒸馏
+# Memory precision decay
 
-以下是同一记忆文件里的若干条旧事实。把它们蒸馏成{mode}：
+Distill the following old facts from one memory file into {mode}:
 
-- 保留：具体的人名、项目/工具名、明确的结论与偏好；
-- 丢弃：过程性细节、重复表述、一次性的临时信息；
-- 不得引入原文没有的人名或事实；
-- 用与原文相同的语言书写。
+- Preserve specific people, project and tool names, explicit conclusions, and
+  preferences.
+- Remove process detail, repetition, and one-off temporary information.
+- Do not introduce a person or fact absent from the source.
+- Write in the same language as the source facts.
 
-只输出蒸馏后的文本本身，不要任何前后缀、编号或解释。
+Return only the distilled text, with no prefix, numbering, or explanation.
 
-文件：{path}
+File: {path}
 
-事实：
+Facts:
 {facts}

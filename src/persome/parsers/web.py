@@ -95,7 +95,7 @@ _PROSE_JOIN = ""
 # CJK ideographs + CJK punctuation. A fragment boundary touching CJK text is a
 # mid-sentence split (prose continuation), not a list of discrete labels — Latin
 # labels / meta never contain these, CJK prose always does.
-_CJK_RE = re.compile(r"[　-〿㐀-鿿＀-￯]")
+_CJK_RE = re.compile(r"[\u3000-\u303f\u3400-\u9fff\uff00-\uffef]")
 
 # A list child is treated as its own ``<item>`` only when it is "rich" — it
 # carries a heading or has at least this many lines. A single short nav link in
@@ -182,25 +182,6 @@ class WebPage:
     parser_version: str = "browser-2"
 
     def render(self) -> str:
-        """Render to the ``focus_structured`` XML fed to session modeling.
-
-        Emits a single ``<web_page>`` element (XML — explicit boundaries beat
-        ad-hoc delimiters for an LLM). ``app`` is always present; ``url`` and
-        ``title`` are emitted only when known. Each content unit is an
-        ``<item>`` carrying its ``<heading>`` (when present) and ``<text>``
-        lines::
-
-            <web_page app="Tabbit浏览器" url="https://github.com/…/issues" title="Issues · …">
-            <item>
-            <heading>feat(app): 升级失败回滚</heading>
-            <text>area:distribution · type:tech-debt · Status: Open.</text>
-            <text>#200 · DemoUserX opened 5 days ago</text>
-            </item>
-            </web_page>
-
-        All text/attributes are XML-escaped. Returns ``""`` when there is no
-        content at all (the caller then falls back to the raw excerpt).
-        """
         if not self.items:
             return ""
 
@@ -526,20 +507,6 @@ def _is_nav_item(heading: str | None, heading_is_nav: bool, lines: list[tuple[st
 
 
 def _join_fragments(buf: list[str]) -> str:
-    """Join a run of short fragments, picking the separator per adjacent pair.
-
-    The browser splits both kinds of content into ``AXStaticText`` runs:
-
-    - **Discrete labels / meta** (``area:distribution``, ``opened``, ``Open``) —
-      independent values → joined with ``· `` so they read as a list.
-    - **Prose split mid-sentence** — a CJK paragraph chopped into runs by inline
-      styling (``寻找创新这件事本身`` + ``变成了一套可工业化的流程。``) → joined SEAMLESSLY
-      so it reads back as one sentence.
-
-    The choice is per *gap*: if either side of the boundary carries CJK text the
-    gap is mid-sentence prose (seamless); otherwise it is a label list (``· ``).
-    This handles a run that mixes both without a global mode.
-    """
     if not buf:
         return ""
     result = buf[0]

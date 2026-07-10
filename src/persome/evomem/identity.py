@@ -1,34 +1,4 @@
-"""resolve_identity — the ONE identity-resolution funnel (memory-rebuild spec §4.3).
-
-The seam between LLM free strings ("张总") and canonical graph identities
-(person_graph canonical names). §4.3 discipline:
-
-- **Single implementation**: every SURVIVING read/write path resolves mentions
-  through THIS module — the session memory-delta gates and the associative
-  Q construction (§3.2) and the MCP pull tomorrow. A fork is drift, and drift
-  is a miss (§5 red line). The legacy ``relation_extractor`` keeps its local
-  alias map on purpose: it is on the §6.4 retirement list — migrating doomed
-  code is wasted motion.
-- **Layered funnel, merge conservatively**: exact → NFKC-normalized → alias
-  set → honorific stripping — each layer only matches when the candidate is
-  UNIQUE (合并宁缺毋滥: wrongly merging two 张伟 poisons the graph; a miss is
-  just a shadow candidate with a TTL). A failed resolution is the caller's cue
-  to mint a candidate (候选宁滥毋缺), never to force-match.
-- Layer labels ride the result so the seam oracle (§7-5: identity golden +
-  production hit-rate/orphan counters) can attribute hits per layer and tune
-  the funnel with data instead of hunches.
-
-Deliberately NOT here yet (honest deferral, added when data demands):
-- pinyin matching — needs a pypinyin dependency; no evidence yet the layer
-  earns its weight;
-- embedding fallback — reuses the semantic head's index once the §3 read path
-  lands;
-- alias write-back (miss = training data) — belongs to the delta APPLY path
-  (the deterministic apply path), not the gate.
-
-Normalization matches ``person_graph._norm`` byte-for-byte (NFKC + whitespace
-fold + casefold) so identities resolved here agree with what the graph stored.
-"""
+"Canonical identity normalization and alias resolution."
 
 from __future__ import annotations
 
@@ -43,11 +13,18 @@ LAYER_ALIAS = "alias"
 LAYER_HONORIFIC = "honorific"
 LAYER_NONE = "none"
 
-# Chinese address suffixes that wrap a surname/short name ("张总", "李老师",
-# "王哥"); and the familiar prefixes ("小张", "老王"). Stripping is only
-# trusted when the残 stem uniquely prefixes ONE roster identity.
-_HONORIFIC_SUFFIXES = ("总", "老师", "哥", "姐", "工", "老板", "经理", "同学")
-_FAMILIAR_PREFIXES = ("小", "老", "阿")
+
+_HONORIFIC_SUFFIXES = (
+    "\u603b",
+    "\u8001\u5e08",
+    "\u54e5",
+    "\u59d0",
+    "\u5de5",
+    "\u8001\u677f",
+    "\u7ecf\u7406",
+    "\u540c\u5b66",
+)
+_FAMILIAR_PREFIXES = ("\u5c0f", "\u8001", "\u963f")
 
 
 def norm(name: str) -> str:
@@ -69,8 +46,6 @@ class Resolution:
 
 @dataclass
 class Roster:
-    """The known-identity menu (§4.1 选择题) with its lookup indexes."""
-
     canonicals: list[str] = field(default_factory=list)
     # normalized form -> canonical (covers canonicals AND aliases)
     _by_norm: dict[str, str] = field(default_factory=dict)
@@ -118,7 +93,6 @@ def load_roster(cfg, *, memory=None, limit: int | None = None) -> Roster:
 
 
 def _strip_honorific(mention: str) -> str | None:
-    """ "张总"→"张"、"小张"→"张" — the stem, or None when nothing was stripped."""
     for suffix in _HONORIFIC_SUFFIXES:
         if mention.endswith(suffix) and len(mention) > len(suffix):
             return mention[: -len(suffix)]

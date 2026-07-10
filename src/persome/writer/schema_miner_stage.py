@@ -1,53 +1,4 @@
-"""D2 schema-mining stage — induce predictive ``schema-*.md`` priors from facts.
-
-``evomem.schema_miner.SchemaMiner`` already turns a set of related facts into a
-``SchemaResult(central_proposition, supporting_summary, expected_inferences,
-confidence)``. That miner is an isolated pure function: it neither reads facts
-from anywhere nor writes its output to disk. This stage is the landing layer
-that closes both gaps for Persome:
-
-1. **Input adapter (screen modality, not chat)** — :func:`collect_fact_bundles`
-   assembles "关联事实集" from acme's durable fact memory. The MVP clusters
-   *per file*: every ``user-/project-/topic-/person-*.md`` file's non-superseded
-   entries form one bundle, because the classifier already groups facts by topic
-   when it writes them, so a file *is* a natural semantic cluster (design §2.3:
-   "同一 topic 文件的事实归一簇，纯启发不引向量/DBSCAN"). A bundle smaller than
-   ``min_facts`` is dropped — too few facts can't support a generalisation
-   (aligns with Hy-Memory's ``MIN_FACTS_FOR_INDUCTION``). Wiring richer
-   cross-session clusters in is a later step; it feeds the same
-   :class:`FactBundle` interface, so this stage doesn't change when it lands.
-
-2. **Landing form + lifecycle (idempotent)** — :func:`mine_bundles_and_write`
-   feeds each bundle to the miner and lands a ``schema-<slug>.md`` memory entry.
-   The slug is **derived from the source file** (``project-x.md`` →
-   ``schema-project-x.md``), so re-mining the *same* cluster updates the *same*
-   schema file instead of accumulating new files every run: an existing schema's
-   latest entry is **superseded in place** (the evolution-chain write口
-   ``store.entries.supersede_entry``), keeping the immutable-proposition /
-   append-evidence discipline (design §2.4) and bounding file growth. A first
-   mine creates the file via ``create_file`` / ``append_entry``.
-
-Status is derived from the miner's confidence: ``confidence >= stable_threshold``
-→ ``stable`` (the only status exposed by the active model reader), otherwise
-``forming``. The ``central``, ``summary`` and ``inferences`` are rendered into
-the entry body so :mod:`persome.model.schema_reader` can read the inferences back
-out; ``confidence`` rides as a heading tag so the reader can rank by it.
-
-写权反转（PR-6b，SSOT 切换设计 §1.3/§5）：``write_authority="evomem"`` 时本站点
-的写（create / append / 原地 supersede / ``set_file_status`` 的 dormant↔active
-翻转）经 ``store/entries.py`` 的 choke-point dispatch 走 evomem engine 落
-evo_nodes（L6_SCHEMA，四元组三列由共享映射从 body/tag 解析）；markdown 由投影
-器再生成，``_latest_entry_id`` 读的是写后同步刷新的投影。逐站输出等价由
-``tests/test_evomem/test_inversion_stations.py`` 钉死。
-
-The LLM goes through acme's ``writer.llm.call_llm`` (stage name ``schema_miner``,
-inheriting ``[models.default]``), wrapped into the ``llm_call`` the miner expects.
-Tests inject a fake ``llm_call`` (no network), mirroring
-``tests/test_evomem/test_schema_miner.py``.
-
-This stage only ever writes the ``schema-*.md`` prefix — it never touches
-``skill-*`` / ``event-*`` / ``user-*`` etc.; every writer owns a narrow prefix.
-"""
+"Runtime stage that mines and persists stable schema Faces."
 
 from __future__ import annotations
 
@@ -141,11 +92,11 @@ def render_schema_body(
     Layout (design §3.3) — ``central``/``summary`` one-liners, then an
     ``inferences:`` marker followed by ``- `` bullets, one inference per line::
 
-        central: 用户在工具选型上系统性偏好极简方案
-        summary: 多次选择 uv/ruff 而非重型框架
+        central: The user consistently prefers minimal tooling.
+        summary: They repeatedly choose uv and ruff over heavier frameworks.
         inferences:
-        - 会拒绝引入大型框架/重 SDK
-        - 评估新工具优先看依赖体积
+        - They are likely to reject a large framework or SDK.
+        - They will evaluate new tools partly by dependency size.
     """
     lines = [
         f"central: {central_proposition.strip()}",
@@ -181,16 +132,13 @@ def parse_expected_inferences(body: str) -> list[str]:
     return out
 
 
-# ── clustering: the forked "凑关联事实集" decision (MVP = per file) ───────────
-
-
 def collect_fact_bundles(
     conn: sqlite3.Connection,
     *,
     min_facts: int = _DEFAULT_MIN_FACTS,
     from_evomem: bool = False,
 ) -> list[FactBundle]:
-    """Assemble "关联事实集" by clustering durable fact entries per file (plan A).
+    """Assemble related fact sets by clustering durable entries per file.
 
     Each ``user-/project-/topic-/person-*.md`` file contributes one
     :class:`FactBundle` of its non-superseded entry bodies, tagged with the source
@@ -214,7 +162,7 @@ def collect_fact_bundles(
                 f"WHERE is_latest = 1 AND status = 'active' AND ({like}) "
                 f"ORDER BY file_name, gmt_created"
             ).fetchall()
-        except Exception:  # noqa: BLE001 — evo_nodes 缺表/异常 fail-open：退回 entries 投影
+        except Exception:  # noqa: BLE001 — evo_nodes
             rows = None
     if rows is None:
         placeholders = ",".join("?" * len(_FACT_PREFIXES))
@@ -287,7 +235,7 @@ def _persist_schema(
     **superseded** by the freshly mined one (re-mine = update in place); otherwise
     the file is created and the first entry appended. Returns ``None`` when the
     miner produced nothing usable (no central proposition) — we never write an
-    empty schema (design: 归纳不出就别编造).
+    empty schema rather than fabricating a pattern.
     """
     central = result.central_proposition.strip()
     if not central:
@@ -360,8 +308,8 @@ def _face_anchors(
     """Entity anchors for a mined face (§7-6 graph projection) — the hull
     vertices the view renders the face over. Three sources, unioned:
 
-    - the source file's own entity (a face mined from ``person-张伟.md`` is
-      ABOUT 张伟; a ``user-*`` face is about the user → anchor ``self``);
+    - the source file's own entity (a Face mined from ``person-alex.md`` is
+      about Alex; a ``user-*`` Face anchors to ``self``);
     - every roster identity named in the signature OR in the footprint fact
       BODIES — the cluster emerged from those facts, so the people they name
       ARE the points it spans (signature-only anchors leave person faces with
@@ -380,10 +328,14 @@ def _face_anchors(
         for prefix in ("person-", "org-", "project-", "tool-", "topic-"):
             if stem.startswith(prefix):
                 anchors.add(stem.removeprefix(prefix))
-        # user-* source, OR any user-behaviour schema ("用户…"/"User…"), anchors to self —
+
         # it is ABOUT the user, so it belongs on the USER hub (§1.5 same-component invariant).
         sig = (signature or "").strip()
-        if stem.startswith("user-") or sig.startswith("用户") or sig.lower().startswith("user"):
+        if (
+            stem.startswith("user-")
+            or sig.startswith("\u7528\u6237")
+            or sig.lower().startswith("user")
+        ):
             anchors.add("self")
         from ..evomem import identity as identity_mod
 
@@ -472,9 +424,7 @@ def mine_schemas_for_user(
     step — keeping it a plain function here makes the whole chain unit-testable
     with an injected ``llm_call`` and no daemon.
     """
-    # apply_enabled（delta 铸点已上线）→ 从**重建层 evo_nodes** 收簇，而非退役中的 entries 投影：
-    # markdown 权威下 delta 的 add_direct 只写 evo_nodes，从 entries 收簇会漏掉整个重建
-    # （spec 2026-07-04 §1 reader↔重建断层的 schema 读路）。
+
     from_evomem = bool(getattr(getattr(cfg, "memory_delta", None), "apply_enabled", False))
     bundles = collect_fact_bundles(conn, min_facts=min_facts, from_evomem=from_evomem)
     return mine_bundles_and_write(

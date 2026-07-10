@@ -80,7 +80,6 @@ def classify_window(
     if not cfg.reducer.enabled:
         return ClassifyResult(session_id=session_id, skipped_reason="reducer disabled")
     if getattr(getattr(cfg, "memory_delta", None), "apply_enabled", False):
-        # classifier 退役（同 classify_after_reduce）——点归 memory_delta apply。
         return ClassifyResult(
             session_id=session_id, skipped_reason="classifier retired (delta apply)"
         )
@@ -142,8 +141,6 @@ def classify_after_reduce(
     if not cfg.reducer.enabled:
         return ClassifyResult(session_id=session_id, skipped_reason="reducer disabled")
     if getattr(getattr(cfg, "memory_delta", None), "apply_enabled", False):
-        # §4.1/§6.1 classifier 退役：apply 开时点由 memory_delta 铸（attention 式多头提取），
-        # classifier 短路 no-op，避免双写点。pattern_detector / delta 仍在链上跑。
         return ClassifyResult(
             session_id=session_id, skipped_reason="classifier retired (delta apply)"
         )
@@ -466,7 +463,7 @@ def _run_tool_loop(
         )
 
     # Current date/time anchor (#532): without it the model can only guess the
-    # absolute date behind a relative phrase ("上周五下午") from the event-daily
+
     # FILENAME, which breaks across midnight or when an entry references an
     # earlier event — a wrong ``occurred_at`` then poisons the cross-domain
     # sweeper's ±25min behavior signature. Giving the model "today" lets it
@@ -474,8 +471,8 @@ def _run_tool_loop(
     now_anchor = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %A (%z)")
     user_msg = (
         f"# Current date/time\n\n"
-        f'Now: {now_anchor}. Resolve any relative time phrase ("上周五下午",\n'
-        f'"yesterday", "上个月") against this when writing an ISO `occurred_at`.\n\n'
+        f'Now: {now_anchor}. Resolve any relative time phrase such as "last Friday "\n'
+        f'or "last month" against this when writing an ISO `occurred_at`.\n\n'
         f"# Schema\n\n{schema}\n\n"
         f"# Memory index\n\n{index}\n\n"
         f"{entity_section}"

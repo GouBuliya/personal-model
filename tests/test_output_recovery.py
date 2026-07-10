@@ -31,7 +31,6 @@ class _State:
 
 
 def test_length_finish_reason_retries(monkeypatch):
-    """mock 一次 finish_reason='length' 后正常结束，验证 call_llm 被调用 2 次。"""
     calls: list[int] = []
 
     def _stub(cfg, stage, *, messages, tools=None, json_mode=False):
@@ -68,7 +67,6 @@ def test_length_finish_reason_retries(monkeypatch):
 
 
 def test_continuation_prompt_injected(monkeypatch):
-    """验证 finish_reason='length' 后 continuation user message 被注入。"""
     calls: list[int] = []
 
     def _stub(cfg, stage, *, messages, tools=None, json_mode=False):
@@ -109,7 +107,6 @@ def test_continuation_prompt_injected(monkeypatch):
 
 
 def test_recovery_limit_respected(monkeypatch):
-    """mock 4 次 finish_reason='length'，验证只恢复 max_recovery_count=3 次。"""
     calls: list[int] = []
 
     def _stub(cfg, stage, *, messages, tools=None, json_mode=False):

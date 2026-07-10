@@ -1,18 +1,4 @@
-"""Daemon wiring for the D2 schema miner: the ``schema-tick`` daily tick.
-
-Covers the three things that make the招牌 capability self-driving:
-  1. ``cfg.schema.enabled = False`` → the task is absent from the registry AND
-     ``run_schema_tick`` returns immediately without scheduling work.
-  2. ``cfg.schema.enabled = True`` → the registry carries ``schema-tick`` in full
-     mode but never in capture-only mode (it's an LLM processing task).
-  3. ``run_schema_tick`` drives the same ``run_model_build`` service as the CLI
-     when its scheduled moment arrives.
-
-The schedule loop is an unbounded ``while True``; tests never run it raw. (2)
-asserts pure wiring on the registry; (3) replaces ``_seconds_until_next_local``
-with a stub that lets the first tick run, then raises ``CancelledError`` on the
-post-run sleep so the loop unwinds deterministically.
-"""
+"Tests for test schema tick."
 
 from __future__ import annotations
 

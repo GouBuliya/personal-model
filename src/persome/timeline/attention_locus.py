@@ -30,7 +30,7 @@ _CONF_PANE = 0.8
 _CONF_CONTENT = 0.5  # structural content-subtree narrowing (no focus signal)
 _CONF_FALLBACK = 0.0
 
-# Structural narrowing (路2). chrome and content are SEPARATE subtrees in the AX
+
 # tree, so we can drop chrome app-agnostically — no per-app text heuristics.
 # Web/Electron apps (browsers, Feishu) expose their rendered content as an
 # AXWebArea subtree; we take that and drop everything else. Apps without a
@@ -101,14 +101,6 @@ def _render(elements: list, title: str) -> str:
 
 
 def structural_content(data: dict) -> tuple[str, bool]:
-    """Extract the content region from the capture's structured ``ax_tree``,
-    dropping chrome — app-agnostically (路2). Returns (text, narrowed).
-
-    Prefers AXWebArea subtrees (web/Electron content). Falls back to pruning
-    chrome-role subtrees. Returns ``("", False)`` when there is no ax_tree, no
-    content region, nothing chrome was actually dropped, or the result is too
-    thin — so the caller keeps the whole window (fail-open).
-    """
     ax = data.get("ax_tree")
     if not isinstance(ax, dict):
         return "", False
@@ -260,7 +252,7 @@ def _generic_resolver(data: dict, surface: str, visible_text: str) -> AttentionL
             rung="focus",
         )
     # No focus signal (the fallback majority — browsers, passive Electron views).
-    # Structurally narrow to the content subtree (路2), dropping chrome, instead
+
     # of feeding the whole window. Fail-open to whole window when extraction is
     # not confident.
     narrowed, did_narrow = structural_content(data)

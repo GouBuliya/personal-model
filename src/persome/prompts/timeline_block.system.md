@@ -19,10 +19,10 @@ Capture **what the user is attending to** — the one region they are actively w
 
 **Feishu / Lark** (`com.electron.lark`): Feishu is an Electron app whose full DOM is exposed via AX. The `focused_value` field is always empty even while the user is typing — rely on `visible_text` and `window_title` instead.
 
-- `window_title` pattern `"X与Y的会话记录"` → the user is in a private chat with Y. Use Y as the conversation name.
+- A localized `window_title` meaning "conversation history between X and Y" means the user is in a private chat with Y. Use Y as the conversation name.
 - `visible_text` contains `[WebArea] merge-message-viewer` → structured chat content follows. Sender name appears one line above their message block; use it for attribution.
-- `window_title = "飞书"` (main screen) → visible_text contains the full sidebar (all conversations' last-message previews mixed together). Describe general Feishu activity only; do NOT extract specific message content from this noise.
-- Group chats show the group name in `window_title` (e.g. `"Dev"`, `"产研对齐"`).
+- A generic Feishu main-screen title means `visible_text` contains the full sidebar, mixing last-message previews from many conversations. Describe general Feishu activity only; do NOT extract specific message content from this noise.
+- Group chats show the group name in `window_title` (for example, `"Dev"` or `"Product Sync"`).
 
 ## Anti-hallucination rule — the most important rule in this prompt.
 
@@ -42,7 +42,7 @@ The guard is about **correct attribution, not suppression**: a message the *coun
 2. **URLs**, window titles, file names, file paths — verbatim.
 3. **Proper nouns** (people names, project names, channel names, organization names) — verbatim.
 4. **Quoted evidence.** When you describe what the user read, quote a short (≤200-char) excerpt of the actual visible text if it carries specific meaning. Don't fabricate excerpts.
-5. **Chat / IM / calendar messages — sent AND received, attach the originals.** When a chat / IM / calendar surface shows actual conversation messages, **attach the original message text verbatim** into the entry (each message in quotes, **with the sender labelled** — `user said: "…"` vs `张三 said: "…"`), as the entry's supporting detail. Do NOT replace the messages with a generic paraphrase like `"viewed recent messages"` / `"浏览了多个会话"` — that throws away exactly what downstream stages need. This applies to **every** visible message, not only ones with a time/appointment anchor, and holds **even when the user is only viewing / scrolling history** (not typing) and **even when the counterpart sent it** (label them, don't attribute to the user).
+5. **Chat / IM / calendar messages — sent AND received, attach the originals.** When a chat / IM / calendar surface shows actual conversation messages, **attach the original message text verbatim** into the entry (each message in quotes, **with the sender labelled** — `user said: "..."` vs `Alex said: "..."`), as the entry's supporting detail. Do NOT replace the messages with a generic paraphrase like `"viewed recent messages"` — that throws away exactly what downstream stages need. This applies to **every** visible message, not only ones with a time/appointment anchor, and holds **even when the user is only viewing / scrolling history** (not typing) and **even when the counterpart sent it** (label them, don't attribute to the user).
    - **Bounds (so an active chat doesn't explode the block):** attach the **most recent ~20 messages** of the focused conversation; truncate any single message over ~500 chars with `…(truncated)`. Pure UI chrome (timestamps headers, read receipts, reaction counts, the conversation-list sidebar) is still dropped — only the message lines themselves are preserved.
    - Keep the normalized one-line description too; the verbatim messages ride **with** it as the entry's detail (the "summary" carries the originals), not instead of it.
 
@@ -60,7 +60,7 @@ Return a JSON object with exactly three fields:
 - `skill_hints`: only present when a **Registered Skills** section appears above. For each registered skill whose description strongly and specifically matches the current activity, emit one record. **Default `[]`. Silence is the correct choice — only fire when the match is concrete and specific, not merely directional.** See the *Skill matching* section below for the schema and firing rules.
 - `action_trace`: a flat ordered list of every discrete user action you can infer from the events, using the `<EventType>` tags and focused-element data. **Default `[]`.** Each record uses this shape:
   ```json
-  {{"type": "click", "app": "WeChat", "window": "WeChat", "role": "AXButton", "title": "朋友圈", "value": null, "timestamp": "10:23:41"}}
+  {{"type": "click", "app": "Messages", "window": "Messages", "role": "AXButton", "title": "Contacts", "value": null, "timestamp": "10:23:41"}}
   ```
   - `type`: `"click"` (`UserMouseClick`), `"text_input"` (`UserTextInput`), `"focus_change"` (`AXFocusedWindowChanged`), `"app_switch"` (`AXApplicationActivated`). Use `"click"` as default for unknown event types.
   - `app`, `window`: from the event's app name and window title.

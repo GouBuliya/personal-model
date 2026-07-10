@@ -95,7 +95,6 @@ def test_zero_tokens_returns_none(monkeypatch):
 
 
 def test_mock_mode_returns_none(monkeypatch):
-    """PERSOME_LLM_MOCK=1 时不调用 API，返回 None。"""
     monkeypatch.setenv("PERSOME_LLM_MOCK", "1")
     cfg = _make_cfg()
     assert count_tokens_api(cfg, "classifier", _MSGS) is None
@@ -107,7 +106,6 @@ def test_mock_mode_returns_none(monkeypatch):
 
 
 def test_disabled_by_config():
-    """use_token_count_api=False 时应返回 None。"""
     cfg = _make_cfg(use_api=False)
     assert count_tokens_api(cfg, "classifier", _MSGS) is None
 

@@ -16,14 +16,14 @@ pane. So the two signals coexist in almost every capture and we parse **both**:
    receipts, and thread-reply chrome that otherwise leak in). The sender of an
    *incoming* bubble is the ``message-info-name`` label Feishu renders above
    other people's messages; outgoing bubbles carry no name (you don't see your
-   own), so we attribute them to ``"我"``. This is the **primary** content —
+   own), so we attribute them to ``"self"``. This is the **primary** content —
    what the user is actually reading/typing right now.
 2. **Feed-list (left sidebar)** — the conversation list. Each
    ``a11y_feed_card_item`` is one row: ``[sender, (badge), timestamp]`` + last
-   message preview. The schedulable signals (a meeting invite, "晚上8点约会议")
+   message preview. Schedulable signals such as a meeting invitation
    surface here as previews of *other* conversations, so we keep them as
    **secondary** context (rendered under a separate heading). The left
-   ``a11y_feed_filter_list_item`` tabs (消息 / 未读 / 单聊 …) are pruned.
+   ``a11y_feed_filter_list_item`` tabs are pruned.
 
 Routing: parse open-thread first (primary). If there are no ``message-item``
 rows we degrade to a pure feed parse (preserves the original behaviour for the
@@ -34,8 +34,8 @@ Anchor discipline: we key only off the semantic ``message-*`` / ``a11y_*``
 classes — never the hash-randomized layout classes (e.g. ``a84b6211``).
 
 Bundle coverage: besides the main client (``com.electron.lark``) we also claim
-the meeting renderer process ``com.electron.lark.iron`` ("Lark Helper (Iron)",
-the 飞书会议 window). Forensics over the live capture buffer (2026-06-12,
+the meeting renderer process ``com.electron.lark.iron`` ("Lark Helper (Iron)").
+Forensics over the live capture buffer (2026-06-12,
 46/46 iron captures) show that window exposes an *empty* AX tree — a single
 bare ``RootView`` AXGroup with no children, no text, no DOM ``a11y_*``
 classes — so today ``parse`` always (correctly) declines on it. Registering it
@@ -54,7 +54,7 @@ from . import _axtree as ax
 from .base import Direction, Message, ParsedConversation, Parser
 
 _BUNDLE = "com.electron.lark"
-# The Feishu meetings renderer ("Lark Helper (Iron)" / 飞书会议). See the module
+
 # docstring: its window is AX-opaque today, so parse declines — by design.
 _BUNDLE_IRON = "com.electron.lark.iron"
 # Deterministic lookup order for the window-element scan (a capture's ax_tree
@@ -72,7 +72,7 @@ _MAX_MESSAGES = 20
 
 # When a conversation IS open, the budgets are PARTITIONED so a long thread can
 # never starve the feed previews — the schedulable signals (a meeting invite,
-# "晚上8点约会议") live in the feed previews, and dropping them is the costly
+
 # miss we must avoid. Each side is capped independently, then concatenated:
 #   - the open thread keeps its most-recent tail (current conversation), and
 #   - the feed previews keep a guaranteed floor (other conversations' latest).
@@ -84,17 +84,25 @@ _FEED_PREVIEW_LIMIT = 8
 _TIMESTAMP_RE = re.compile(
     r"^(?:"
     r"\d{1,2}:\d{2}(?:\s*[-~]\s*\d{1,2}:\d{2})?"  # 12:20 / 20:00 - 20:30
-    r"|昨天|今天|前天"
-    r"|\d{1,2}月\d{1,2}日"
-    r"|\d{4}年\d{1,2}月\d{1,2}日"
-    r"|星期[一二三四五六日天]"
-    r"|周[一二三四五六日天]"
+    r"|\u6628\u5929|\u4eca\u5929|\u524d\u5929"
+    r"|\d{1,2}\u6708\d{1,2}\u65e5"
+    r"|\d{4}\u5e74\d{1,2}\u6708\d{1,2}\u65e5"
+    r"|\u661f\u671f[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u65e5\u5929]"
+    r"|\u5468[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u65e5\u5929]"
     r")$"
 )
 
 # Badge tokens that sit between the sender name and the timestamp in a feed
 # card header (bot/agent markers, status flags). Dropped from the sender.
-_HEADER_BADGES = frozenset({"智能体", "机器人", "已离职", "外部", "官方"})
+_HEADER_BADGES = frozenset(
+    {
+        "\u667a\u80fd\u4f53",
+        "\u673a\u5668\u4eba",
+        "\u5df2\u79bb\u804c",
+        "\u5916\u90e8",
+        "\u5b98\u65b9",
+    }
+)
 
 # Semantic classes (stable across builds — never key off hash classes).
 _CLS_FEED_CARD = "a11y_feed_card_item"
@@ -120,8 +128,8 @@ _CLS_MESSAGE_INFO_NAME = "message-info-name"
 _CLS_CHAT_NAME = "chatWindow_chatName"
 
 # Self-sender label used when a bubble is outgoing (message-self): Feishu shows
-# no name for your own messages, so we attribute them to 我.
-_SELF_SENDER = "我"
+
+_SELF_SENDER = "self"
 
 # Image-message body classes (live inside message-content). A pure-image bubble
 # exposes no text value, so without this it would be dropped as "empty" — we
@@ -136,24 +144,26 @@ _CLS_IMAGE = (
     "rich-text-message-img",
 )
 # Placeholder body for an image-only bubble (matches Feishu's own AX placeholder).
-_IMAGE_PLACEHOLDER = "[图片]"
+_IMAGE_PLACEHOLDER = "[Image]"
 
 # Chrome tokens that live inside message-content but are not message text:
 # edit markers, expand/collapse affordances, thread-reply counters. Dropped
 # from the body so the model sees clean text.
 _BODY_CHROME = frozenset(
     {
-        "（已编辑）",
-        "(已编辑)",
-        "展开",
-        "收起",
-        "回复话题",
-        "查看更早",
-        "前往任务中心查看更多",
+        "\uff08\u5df2\u7f16\u8f91\uff09",
+        "(\u5df2\u7f16\u8f91)",
+        "\u5c55\u5f00",
+        "\u6536\u8d77",
+        "\u56de\u590d\u8bdd\u9898",
+        "\u67e5\u770b\u66f4\u65e9",
+        "\u524d\u5f80\u4efb\u52a1\u4e2d\u5fc3\u67e5\u770b\u66f4\u591a",
     }
 )
-# Prefix-matched chrome (counters like "2 条回复" / "查看更早 1 条话题回复").
-_BODY_CHROME_RE = re.compile(r"^(?:\d+\s*条回复|查看更早.*回复|回复\s)")
+
+_BODY_CHROME_RE = re.compile(
+    r"^(?:\d+\s*\u6761\u56de\u590d|\u67e5\u770b\u66f4\u65e9.*\u56de\u590d|\u56de\u590d\s)"
+)
 
 
 def _node_texts(node: ax.Node) -> list[str]:
@@ -200,7 +210,7 @@ def _split_header(texts: list[str]) -> tuple[str | None, str | None, list[str]]:
 
 def _parse_feed(root: ax.Node) -> list[Message]:
     """Parse a feed-list-state container into one Message per card."""
-    # Drop the left filter tabs (消息 / 未读 / 单聊 …) before scanning cards.
+
     pruned = ax.prune_subtrees(root, lambda n: ax.has_class(n, _CLS_FEED_FILTER))
     cards = ax.find_all(pruned, dom_class=_CLS_FEED_CARD)
 
@@ -260,13 +270,6 @@ def _is_body_chrome(text: str) -> bool:
 
 
 def _thread_sender(item: ax.Node, direction: Direction) -> str | None:
-    """Best-effort sender for one open-thread bubble.
-
-    - Outgoing (``message-self``): attribute to ``我`` (Feishu shows no name).
-    - Incoming with a ``message-info-name`` label: use that name.
-    - Continuation rows (no name label) / unknown direction: ``None`` — we do
-      not guess (the name lives only on the leading bubble of a run).
-    """
     if direction == "outgoing":
         return _SELF_SENDER
     for name_node in ax.find_all(item, dom_class=_CLS_MESSAGE_INFO_NAME):
@@ -311,18 +314,6 @@ def _item_has_image(item: ax.Node) -> bool:
 
 
 def _parse_open_thread(root: ax.Node) -> list[Message]:
-    """Parse the open conversation (main pane) into one Message per bubble.
-
-    Direction is read from the bubble's semantic class (reliable). The body is
-    scoped to ``message-content``; the sender is the ``message-info-name`` label
-    for incoming bubbles and ``我`` for outgoing ones (best-effort — continuation
-    rows have no name and stay ``None``).
-
-    A pure-image bubble exposes no text under ``message-content``; rather than
-    drop it (a sent screenshot/poster would vanish), we emit an ``[图片]``
-    placeholder so the model still sees an image was sent. Bubbles that are
-    genuinely empty (no text, no image — e.g. some task cards) are skipped.
-    """
     items = ax.find_all(root, dom_class=_CLS_MESSAGE_ITEM)
     messages: list[Message] = []
     for item in items:
@@ -391,7 +382,7 @@ class FeishuParser(Parser):
             return None
 
         # Prefer the open conversation's own name (chatWindow_chatName) over the
-        # generic window title ("飞书") so the model sees which conversation
+
         # is open; fall back to the window title when no conversation is open.
         title = _thread_title(root) or (window_title or None)
 

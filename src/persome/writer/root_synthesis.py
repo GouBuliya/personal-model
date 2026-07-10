@@ -1,17 +1,4 @@
-"""root_synthesis — the level-3 apex 合成（2026-07-04 spec: Memory Root Apex）。
-
-夜间（schema-tick 尾，face mining + cross-domain sweep 之后吃最新体）一趟有界 LLM：读
-**活跃体（level-2）+ top-k 面（level-1）+ 耐久 profile 事实**，写出整张记忆图**唯一的、
-≤1500-token 的 apex 叙事**——「这个人是谁·最要紧的是什么·当前在推进的大事」——句中挂
-⟨体⟩ 把手供下钻。三道确定性闸后 `upsert_root` born-active（chain-supersede 旧 root）：
-
-  1. **非空输入**：无体且无 profile → 不合成（无从压缩），保留旧 root。
-  2. **token 封顶**：`_fit_budget` 句界硬截断到 ≤budget（确定性，无二次 LLM）。
-  3. **提及子集反幻觉**：root 点名的 roster 实体 ⊆ 输入点名的实体（凭空冒出的人名 → 拒，保留旧 root）。
-  4. **非空输出**：空/退化叙事 → 保留旧 root。
-
-默认 ON（产品方 2026-07-04）；fail-open——任何异常只 log，绝不抛给 tick。
-"""
+"Synthesis of the singleton Root from durable personal-model evidence."
 
 from __future__ import annotations
 
@@ -31,7 +18,7 @@ from ..writer import llm as llm_mod
 logger = get("persome.writer.root_synthesis")
 
 _PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "root_synthesis.md"
-_TOP_FACES = 12  # top-k 面 fed alongside the 体
+_TOP_FACES = 12
 _PROFILE_FILES = ("schema-user-profile.md", "user-profile.md", "user-preferences.md")
 
 
@@ -41,13 +28,10 @@ class RootResult:
     reason: str  # written | skip_empty_input | skip_empty_output | skip_hallucination | disabled | error
 
 
-# ── token budget（确定性代理 + 句界截断闸）───────────────────────────────────
-
-
 def estimate_tokens(text: str) -> int:
     """Deterministic token proxy: CJK ~1 tok/char, else ~1 tok/4 chars. Backstop for
     the budget gate — the prompt already targets the budget; this catches overflow."""
-    cjk = sum(1 for c in text if "一" <= c <= "鿿")
+    cjk = sum(1 for c in text if "\u4e00" <= c <= "\u9fff")
     other = len(text) - cjk
     return cjk + (other + 3) // 4
 
@@ -71,7 +55,7 @@ def fit_budget(text: str, budget: int) -> str:
         else:
             hi = mid - 1
     cut = text[:best]
-    idx = max((cut.rfind(c) for c in "。！？!?\n"), default=-1)
+    idx = max((cut.rfind(c) for c in "\u3002\uff01\uff1f!?\n"), default=-1)
     if idx > len(cut) * 0.5:  # prefer a clean sentence stop if it doesn't lose too much
         cut = cut[: idx + 1]
     return cut.rstrip() + _TRUNCATE_RECEIPT
@@ -129,7 +113,7 @@ def _profile_facts(cfg: Any) -> list[str]:
             out.append(d)
     for name in sorted(n for n in names if n.startswith("project-")):
         if d := _desc(name):
-            out.append(f"项目 {name[8:-3]}：{d}")
+            out.append(f"Project {name[8:-3]}: {d}")
     return out[:8]
 
 
@@ -153,19 +137,22 @@ def _build_user_prompt(
     parts: list[str] = []
     if bodies:
         parts.append(
-            "## 活跃体（level-2，跨域涌现的高层规律 — apex 的主料）\n"
+            "## Active Volumes (level 2 cross-domain patterns)\n"
             + "\n".join(f"- ⟨{b['signature']}⟩" for b in bodies)
         )
     if faces:
         parts.append(
-            "## 活跃面（level-1，稳定行为规律 top-k）\n"
+            "## Active Faces (top level-1 stable behavior patterns)\n"
             + "\n".join(f"- {f['signature']}" for f in faces)
         )
     if profile:
-        parts.append("## 耐久 profile（身份/偏好/项目）\n" + "\n".join(f"- {p}" for p in profile))
+        parts.append(
+            "## Durable profile (identity, preferences, projects)\n"
+            + "\n".join(f"- {p}" for p in profile)
+        )
     parts.append(
-        "请据以上材料，按系统提示写出这个人的**单一 apex 速写**（≤预算 token），"
-        "句中对可下钻的体用 ⟨体签名⟩ 挂把手，输出 JSON。"
+        "Using only the material above, write the person's single apex portrait within "
+        "the token budget. Attach supplied Volume signatures for drill-down and return JSON."
     )
     return "\n\n".join(parts)
 
@@ -228,21 +215,20 @@ def synthesize_root(
 
         apex = fit_budget(apex, budget)  # gate 2: token cap (deterministic)
         root_entities = set(identity.scan_mentions(apex, roster))
-        if not root_entities.issubset(input_entities):  # gate 3: 提及子集反幻觉
+        if not root_entities.issubset(input_entities):
             logger.warning(
                 "root_synthesis: hallucinated entities %s not in input — keeping prior root",
                 sorted(root_entities - input_entities),
             )
             return RootResult(None, "skip_hallucination")
 
-        # anchors = the entities the apex names (progressive-disclosure handles) ∪ the 体 fused
         anchors = sorted(root_entities)
         members = [b["face_id"] for b in bodies]
         face_id = schema_faces.upsert_root(
             conn, signature=apex, members=members, anchors=anchors, confidence=1.0
         )
         logger.info(
-            "root_synthesis: wrote root %s (%d tok, %d 体, %d anchors)",
+            "root_synthesis: wrote root %s (%d tok, %d volumes, %d anchors)",
             face_id,
             estimate_tokens(apex),
             len(members),

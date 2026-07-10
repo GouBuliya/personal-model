@@ -230,12 +230,16 @@ def test_fold_preserves_thinking_blocks_in_order() -> None:
     text / tool_use, and must surface in the folded blocks list so clients
     can render the model's reasoning inline with its tool calls."""
     raw = [
-        {"role": "user", "content": "用工具回答这个"},
+        {"role": "user", "content": "\u7528\u5de5\u5177\u56de\u7b54\u8fd9\u4e2a"},
         {
             "role": "assistant",
             "content": [
-                {"type": "thinking", "thinking": "让我先想想要查什么", "signature": "sig-xyz"},
-                {"type": "text", "text": "好的，我来查一下"},
+                {
+                    "type": "thinking",
+                    "thinking": "\u8ba9\u6211\u5148\u60f3\u60f3\u8981\u67e5\u4ec0\u4e48",
+                    "signature": "sig-xyz",
+                },
+                {"type": "text", "text": "\u597d\u7684\uff0c\u6211\u6765\u67e5\u4e00\u4e0b"},
                 {"type": "tool_use", "id": "t1", "name": "search", "input": {"q": "x"}},
             ],
         },
@@ -246,8 +250,11 @@ def test_fold_preserves_thinking_blocks_in_order() -> None:
         {
             "role": "assistant",
             "content": [
-                {"type": "thinking", "thinking": "看起来不够，再来一下"},
-                {"type": "text", "text": "最终答复"},
+                {
+                    "type": "thinking",
+                    "thinking": "\u770b\u8d77\u6765\u4e0d\u591f\uff0c\u518d\u6765\u4e00\u4e0b",
+                },
+                {"type": "text", "text": "\u6700\u7ec8\u7b54\u590d"},
             ],
         },
     ]
@@ -263,17 +270,20 @@ def test_fold_preserves_thinking_blocks_in_order() -> None:
         "thinking",
         "text",
     ]
-    # signature 等服务端字段不进 wire payload
+
     assert assistant["blocks"][0] == {
         "type": "thinking",
-        "thinking": "让我先想想要查什么",
+        "thinking": "\u8ba9\u6211\u5148\u60f3\u60f3\u8981\u67e5\u4ec0\u4e48",
     }
     assert assistant["blocks"][4] == {
         "type": "thinking",
-        "thinking": "看起来不够，再来一下",
+        "thinking": "\u770b\u8d77\u6765\u4e0d\u591f\uff0c\u518d\u6765\u4e00\u4e0b",
     }
-    # content fallback 仍然只拼 text，不混入 thinking
-    assert assistant["content"] == "好的，我来查一下最终答复"
+
+    assert (
+        assistant["content"]
+        == "\u597d\u7684\uff0c\u6211\u6765\u67e5\u4e00\u4e0b\u6700\u7ec8\u7b54\u590d"
+    )
 
 
 def test_fold_drops_empty_thinking_blocks() -> None:

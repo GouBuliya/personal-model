@@ -101,7 +101,7 @@ class CmuxClient:
         self._next_id = 0
 
     def __enter__(self) -> CmuxClient:
-        # connect() can raise (cmux 崩溃 / socket 残留但不再 accept). __exit__ only
+
         # runs after __enter__ *returns*, so a raising connect would leave the
         # socket fd to be reclaimed non-deterministically by GC (#570). Close it
         # explicitly on failure before re-raising.

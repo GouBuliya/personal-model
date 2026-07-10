@@ -1,24 +1,4 @@
-"""DAO for ``parser_ticks`` — per-window telemetry of the per-app message parsers.
-
-Every time the timeline aggregator builds a block, it inspects the window's
-captures for a registered per-app parser (``FeishuParser`` and friends) and
-records exactly one row here describing the outcome:
-
-- ``hit``      — a parseable capture's app had a parser and ``render()`` was non-empty.
-- ``miss``     — the app had a parser but it declined (``parse`` → ``None``),
-                 rendered empty, or raised.
-- ``fallback`` — no capture in the window belonged to an app with a registered
-                 parser (modeling falls back to the raw ``focus_excerpt``).
-
-This is the **general observability layer**: it answers "are the parsers
-actually firing, and for which apps?" bucketed by ``bundle_id``. A drift in the
-hit rate for a given bundle (e.g. 飞书 ships a UI revision that breaks the
-semantic classes ``FeishuParser`` keys on) shows up here as ``hit`` decaying
-into ``miss`` early, before modeled memory loses that signal.
-
-Canonical parser output still lives on the timeline block's
-``focus_structured`` column; this table is telemetry only.
-"""
+"Parser telemetry persistence and aggregation."
 
 from __future__ import annotations
 

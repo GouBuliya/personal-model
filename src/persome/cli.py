@@ -509,7 +509,7 @@ def _format_ping(res) -> str:  # type: ignore[no-untyped-def]
 def mcp() -> None:
     """Run the MCP server (stdio). For LLM client config."""
     _init()
-    # #557 design principle — MCP-side callers get the 满血版 memory: source the
+
     # env file (OPENAI_* embeddings creds live there) exactly like `persome start`,
     # else the stdio server's read path can never activate hybrid dense and an
     # LLM client silently gets a weaker memory than the in-daemon server.
@@ -624,7 +624,7 @@ def root_report(
         text = root["signature"] or ""
         typer.echo(
             f"root: {root['face_id']}  status={root['status']}  provenance={root['provenance']}  "
-            f"~{estimate_tokens(text)} tok  体={len(_json.loads(root['members'] or '[]'))}  "
+            f"~{estimate_tokens(text)} tok  volumes={len(_json.loads(root['members'] or '[]'))}  "
             f"anchors={len(_json.loads(root['anchors'] or '[]'))}  obs={root['observations']}"
         )
         typer.echo("  ── apex ──")
@@ -669,17 +669,13 @@ def root_synth(
 @app.command("correct")
 def correct_cmd(
     correction: str = typer.Argument(
-        ..., help="自然语言修正，如 '桃子不是我的名字，是 Dev 群同事'。"
+        ..., help="Natural-language correction, for example: 'Peach is my teammate, not me.'"
     ),
     dry_run: bool = typer.Option(
-        False, "--dry-run", help="只算不改（预览要 supersede/retype 什么）。"
+        False, "--dry-run", help="Preview supersede and retype operations without writing."
     ),
 ) -> None:
-    """定向记忆更新（Memory Correction，2026-07-04 spec）：一句自然语言 → 追溯源事实 → supersede/retype。
-
-    把记忆当权重管：修正不是改文件，是一次**有监督更新**（用户陈述=真值标注），走 choke-point
-    退役/替换（收据留、可回看），下游 root/schema 自动重 derive。--dry-run 只预览。
-    """
+    """Apply a supervised memory correction and retain its source receipts."""
     from .config import load as load_cfg
     from .store import fts
     from .writer import correct as correct_mod
@@ -698,7 +694,7 @@ def correct_cmd(
 
 @app.command("as-of")
 def as_of_cmd(
-    file: str = typer.Option("", "--file", help="Identity file_name (e.g. person-张伟.md)."),
+    file: str = typer.Option("", "--file", help="Identity file name, for example person-alex.md."),
     node: str = typer.Option("", "--node", help="A node_id anywhere on a supersede chain."),
     t: str = typer.Option(..., "--t", help="ISO timestamp T to resolve at (e.g. 2026-03-01)."),
     user_id: str = typer.Option("default", help="evomem user scope."),
@@ -747,9 +743,9 @@ def faces_report(
     """Inspect the schema_faces unified schema object (Memory-rebuild Phase 2).
 
     Read-only consumer of the ``schema_faces`` table (§4.5): every live face's
-    provenance (mined | emergent | both), status (shadow → active = 转正),
+    provenance (mined | emergent | both), status (shadow to active promotion),
     footprint stability across re-mines (the resampling gate's input), and the
-    current residency block (§3.1 常驻投影 preview). Zero-LLM.
+    current resident projection preview. Zero-LLM.
     """
     import json as _json
     import sqlite3 as _sqlite3
@@ -801,7 +797,7 @@ def contradictions_cmd(
     Read-only view of ``memory_contradictions``: pairs the nightly self-check
     flagged as mutually exclusive, waiting for a HUMAN verdict
     (``contradictions-resolve``). The flagged entries carry
-    ``⚠(冲突未裁决)`` in recall until adjudicated. Zero-LLM.
+    an unresolved-conflict warning in recall until adjudicated. Zero-LLM.
     """
     import json as _json
     from pathlib import Path
@@ -864,7 +860,7 @@ def contradictions_resolve(
             keep_id=keep or None,
         )
         check_mod.clear_conflicted(conn, row["a_id"], row["b_id"])
-        # §4.6-2 结束判定器·人裁联动: the loser entry's evidenced relations end
+
         # with it — close open edges whose quote came from the losing text.
         closed_edges: list[str] = []
         if keep:
@@ -876,25 +872,20 @@ def contradictions_resolve(
             ).fetchone()
             if loser is not None:
                 closed_edges = edges_store.close_edges_quoted_in(conn, loser["content"] or "")
-    tail = f"; {len(closed_edges)} 条边随败方收口 valid_to" if keep and closed_edges else ""
+    tail = f"; closed {len(closed_edges)} losing-source edge(s)" if keep and closed_edges else ""
     typer.echo(f"{pair_key}: {'resolved, kept ' + keep if keep else 'dismissed'}; ⚠ cleared{tail}")
 
 
 @app.command("edge-audit")
 def edge_audit(
-    n: int = typer.Option(20, help="抽样条数（shadow 边，按 observations 分层——低证据边超配）。"),
-    seed: int = typer.Option(0, help="随机种子（0=不固定；非 0 可复跑同一样本）。"),
+    n: int = typer.Option(20, help="Number of shadow edges to sample, stratified by evidence."),
+    seed: int = typer.Option(0, help="Random seed; zero selects a fresh sample."),
     llm: bool = typer.Option(
-        False, "--llm", help="附加语义档：LLM 判证据文本是否蕴含关系（贵，默认关）。"
+        False, "--llm", help="Also ask an LLM whether the evidence entails each relation."
     ),
-    json_out: str = typer.Option("edge_audit_report.json", help="报告 JSON 输出路径。"),
+    json_out: str = typer.Option("edge_audit_report.json", help="JSON report output path."),
 ) -> None:
-    """边幻觉率抽样审计（§7-7 表第 5 行 oracle / §7-4 的承诺）。
-
-    确定性档（恒开，零 LLM）判结构幻觉：端点悬空 / §4.2 矩阵违例 / kind 漂移 /
-    源事件缺失 / 证据摘录回溯失败（合成 quote 按其构造规则复算，不算幻觉）。
-    --llm 追加语义档：证据文本是否真的蕴含该关系。
-    """
+    """Sample relation edges for structural and optional semantic hallucinations."""
     import json as _json
     from pathlib import Path as _Path
 
@@ -919,7 +910,7 @@ def edge_audit(
     typer.echo(
         f"sampled {report['sample_size']} shadow edges → "
         f"{report['hallucination_count']} hallucinated (rate {rate:.1%})"
-        f"{'（含语义档）' if report['semantic_tier'] else '（仅结构档）'}"
+        f"{' (with semantic review)' if report['semantic_tier'] else ' (structural only)'}"
     )
     for pred, b in sorted(report["by_predicate"].items()):
         typer.echo(f"  {pred}: {b['hallucinated']}/{b['sampled']}")
@@ -931,23 +922,18 @@ def edge_audit(
 
 @app.command("entity-retype")
 def entity_retype(
-    name: str = typer.Argument(..., help="实体显示名（person-<name>.md 的 stem，精确匹配）。"),
+    name: str = typer.Argument(..., help="Exact entity display name from person-<name>.md."),
     kind: str = typer.Option(
-        "", help="改型：org|project|artifact（是点但 kind 不对——文件前缀重写）。"
+        "", help="Retype as org, project, or artifact when the entity kind is wrong."
     ),
     to_shadow: bool = typer.Option(
-        False, "--to-shadow", help="降影：不是点（类/角色/泛称=轴上的值）或未消解角色。收据保留。"
+        False, "--to-shadow", help="Shadow a generic class, role, or unresolved identity."
     ),
     alias_of: str = typer.Option(
-        "", "--alias-of", help="别名合并：是点但不是新点——并入该规范名，重复线降影。"
+        "", "--alias-of", help="Merge this alias into the supplied canonical entity name."
     ),
 ) -> None:
-    """人裁执行动词（spec §1.2 维度判据）：对一个已铸实体执行裁定。
-
-    三个动作互斥，各对应判据的一个格子：kind 改型 / 降影（永不删，收据在）/
-    别名合并（走 person_graph 自己的 fold，单一写口）。派生层（relation_edges）
-    需随后重铸（DELETE + 重跑抽取——派生物从点的 raw 重建）。
-    """
+    """Apply one human-reviewed retype, shadow, or alias-merge operation."""
     from . import config as config_mod
     from . import paths as paths_mod
     from .evomem import retype as retype_mod
@@ -964,11 +950,14 @@ def entity_retype(
         )
     elif to_shadow:
         res = retype_mod.shadow_entity(name)
-        typer.echo(f"{res.old_file}: {res.shadowed} nodes → shadow（收据保留）")
+        typer.echo(f"{res.old_file}: {res.shadowed} nodes -> shadow (receipts retained)")
     else:
         cfg = config_mod.load(paths_mod.config_file())
         res = retype_mod.merge_alias(name, alias_of, cfg)
-        typer.echo(f"{name} 并入 {alias_of} 为别名；{res.old_file} {res.shadowed} nodes → shadow")
+        typer.echo(
+            f"merged {name} into {alias_of} as an alias; "
+            f"{res.old_file} {res.shadowed} nodes -> shadow"
+        )
 
 
 @app.command("decay-report")
@@ -1023,7 +1012,7 @@ def decay_report(
         tier = "L2" if "decayed:2" in tags else "L1"
         sources = next((t for t in tags if t.startswith("abstracted-from:")), ":").split(":", 1)[1]
         n_src = len([s for s in sources.split(",") if s])
-        typer.echo(f"  [{tier}] {row['path']}  ←{n_src} 源  {row['content'][:60]}")
+        typer.echo(f"  [{tier}] {row['path']}  <-{n_src} sources  {row['content'][:60]}")
     if candidates:
         typer.echo(f"tonight's candidates: {len(cands)} cluster(s)")
         for cl in cands:
@@ -1732,11 +1721,9 @@ def capture_once() -> None:
 def rebuild_index() -> None:
     """Rebuild the FTS retrieval projection from the current write authority's truth.
 
-    检索投影重建器（SSOT 切换 §2，PR-7 重定义）：write_authority="markdown"
-    （默认）→ 从 memory/*.md 全量重放（历史行为）；"evomem" → entries/
-    entry_metadata 从 evo_nodes 投影、event-* 等不在 evo_nodes 的文件仍从
-    markdown 直读（混合重建）。真相层损坏不走这里——见
-    `persome evomem-restore-from-markdown`（§3.4 灾难恢复）。
+    Markdown authority replays ``memory/*.md``. Evomem authority projects
+    canonical nodes while retaining direct Markdown event logs. Use
+    ``evomem-restore-from-markdown`` only for canonical-store disaster recovery.
     """
     _init()
     with fts.cursor() as conn:
@@ -1747,19 +1734,12 @@ def rebuild_index() -> None:
 
 @app.command("vector-backfill")
 def vector_backfill(
-    limit: int = typer.Option(0, "--limit", help="只回填前 N 条（0=全部）。"),
+    limit: int = typer.Option(0, "--limit", help="Backfill at most N entries; zero means all."),
     embed: bool = typer.Option(
-        False, "--embed", help="回填后立即抽干一轮 embed（默认只入队，等 daemon tick 抽）。"
+        False, "--embed", help="Run one embedding pass immediately after enqueueing."
     ),
 ) -> None:
-    """Backfill: enqueue every LIVE entry lacking a dense vector (production hybrid retrieval).
-
-    密集检索向量回填（生产混合检索 Phase 1）：把所有还没有 te3-large 向量的活跃
-    entry 入 `vector_queue`，daemon 的 `vector-embed-tick` 会分批抽干（经 relay 调
-    te3-large，fail-open）。回填本身不管 `[search] hybrid_enabled` 开关——显式回填
-    就是 operator 主动 opt-in。`--embed` 会在本进程内立即抽一轮（需 `[search]
-    hybrid_enabled=true` + relay 凭据）。
-    """
+    """Enqueue every live entry that lacks a dense retrieval vector."""
     cfg = _init()
     from . import vectors_tick
 
@@ -1778,19 +1758,10 @@ def vector_backfill(
 @app.command("evomem-restore-from-markdown")
 def evomem_restore_from_markdown(
     dry_run: bool = typer.Option(
-        False, "--dry-run", help="只解析与映射并统计，不打快照、不写库、不跑自检。"
+        False, "--dry-run", help="Parse, map, and report without snapshotting or writing."
     ),
 ) -> None:
-    """灾难恢复：从 markdown 投影逆向重建 evo_nodes（SSOT 切换 §3.4，**有损近似**）。
-
-    最后防线（快照 backup/evo-*.db 也没了之后）：解析投影 markdown → 按投影
-    colon-tag 还原 layer/status/scope/temporal → 重建双向指针 → 单事务整库替换
-    evo_nodes → 重放检索投影 → §3.3 全套自检。四条有损限制（分钟粒度时间 /
-    投影滞后窗口内的写永久丢失 / 仅还原已编码字段 / 灾难近似非日常自愈）见
-    `evomem/restore.py:import_from_markdown` docstring——日常投影自愈请用
-    `rebuild-index` / `evomem-project-markdown`。执行前强制验证式快照（§3.2），
-    留住恢复前最后状态供取证。
-    """
+    """Lossily reconstruct canonical evomem nodes from Markdown projections."""
     _init()
     from .evomem import restore as restore_mod
 
@@ -1813,8 +1784,8 @@ def evomem_restore_from_markdown(
     if report.ok:
         console.print("[green]§3.3 self-check passed after restore.[/green]")
         console.print(
-            "[yellow]注意：本恢复是有损近似（§3.4）——分钟级时间精度 + 投影滞后"
-            "窗口内的写已永久丢失。[/yellow]"
+            "[yellow]Warning: this recovery is approximate. Timestamps have minute-level "
+            "precision, and writes inside a projection-lag window cannot be recovered.[/yellow]"
         )
         return
     for v in report.violations:
@@ -1827,14 +1798,10 @@ def evomem_backfill(
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
-        help="只解析与映射并打印统计 + 链头对账，不打快照、不写库、不跑完整自检。",
+        help="Parse, map, and compare chain heads without snapshotting or writing.",
     ),
 ) -> None:
-    """Backfill evo_nodes from markdown + 旁挂表（SSOT 切换 §4.1；PR-7 后定型）。
-
-    幂等可重跑（INSERT OR REPLACE）。写库前强制变更前快照（§3.2），收尾跑
-    evomem/integrity.py 全套自检 + 链头集合全等断言，任一失败退出非零并报告 diff。
-    """
+    """Idempotently backfill canonical evomem nodes from Markdown and side tables."""
     _init()
     from .evomem import backfill as backfill_mod
 
@@ -1855,9 +1822,8 @@ def evomem_backfill(
         console.print("[green]Closing assertions passed: integrity + head-set equality.[/green]")
         if not dry_run:
             console.print(
-                "下一步（§4.2 双写影子期）：增量影子写（[evomem] shadow_write_enabled，默认开）"
-                "会在每次主写后维持 evo_nodes 新鲜；若影子落后"
-                "（integrity_alert: shadow_write_lag），重跑本命令即可补齐。"
+                "Incremental shadow writes now keep evo_nodes current after each primary "
+                "write. Rerun this command after a shadow_write_lag alert."
             )
         return
     for v in report.violations:
@@ -1879,33 +1845,27 @@ def evomem_project_markdown(
     out: str | None = typer.Option(
         None,
         "--out",
-        help="输出目录（默认 <root>/projection-md）。拒绝指向 live memory/。",
+        help="Output directory; defaults to <root>/projection-md and rejects live memory/.",
     ),
     file: str | None = typer.Option(
         None,
         "--file",
-        help="只投影单个 file_name（如 project-x.md）——增量触发的手动形态。",
+        help="Project only one file name, for example project-x.md.",
     ),
     live: bool = typer.Option(
         False,
         "--live",
-        help="全量投影进 live memory/（PR-6b）：投影滞后修复 / §6 回滚前置。"
-        "要求 write_authority=evomem；markdown 主写下回滚需再加 --force。",
+        help="Project all canonical files into live memory/. Requires evomem authority "
+        "unless --force is also supplied.",
     ),
     force: bool = typer.Option(
         False,
         "--force",
-        help="与 --live 连用：write_authority=markdown 时也允许覆盖 live memory/"
-        "（§6 回滚流程：翻回 flag 后先 --live --force 投影齐，再 rebuild-index）。",
+        help="With --live, allow overwrite while Markdown is authoritative. Use only "
+        "during an explicit authority rollback.",
     ),
 ) -> None:
-    """从 evo_nodes 确定性生成 markdown 人读投影（SSOT 切换 §1.5/§4.4）。
-
-    幂等可重跑（同一真相态 → 逐字节相同的产出）。默认写隔离目录
-    （<root>/projection-md）；``--live``（PR-6b）把每个非豁免文件按真相态
-    重投影进 live memory/ 并刷新 projection_state——服务投影滞后修复
-    （markdown_projection_lag 报警后补齐）与 §6 回滚前置。
-    """
+    """Deterministically generate readable Markdown from canonical evomem nodes."""
     _init()
     from .evomem import inversion as inversion_mod
     from .store import projector as projector_mod
@@ -1913,8 +1873,8 @@ def evomem_project_markdown(
     if live:
         if not inversion_mod.evomem_active() and not force:
             console.print(
-                "[red]write_authority=markdown（markdown 是 SSOT）——覆盖 live memory/"
-                " 仅在 §6 回滚流程中合法，确认后加 --force。[/red]"
+                "[red]write_authority=markdown; overwriting live memory/ is allowed only "
+                "during an explicit rollback. Add --force after confirming.[/red]"
             )
             raise typer.Exit(1)
         with fts.cursor() as conn:
@@ -1953,16 +1913,9 @@ def evomem_project_markdown(
 
 @app.command("evomem-import-markdown")
 def evomem_import_markdown(
-    file: str = typer.Argument(..., help="要回灌的投影文件名（如 project-x.md）"),
+    file: str = typer.Argument(..., help="Projected file to import, for example project-x.md."),
 ) -> None:
-    """把投影文件里的手改回灌成 engine 写（SSOT 切换 PR-6b，Q1 (b)）。
-
-    write_authority=evomem 下 markdown 是投影，手改会被下次投影覆盖；daemon 的
-    manual_edit_detected 报警指到这里。最小实现：纯新增条目（无链指针/出处 tag）
-    经共享映射 → engine 落 evo_nodes + FTS 派生行；带链语义的新增、对既有条目
-    的改动/删除等复杂 diff 列入 conflicts 报告人裁决（文件不被覆盖、警报持续）。
-    全部干净回灌时按 canonical 形态重投影并刷新 projection_state。
-    """
+    """Import safe manual additions from a projected Markdown file."""
     _init()
     from .evomem import inversion as inversion_mod
 
@@ -1981,7 +1934,9 @@ def evomem_import_markdown(
     if report.reprojected:
         console.print(f"[green]Reprojected {report.file_name} to canonical form.[/green]")
     if report.conflicts:
-        console.print("[yellow]需人工裁决（文件未被覆盖，手改警报将持续）：[/yellow]")
+        console.print(
+            "[yellow]Manual review required; the file was preserved and the alert remains:[/yellow]"
+        )
         for c in report.conflicts:
             console.print(f"  ! {c}")
         raise typer.Exit(2)
@@ -2234,7 +2189,7 @@ def debug_chat_captures(
         ...,
         "--app",
         "-a",
-        help="App name to query (e.g. '飞书', 'WeChat'). Must match captured app_name exactly.",
+        help="App name to query (for example, 'Feishu' or 'WeChat'). Must match capture data.",
     ),
     start: str = typer.Option(
         ...,

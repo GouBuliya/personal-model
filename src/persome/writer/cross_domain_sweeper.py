@@ -1,34 +1,4 @@
-"""Cross-domain sweeper — collide "topic-far but behavior-near" schemas (Hy-Memory).
-
-The D2 schema miner (:mod:`writer.schema_miner_stage`) clusters facts **per file**,
-so it can never see a regularity that spans two topics — e.g. "在 A 项目里反复手动
-重试" and "在 B 工具里反复手动重试": same behavior, different topic. Hy-Memory's
-``cross_domain_sweeper`` finds these with two embeddings (``beh_sim>0.70 AND
-con_sim<0.60``). We do it **without embeddings** (markdown-SSOT, local-first, and
-the Anthropic transport has no embedding endpoint):
-
-- **behavior dimension = deterministic structured signature.** A schema's source
-  facts that carry an ``occurred_at`` (the meta-cognition layer from batch 1) are
-  traced back to the ``timeline_blocks`` around that real event time, and reduced
-  to a signature: app set + action-type distribution + hour histogram. Distance is
-  Jaccard + total-variation, no embedding. This is a **cheap pre-filter**, not the
-  verdict — when a schema has no ``occurred_at``-grounded facts the signature is
-  empty and the pair is *passed through* to the LLM (never falsely filtered: a
-  write-time ``timestamp`` is offset from the activity, so we refuse to filter on
-  it — "错了也不疼").
-- **topic dimension = LLM judge.** Only pairs that survive the behavior pre-filter
-  (behavior-near + source-distinct) are sent to the LLM, which decides whether the
-  two schemas share a higher-level pattern and, if so, fuses them.
-
-The fused schema lands as ``schema-xdomain-<a>__<b>.md`` — the same ``schema-``
-prefix read by :func:`persome.model.schema_reader.active_schema_inferences`
-(stable tag + confidence ranking, like any other schema face).
-
-Gated off by default (``[schema] cross_domain_enabled``): unlike the batch-1
-confidence flag (safe-by-construction), the sweeper actively *writes* new schema
-files, so it ships behind a flag until its output quality is validated. Runs as
-the tail of the ``schema-tick`` daemon task — no new task.
-"""
+"Cross-domain synthesis of stable predictive schemas."
 
 from __future__ import annotations
 
@@ -329,7 +299,7 @@ class _Collision:
 
 def _sig_summary(sig: BehaviorSignature) -> str:
     if not sig.grounded:
-        return "（无行为采样）"
+        return "(no behavior samples)"
     apps = ", ".join(sorted(sig.apps)[:6]) or "—"
     acts = ", ".join(f"{k}:{v:.2f}" for k, v in sorted(sig.action_dist.items())) or "—"
     return f"apps=[{apps}]; actions=[{acts}]; blocks={sig.sample_count}"
@@ -346,15 +316,15 @@ def _probe_collision(
     """Ask the LLM whether two topic-distinct, behavior-near schemas collide."""
     prompt = _load_prompt()
     user = (
-        f"## Schema A（topic: {a.source_path}）\n"
+        f"## Schema A (topic: {a.source_path})\n"
         f"central: {a.central}\n"
         f"inferences:\n" + "\n".join(f"- {x}" for x in a.inferences) + "\n"
         f"behavior: {_sig_summary(sig_a)}\n\n"
-        f"## Schema B（topic: {b.source_path}）\n"
+        f"## Schema B (topic: {b.source_path})\n"
         f"central: {b.central}\n"
         f"inferences:\n" + "\n".join(f"- {x}" for x in b.inferences) + "\n"
         f"behavior: {_sig_summary(sig_b)}\n\n"
-        "请判断这两个 schema 是否共享一个更高层的心智模式，并按系统提示输出 JSON。"
+        "Decide whether these schemas share one higher-level mental pattern and return JSON."
     )
     messages = [
         {"role": "system", "content": prompt},
@@ -403,9 +373,6 @@ def _build_llm_call(cfg: Config) -> Callable[[list[dict]], Any]:
     return _call
 
 
-# ── persistence (fused schema → schema-xdomain-*.md, reuses schema消费链) ──────
-
-
 def _xdomain_name(a: _StableSchema, b: _StableSchema) -> str:
     """Stable, order-independent fused schema filename so a re-sweep is idempotent."""
     sa = a.name.removeprefix("schema-").removesuffix(".md")
@@ -423,14 +390,6 @@ def _persist_cross_schema(
     *,
     stable_threshold: float,
 ) -> stage.WrittenSchema | None:
-    """Land a fused cross-domain schema, idempotent per unordered (a, b) pair.
-
-    写权反转（PR-6b，SSOT 切换设计 §1.3/§5）：``write_authority="evomem"`` 时本
-    站点的写（create / append / 确定性原地 supersede）经 ``store/entries.py`` 的
-    choke-point dispatch 走 evomem engine 落 evo_nodes（L6_SCHEMA）；碰撞判定仍由
-    本站点的 LLM judge 完成，落库 op 是确定性的。逐站输出等价由
-    ``tests/test_evomem/test_inversion_stations.py`` 钉死。
-    """
     central = collision.central_proposition.strip()
     if not central:
         return None
@@ -485,7 +444,7 @@ def _persist_cross_schema(
         " (updated)" if updated_in_place else "",
     )
     # §4.5 unified schema object, emergent route (footprint first): the fused
-    # cross-domain regularity is a level-2 体 whose members are the two parent
+
     # faces; and the collision itself is an independent behavioral signal on
     # EACH parent — a signal-only contribution (empty members, so the parents'
     # mined footprint history stays untouched) that can escalate the parent's

@@ -57,7 +57,6 @@ def _make_tool_call_response(calls: list[dict]) -> Any:
 
 
 def test_safe_tools_run_concurrently(monkeypatch):
-    """两个 drill 工具并发时，两个 start 事件均早于第一个 end 事件出现。"""
     call_count = [0]
     stop_response = llm_mod._build_response("")  # no tool calls → loop ends
 
@@ -103,7 +102,6 @@ def test_safe_tools_run_concurrently(monkeypatch):
         parallel_dispatch_fn=_parallel_dispatch,
     )
 
-    # 并发时两个 start 都先于第一个 end 出现
     assert len(execution_order) == 4
     first_end_idx = next(i for i, e in enumerate(execution_order) if e.startswith("end:"))
     starts_before_first_end = sum(
@@ -120,7 +118,6 @@ def test_safe_tools_run_concurrently(monkeypatch):
 
 
 def test_unsafe_tools_run_serially(monkeypatch):
-    """append/commit 不在 CONCURRENCY_SAFE_TOOLS 中，应串行执行。"""
     assert "append" not in CONCURRENCY_SAFE_TOOLS
     assert "commit" not in CONCURRENCY_SAFE_TOOLS
 
@@ -179,7 +176,6 @@ def test_unsafe_tools_run_serially(monkeypatch):
 
 
 def test_results_in_correct_order(monkeypatch):
-    """并发执行后 tool responses 顺序与 tool_calls 顺序一致（按 call id 对应）。"""
     call_count = [0]
     stop_response = llm_mod._build_response("")
 

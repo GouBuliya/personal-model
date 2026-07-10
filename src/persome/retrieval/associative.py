@@ -17,15 +17,15 @@ Slot ↔ head ↔ cost (§3.3):
   pool matches entry CONTENT mentions — the reducer preserves ``[App]``
   markers verbatim, so scene lives in the text today. A dedicated scene
   column/index is the later optimization, not a prerequisite.
-- **When (since/until)** — a small CLOSED set of deterministic temporal
-  expressions (absolute M月D日 / YYYY-MM-DD, and 今天/昨天/前天 relatives
+- **When (since/until)** — a small closed set of deterministic temporal
+  expressions (localized month/day forms, YYYY-MM-DD, and relative day words
   anchored at ``now``); free. Deliberately narrow: personal-memory queries
   mostly need day-window anchoring, and an unparsed expression simply leaves the
   slot empty (fail-open to the other heads), never guesses.
 - **What (text)** — carried verbatim; the lexical (BM25) and semantic (dense)
   heads read it downstream.
 
-The semantic slot's embedding cadence (§3.2 降频挂事件边界) is the CALLER's
+The semantic slot's embedding cadence is the caller's
 concern — this module never talks to the network.
 """
 
@@ -43,22 +43,22 @@ from ..logger import get
 # Builtin scene aliases: display/canonical scene -> the surface forms a query
 # may use. Extended at call time by the apps production has actually seen.
 SCENE_ALIASES: dict[str, tuple[str, ...]] = {
-    "Feishu": ("飞书", "feishu", "lark"),
-    "WeChat": ("微信", "wechat"),
-    "DingTalk": ("钉钉", "dingtalk"),
+    "Feishu": ("\u98de\u4e66", "feishu", "lark"),
+    "WeChat": ("\u5fae\u4fe1", "wechat"),
+    "DingTalk": ("\u9489\u9489", "dingtalk"),
     "Slack": ("slack",),
-    "Mail": ("邮件", "邮箱", "mail", "outlook", "gmail"),
+    "Mail": ("\u90ae\u4ef6", "\u90ae\u7bb1", "mail", "outlook", "gmail"),
     "Safari": ("safari",),
-    "Chrome": ("chrome", "浏览器"),
+    "Chrome": ("chrome", "\u6d4f\u89c8\u5668"),
     "Cursor": ("cursor",),
     "Xcode": ("xcode",),
-    "Terminal": ("终端", "terminal", "iterm"),
+    "Terminal": ("\u7ec8\u7aef", "terminal", "iterm"),
     "Notion": ("notion",),
-    "会议": ("会上", "会议里", "开会"),
+    "Meetings": ("\u4f1a\u4e0a", "\u4f1a\u8bae", "\u4f1a\u8bae\u91cc", "\u5f00\u4f1a"),
 }
 
-_ABS_DATE_RE = re.compile(r"(?:(\d{4})[-年/])?(\d{1,2})[-月/](\d{1,2})[日号]?")
-_RELATIVE_DAYS = {"今天": 0, "昨天": 1, "前天": 2}
+_ABS_DATE_RE = re.compile(r"(?:(\d{4})[-\u5e74/])?(\d{1,2})[-\u6708/](\d{1,2})[\u65e5\u53f7]?")
+_RELATIVE_DAYS = {"\u4eca\u5929": 0, "\u6628\u5929": 1, "\u524d\u5929": 2}
 
 
 @dataclass
@@ -75,7 +75,8 @@ class MultiSlotQ:
 def distill_time(text: str, *, now: datetime) -> tuple[str | None, str | None]:
     """Resolve ONE past-day window from the text, or (None, None).
 
-    Closed set (absolute date / 今天-昨天-前天), anchored at ``now``. An
+    The closed set covers absolute dates and localized relative-day terms,
+    anchored at ``now``. An
     absolute date without a year takes ``now``'s year, rolling back one year
     if that would land in the future (queries here ask about the past).
     """

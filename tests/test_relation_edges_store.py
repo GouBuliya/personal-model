@@ -59,8 +59,8 @@ def test_add_edge_defaults_shadow_open_and_returns_id(ac_root) -> None:
             dst_kind=edges.EntityKind.PROJECT,
             provenance="inferred",
             confidence=0.8,
-            label="负责",
-            quote="alice 负责 Persome 这个项目",
+            label="\u8d1f\u8d23",
+            quote="alice \u8d1f\u8d23 Persome \u8fd9\u4e2a\u9879\u76ee",
             valid_from=T_2026_01,
         )
         row = _row(conn, eid)
@@ -349,9 +349,6 @@ def test_ensure_schema_backfills_new_columns_on_old_db(ac_root) -> None:
         assert edges.reinforce_edge(conn, edge_id="e1", observations=2) is True
 
 
-# ── 边转正判据（memory-rebuild §7-3，与 RRF 池权重一起设计）───────────────────
-
-
 def _seed_knows(conn, n, *, src="self", obs=5):
     ids = []
     for i in range(n):
@@ -414,7 +411,7 @@ def test_promote_cap_is_per_source_identity(ac_root) -> None:
     with fts.cursor() as conn:
         edges.ensure_schema(conn)
         _seed_knows(conn, 2, src="self", obs=5)
-        _seed_knows(conn, 2, src="张伟", obs=5)
+        _seed_knows(conn, 2, src="\u5f20\u4f1f", obs=5)
         assert edges.promote_edges(conn, min_observations=3, max_per_identity=2) == 4
 
 
@@ -436,7 +433,7 @@ def test_kinds_and_polarity_persist(ac_root) -> None:
         eid = edges.add_edge(
             conn,
             src_identity="self",
-            dst_identity="张伟",
+            dst_identity="\u5f20\u4f1f",
             predicate="knows",
             src_kind="self",
             dst_kind="person",
@@ -454,7 +451,7 @@ def test_polarity_closed_set(ac_root) -> None:
         edges.add_edge(
             conn,
             src_identity="self",
-            dst_identity="张伟",
+            dst_identity="\u5f20\u4f1f",
             predicate="knows",
             src_kind="self",
             dst_kind="person",
@@ -535,10 +532,7 @@ def test_source_receipt_rejects_partial_contract(ac_root) -> None:
         )
 
 
-# ── §4.6-2 结束判定器·人裁联动: close_edges_quoted_in ──
-
-
-def _edge_with_quote(conn, quote, dst="张伟"):
+def _edge_with_quote(conn, quote, dst="\u5f20\u4f1f"):
     return edges.add_edge(
         conn,
         src_identity="self",
@@ -554,19 +548,27 @@ def _edge_with_quote(conn, quote, dst="张伟"):
 
 def test_close_edges_quoted_in_closes_matching_open_edges(ac_root) -> None:
     with fts.cursor() as conn:
-        hit = _edge_with_quote(conn, "张伟是项目负责人")
-        miss = _edge_with_quote(conn, "李四提交了评审", dst="李四")
-        closed = edges.close_edges_quoted_in(conn, "旧事实：张伟是项目负责人（已被裁掉）")
+        hit = _edge_with_quote(conn, "\u5f20\u4f1f\u662f\u9879\u76ee\u8d1f\u8d23\u4eba")
+        miss = _edge_with_quote(
+            conn, "\u674e\u56db\u63d0\u4ea4\u4e86\u8bc4\u5ba1", dst="\u674e\u56db"
+        )
+        closed = edges.close_edges_quoted_in(
+            conn,
+            "\u65e7\u4e8b\u5b9e\uff1a\u5f20\u4f1f\u662f\u9879\u76ee\u8d1f\u8d23\u4eba\uff08\u5df2\u88ab\u88c1\u6389\uff09",
+        )
         assert closed == [hit]
         rows = {r[0]: r[1] for r in conn.execute("SELECT edge_id, valid_to FROM relation_edges")}
         assert rows[hit] is not None and rows[miss] is None
         # idempotent: the already-closed edge no longer matches valid_to IS NULL
-        assert edges.close_edges_quoted_in(conn, "张伟是项目负责人") == []
+        assert (
+            edges.close_edges_quoted_in(conn, "\u5f20\u4f1f\u662f\u9879\u76ee\u8d1f\u8d23\u4eba")
+            == []
+        )
 
 
 def test_close_edges_quoted_in_empty_content_closes_nothing(ac_root) -> None:
     with fts.cursor() as conn:
-        _edge_with_quote(conn, "张伟是项目负责人")
+        _edge_with_quote(conn, "\u5f20\u4f1f\u662f\u9879\u76ee\u8d1f\u8d23\u4eba")
         assert edges.close_edges_quoted_in(conn, "   ") == []
         assert (
             conn.execute(
@@ -584,7 +586,7 @@ def test_add_edge_birth_stamps_last_observed_at(ac_root) -> None:
         eid = edges.add_edge(
             conn,
             src_identity="self",
-            dst_identity="张伟",
+            dst_identity="\u5f20\u4f1f",
             predicate="knows",
             src_kind="self",
             dst_kind="person",
@@ -604,7 +606,7 @@ def test_neighbors_include_shadow_walks_shadow_edges(ac_root) -> None:
         edges.add_edge(
             conn,
             src_identity="self",
-            dst_identity="张伟",
+            dst_identity="\u5f20\u4f1f",
             predicate="knows",
             src_kind="self",
             dst_kind="person",
@@ -614,7 +616,7 @@ def test_neighbors_include_shadow_walks_shadow_edges(ac_root) -> None:
         )
         edges.add_edge(
             conn,
-            src_identity="张伟",
+            src_identity="\u5f20\u4f1f",
             dst_identity="Bob",
             predicate="knows",
             src_kind="person",
@@ -622,5 +624,8 @@ def test_neighbors_include_shadow_walks_shadow_edges(ac_root) -> None:
             provenance="inferred",
             confidence=0.9,  # default status = shadow
         )
-        assert edges.neighbors(conn, ["self"], depth=2) == {"张伟"}
-        assert edges.neighbors(conn, ["self"], depth=2, include_shadow=True) == {"张伟", "Bob"}
+        assert edges.neighbors(conn, ["self"], depth=2) == {"\u5f20\u4f1f"}
+        assert edges.neighbors(conn, ["self"], depth=2, include_shadow=True) == {
+            "\u5f20\u4f1f",
+            "Bob",
+        }

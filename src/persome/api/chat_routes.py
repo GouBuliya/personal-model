@@ -342,7 +342,7 @@ router = APIRouter()
 
 @router.post("/chat/sessions", response_model=ApiResponse, tags=["chat"])
 def create_session() -> ApiResponse:
-    """创建一个新的聊天会话，返回会话 ID 和初始信息。"""
+    """Create a chat session and return its initial metadata."""
     session_id = str(uuid.uuid4())[:8]
     now = datetime.now().astimezone().isoformat()
     system_content = _load_system_prompt().format(current_time=now)
@@ -371,7 +371,7 @@ def create_session() -> ApiResponse:
 
 @router.get("/chat/sessions", response_model=ApiResponse, tags=["chat"])
 def list_sessions() -> ApiResponse:
-    """列出所有聊天会话，包括活跃会话和已持久化到磁盘的会话。"""
+    """List active and persisted chat sessions."""
     with _sessions_lock:
         active_ids = set(_sessions.keys())
 
@@ -417,9 +417,9 @@ def list_sessions() -> ApiResponse:
 
 @router.get("/chat/sessions/{session_id}", response_model=ApiResponse, tags=["chat"])
 def get_session(
-    session_id: Annotated[str, FastPath(description="会话 ID（8 位短 UUID）")],
+    session_id: Annotated[str, FastPath(description="Eight-character session UUID")],
 ) -> ApiResponse:
-    """获取指定会话的详情，包括消息历史。"""
+    """Return session metadata and message history."""
     with _sessions_lock:
         session = _sessions.get(session_id)
 
@@ -450,9 +450,9 @@ def get_session(
 
 @router.get("/chat/sessions/{session_id}/messages", response_model=ApiResponse, tags=["chat"])
 def get_session_messages(
-    session_id: Annotated[str, FastPath(description="会话 ID（8 位短 UUID）")],
+    session_id: Annotated[str, FastPath(description="Eight-character session UUID")],
 ) -> ApiResponse:
-    """获取指定会话的消息历史（不含 system 消息）。"""
+    """Return the session message history without the system message."""
     with _sessions_lock:
         session = _sessions.get(session_id)
 
@@ -485,28 +485,25 @@ def get_session_messages(
     responses={
         200: {
             "description": (
-                "Server-Sent Events 流。每帧为 ``data: <json>\\n\\n``，"
-                "其中 ``<json>`` 形如 ``SendMessageEvent`` 联合体。"
-                "流以 ``data: [DONE]\\n\\n`` 结束。"
+                "Server-Sent Events stream. Each frame is ``data: <json>\\n\\n``, "
+                "where ``<json>`` matches the ``SendMessageEvent`` union. "
+                "The stream ends with ``data: [DONE]\\n\\n``."
             ),
             "content": {"text/event-stream": {"schema": _SEND_MESSAGE_EVENT_SCHEMA}},
         }
     },
 )
 async def send_message(
-    session_id: Annotated[str, FastPath(description="会话 ID（8 位短 UUID）")],
+    session_id: Annotated[str, FastPath(description="Eight-character session UUID")],
     body: SendMessageRequest,
 ) -> EventSourceResponse:
-    """向指定会话发送一条消息，以 SSE 流式回放 assistant token、工具调用。
+    """Send a message and stream assistant tokens and tool events over SSE.
 
-    SSE 帧类型见 :data:`SendMessageEvent`：
-    - ``reply``      增量 token（``content`` 字段）
-    - ``tool_call``  工具调用开始（``name`` + ``arguments``）
-    - ``tool_result``工具调用结果（``name`` + ``content``）
-    - ``error``      本轮失败（``message`` 字段）
-    - ``done``       本轮正常结束
-
-    Session 持久化在 stream 结束时执行。客户端断开时会取消正在跑的 LLM 任务。
+    Event types are defined by :data:`SendMessageEvent`: ``reply`` carries
+    incremental text; ``tool_call`` and ``tool_result`` bracket a tool
+    invocation; ``error`` reports turn failure; and ``done`` completes the
+    turn. The session is persisted when the stream ends. Disconnecting the
+    client cancels the active LLM task.
     """
     cfg = _get_cfg()
     with _sessions_lock:
@@ -636,9 +633,9 @@ async def send_message(
 
 @router.delete("/chat/sessions/{session_id}", response_model=ApiResponse, tags=["chat"])
 def delete_session(
-    session_id: Annotated[str, FastPath(description="会话 ID（8 位短 UUID）")],
+    session_id: Annotated[str, FastPath(description="Eight-character session UUID")],
 ) -> ApiResponse:
-    """删除指定会话及其持久化文件。"""
+    """Delete a session and its persisted file."""
     with _sessions_lock:
         session = _sessions.pop(session_id, None)
 

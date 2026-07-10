@@ -63,7 +63,7 @@ def _common_patches(
 
 class TestOcrTrigger:
     def test_triggers_when_visible_text_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _common_patches(monkeypatch, "WeChat", "微信", "")
+        _common_patches(monkeypatch, "WeChat", "\u5fae\u4fe1", "")
         img = Image.new("RGB", (10, 10))
         monkeypatch.setattr(sched_mod.window_screenshot, "grab_focused_window", lambda: img)
         monkeypatch.setattr(
@@ -76,7 +76,12 @@ class TestOcrTrigger:
         assert out.get("_ocr_tier") == "tiny"
 
     def test_triggers_when_only_header_no_indent(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _common_patches(monkeypatch, "WeChat", "微信", "## WeChat [active]\n_com.test_\n### 微信")
+        _common_patches(
+            monkeypatch,
+            "WeChat",
+            "\u5fae\u4fe1",
+            "## WeChat [active]\n_com.test_\n### \u5fae\u4fe1",
+        )
         img = Image.new("RGB", (10, 10))
         monkeypatch.setattr(sched_mod.window_screenshot, "grab_focused_window", lambda: img)
         monkeypatch.setattr(
@@ -101,7 +106,7 @@ class TestOcrTrigger:
         assert "_ocr_pending_jpeg" not in out
 
     def test_no_trigger_when_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _common_patches(monkeypatch, "WeChat", "微信", "")
+        _common_patches(monkeypatch, "WeChat", "\u5fae\u4fe1", "")
         monkeypatch.setattr(sched_mod.window_screenshot, "grab_focused_window", lambda: None)
 
         out = sched_mod._build_capture(_make_cfg(enable_ocr_fallback=False), FakeProvider(), None)
@@ -109,7 +114,7 @@ class TestOcrTrigger:
         assert "_ocr_pending_jpeg" not in out
 
     def test_no_trigger_when_screenshot_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _common_patches(monkeypatch, "WeChat", "微信", "")
+        _common_patches(monkeypatch, "WeChat", "\u5fae\u4fe1", "")
         monkeypatch.setattr(sched_mod.window_screenshot, "grab_focused_window", lambda: None)
 
         out = sched_mod._build_capture(_make_cfg(), FakeProvider(), None)

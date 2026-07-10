@@ -43,6 +43,7 @@ jobs:
           uv run ruff format --check .
           uv run pytest -m "not macos and not integration" -q
           uv run python scripts/pii_scan.py
+          uv run python scripts/language_scan.py
 
       - name: Build sdist + wheel
         run: uv build

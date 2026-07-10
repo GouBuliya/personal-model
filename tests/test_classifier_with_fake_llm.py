@@ -62,8 +62,6 @@ def _response(tool_calls: list | None = None, text: str = ""):
 
 
 def _legacy_cfg(ac_root: Path):
-    """classifier legacy 路径 cfg：apply_enabled=True 下 classifier 已退役（守卫短路），
-    测其 append/entity-index 行为须显式关 apply_enabled。"""
     cfg = config_mod.load(ac_root / "config.toml")
     cfg.memory_delta.apply_enabled = False
     return cfg
@@ -96,9 +94,7 @@ def test_classifier_fixture_append_then_commit(ac_root: Path, fake_llm) -> None:
     )
 
     cfg = config_mod.load(ac_root / "config.toml")
-    cfg.memory_delta.apply_enabled = (
-        False  # 测 classifier legacy 路径；apply_enabled=True 下 classifier 退役
-    )
+    cfg.memory_delta.apply_enabled = False
     result = classifier_mod.classify_after_reduce(
         cfg,
         session_id="sess_fixture",
@@ -325,9 +321,7 @@ def test_classifier_abstracts_two_contradicting_entries(ac_root: Path, fake_llm)
     )
 
     cfg = config_mod.load(ac_root / "config.toml")
-    cfg.memory_delta.apply_enabled = (
-        False  # 测 classifier legacy 路径；apply_enabled=True 下 classifier 退役
-    )
+    cfg.memory_delta.apply_enabled = False
     result = classifier_mod.classify_after_reduce(
         cfg,
         session_id="sess_fixture",
@@ -395,9 +389,7 @@ def test_classifier_supersedes_when_newer_has_clear_advantage(ac_root: Path, fak
     )
 
     cfg = config_mod.load(ac_root / "config.toml")
-    cfg.memory_delta.apply_enabled = (
-        False  # 测 classifier legacy 路径；apply_enabled=True 下 classifier 退役
-    )
+    cfg.memory_delta.apply_enabled = False
     result = classifier_mod.classify_after_reduce(
         cfg,
         session_id="sess_fixture",
@@ -438,9 +430,7 @@ def test_classifier_fixture_forbidden_event_write(ac_root: Path, fake_llm) -> No
     )
 
     cfg = config_mod.load(ac_root / "config.toml")
-    cfg.memory_delta.apply_enabled = (
-        False  # 测 classifier legacy 路径；apply_enabled=True 下 classifier 退役
-    )
+    cfg.memory_delta.apply_enabled = False
     result = classifier_mod.classify_after_reduce(
         cfg,
         session_id="sess_forbid",

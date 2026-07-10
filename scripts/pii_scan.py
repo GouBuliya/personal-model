@@ -6,7 +6,7 @@ commit or release. It complements review; it is not proof of anonymization.
 
 Usage (from persome-core/):
     uv run python scripts/pii_scan.py                 # default: the whole tree
-    uv run python scripts/pii_scan.py path/to/fixtures --names 张三 李四
+    uv run python scripts/pii_scan.py path/to/fixtures --names Alex Taylor
 
 Exit 0 means no configured pattern matched. Extend the local name denylist when
 reviewing data outside the repository. The CJK name heuristic is advisory.
@@ -88,8 +88,8 @@ SYNTHETIC_ALLOW = {
     "13800138000",
     "git@github.com",  # SSH remote URL shape, not an email
 }
-# Common words that precede ':'/'说' but are NOT names — keep the heuristic quiet.
-_NAME_HEURISTIC = re.compile(r"([一-龥]{2,4})(?:[：:]\s|说[：:])")
+# Common localized words that precede a colon or a speech marker but are not names.
+_NAME_HEURISTIC = re.compile(r"([\u4e00-\u9fa5]{2,4})(?:[\uff1a:]\s|\u8bf4[\uff1a:])")
 _TEXT_SUFFIXES = {
     ".cff",
     ".css",
@@ -153,49 +153,49 @@ def scan(captures_dir: str, names: list[str]) -> dict[str, list[str]]:
 
 
 def heuristic_names(captures_dir: str) -> collections.Counter:
-    """CJK tokens before ':'/'说' that aren't obviously common words — review candidates."""
+    """Return CJK tokens in speaker-like positions that may be personal names."""
     allow = set(
         [
-            "同事",
-            "工作",
-            "项目",
-            "用户",
-            "消息",
-            "通知",
-            "会议",
-            "任务",
-            "文件",
-            "设置",
-            "系统",
-            "终端",
-            "提醒",
-            "内容",
-            "时间",
-            "群聊",
-            "评论",
-            "文档",
-            "桌面",
-            "邮件",
-            "报告",
-            "问题",
-            "助手",
-            "智能",
-            "模型",
-            "数据",
-            "服务",
-            "接口",
-            "记忆",
-            "意图",
-            "测试",
-            "方案",
-            "代码",
-            "分支",
-            "合并",
-            "提交",
-            "配置",
-            "架构",
-            "内存",
-            "缓存",
+            "\u540c\u4e8b",
+            "\u5de5\u4f5c",
+            "\u9879\u76ee",
+            "\u7528\u6237",
+            "\u6d88\u606f",
+            "\u901a\u77e5",
+            "\u4f1a\u8bae",
+            "\u4efb\u52a1",
+            "\u6587\u4ef6",
+            "\u8bbe\u7f6e",
+            "\u7cfb\u7edf",
+            "\u7ec8\u7aef",
+            "\u63d0\u9192",
+            "\u5185\u5bb9",
+            "\u65f6\u95f4",
+            "\u7fa4\u804a",
+            "\u8bc4\u8bba",
+            "\u6587\u6863",
+            "\u684c\u9762",
+            "\u90ae\u4ef6",
+            "\u62a5\u544a",
+            "\u95ee\u9898",
+            "\u52a9\u624b",
+            "\u667a\u80fd",
+            "\u6a21\u578b",
+            "\u6570\u636e",
+            "\u670d\u52a1",
+            "\u63a5\u53e3",
+            "\u8bb0\u5fc6",
+            "\u610f\u56fe",
+            "\u6d4b\u8bd5",
+            "\u65b9\u6848",
+            "\u4ee3\u7801",
+            "\u5206\u652f",
+            "\u5408\u5e76",
+            "\u63d0\u4ea4",
+            "\u914d\u7f6e",
+            "\u67b6\u6784",
+            "\u5185\u5b58",
+            "\u7f13\u5b58",
         ]
     )
     cand: collections.Counter = collections.Counter()
@@ -205,7 +205,7 @@ def heuristic_names(captures_dir: str) -> collections.Counter:
         except Exception:
             continue
         for m in _NAME_HEURISTIC.findall(vt):
-            if m not in allow and not m.startswith("同事"):
+            if m not in allow and not m.startswith("\u540c\u4e8b"):
                 cand[m] += 1
     return cand
 
@@ -228,7 +228,7 @@ def main() -> int:
 
     heur = heuristic_names(args.captures_dir)
     if heur:
-        print("\nheuristic name-like tokens before ':'/'说' (review for MISSED names):")
+        print("\nheuristic name-like tokens in speaker positions (review for missed names):")
         for t, c in heur.most_common(15):
             print(f"   {t}: {c}")
 

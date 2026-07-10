@@ -24,7 +24,7 @@ _PROMPT_PREFIX = (
     "You name chat conversations for a sidebar list."
     " Given the first user message and assistant reply below, produce a"
     f" concise title in the user's language, ≤{TITLE_MAX_CHARS} characters."
-    " No quotes, no trailing punctuation, no leading verbs like '关于' / 'About'."
+    " No quotes, no trailing punctuation, and no leading framing verbs like 'About'."
     " Return ONLY the title text — no preamble, no explanation.\n\n"
 )
 
@@ -77,9 +77,9 @@ def _clean(raw: str) -> str:
     s = raw.strip()
     # Strip surrounding quotes (single, double, Chinese, backticks) the model
     # often adds despite the instruction.
-    while s and s[0] in "\"'`「『《【“‘":
+    while s and s[0] in "\"'`\u300c\u300e\u300a\u3010\u201c\u2018":
         s = s[1:]
-    while s and s[-1] in "\"'`」』》】”’":
+    while s and s[-1] in "\"'`\u300d\u300f\u300b\u3011\u201d\u2019":
         s = s[:-1]
     s = s.strip()
     s = " ".join(s.split())

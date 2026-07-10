@@ -54,19 +54,23 @@ def _md_body(root, name: str) -> str:
 
 def test_correction_supersedes_via_delta_apply(ac_root):
     with fts.cursor() as conn:
-        eid = _seed_fact(conn, "桃子 is the user's Feishu display name")
+        eid = _seed_fact(conn, "\u6843\u5b50 is the user's Feishu display name")
         res = C.update_memory(
             _cfg(),
             conn,
-            "桃子不是我的名字，是 Dev 群同事",
+            "\u6843\u5b50\u4e0d\u662f\u6211\u7684\u540d\u5b57\uff0c\u662f Dev \u7fa4\u540c\u4e8b",
             source="user",
             llm_call=_llm(
                 {
                     "supersede": [
-                        {"file": "user-profile.md", "entry_id": eid, "reason": "桃子是同事"}
+                        {
+                            "file": "user-profile.md",
+                            "entry_id": eid,
+                            "reason": "\u6843\u5b50\u662f\u540c\u4e8b",
+                        }
                     ],
                     "entity_op": None,
-                    "reason": "桃子非用户",
+                    "reason": "\u6843\u5b50\u975e\u7528\u6237",
                 }
             ),
         )
@@ -74,7 +78,7 @@ def test_correction_supersedes_via_delta_apply(ac_root):
     assert any("superseded" in a for a in res.applied)
     # supersede-not-delete: markdown body is STRUCK (~~...~~), bytes survive as a receipt
     body = _md_body(ac_root, "user-profile.md")
-    assert "~~桃子 is the user's Feishu display name~~" in body
+    assert "~~\u6843\u5b50 is the user's Feishu display name~~" in body
 
 
 def test_replace_writes_corrected_fact(ac_root):
@@ -83,7 +87,7 @@ def test_replace_writes_corrected_fact(ac_root):
         res = C.update_memory(
             _cfg(),
             conn,
-            "我住在上海不是北京",
+            "\u6211\u4f4f\u5728\u4e0a\u6d77\u4e0d\u662f\u5317\u4eac",
             llm_call=_llm(
                 {
                     "supersede": [
@@ -117,16 +121,20 @@ def test_entity_op_routes_to_retype(ac_root, monkeypatch):
         res = C.update_memory(
             _cfg(),
             conn,
-            "小张就是张三",
+            "\u5c0f\u5f20\u5c31\u662f\u5f20\u4e09",
             llm_call=_llm(
                 {
                     "supersede": [],
-                    "entity_op": {"op": "merge", "entity": "小张", "keeper": "张三"},
+                    "entity_op": {
+                        "op": "merge",
+                        "entity": "\u5c0f\u5f20",
+                        "keeper": "\u5f20\u4e09",
+                    },
                     "reason": "same person",
                 }
             ),
         )
-    assert res.ok and calls.get("merge") == ("小张", "张三")
+    assert res.ok and calls.get("merge") == ("\u5c0f\u5f20", "\u5f20\u4e09")
 
 
 def test_noop_when_nothing_to_update(ac_root):
@@ -134,19 +142,21 @@ def test_noop_when_nothing_to_update(ac_root):
         res = C.update_memory(
             _cfg(),
             conn,
-            "随便说说",
-            llm_call=_llm({"supersede": [], "entity_op": None, "reason": "无对应源"}),
+            "\u968f\u4fbf\u8bf4\u8bf4",
+            llm_call=_llm(
+                {"supersede": [], "entity_op": None, "reason": "\u65e0\u5bf9\u5e94\u6e90"}
+            ),
         )
     assert res.kind == "noop" and not res.ok
 
 
 def test_dry_run_previews_without_applying(ac_root):
     with fts.cursor() as conn:
-        eid = _seed_fact(conn, "桃子 is the user's name")
+        eid = _seed_fact(conn, "\u6843\u5b50 is the user's name")
         res = C.update_memory(
             _cfg(),
             conn,
-            "桃子不是我",
+            "\u6843\u5b50\u4e0d\u662f\u6211",
             dry_run=True,
             llm_call=_llm(
                 {
@@ -167,7 +177,7 @@ def test_update_logged_as_feedback_signal(ac_root):
         C.update_memory(
             _cfg(),
             conn,
-            "那条错了",
+            "\u90a3\u6761\u9519\u4e86",
             source="user",
             llm_call=_llm(
                 {

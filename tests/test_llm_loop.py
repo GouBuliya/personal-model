@@ -24,12 +24,11 @@ def _noop_dispatch(name: str, args: dict[str, Any]) -> dict[str, Any]:
 
 
 # ──────────────────────────────────────────────────────────────
-# Test 1: LLM 瞬时失败后重试，loop 正常完成
+
 # ──────────────────────────────────────────────────────────────
 
 
 def test_run_tool_loop_retries_on_llm_failure(monkeypatch):
-    """第一次 call_llm 抛异常，第二次成功；loop 正常完成而非中断。"""
     calls: list[int] = []
 
     def _stub(cfg, stage, *, messages, tools=None, json_mode=False):
@@ -59,26 +58,24 @@ def test_run_tool_loop_retries_on_llm_failure(monkeypatch):
         max_iter=3,
     )
 
-    assert len(calls) == 2, "第一次失败后应重试一次"
-    assert result == 3, "loop 以 max_iter 正常结束"
+    assert len(calls) == 2, "\u7b2c\u4e00\u6b21\u5931\u8d25\u540e\u5e94\u91cd\u8bd5\u4e00\u6b21"
+    assert result == 3, "loop \u4ee5 max_iter \u6b63\u5e38\u7ed3\u675f"
 
 
 # ──────────────────────────────────────────────────────────────
-# Test 2: 消息历史超限时自动 trim
+
 # ──────────────────────────────────────────────────────────────
 
 
 def test_run_tool_loop_trims_context_when_over_limit(monkeypatch):
-    """messages 超出 context_token_limit 时，旧的 round-trip 被原地删除。"""
 
     def _stub(cfg, stage, *, messages, tools=None, json_mode=False):
         return llm_mod._build_response("")
 
-    # 极低 limit: 50 tokens ≈ 200 chars
     cfg = _make_cfg(context_token_limit=50, llm_retry_attempts=1)
     monkeypatch.setattr(llm_mod, "call_llm", _stub)
 
-    fat = "x" * 200  # 每条消息约 50 tokens
+    fat = "x" * 200
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": fat},
         {"role": "user", "content": fat},
@@ -101,19 +98,20 @@ def test_run_tool_loop_trims_context_when_over_limit(monkeypatch):
         max_iter=1,
     )
 
-    assert len(messages) < original_len, "超限时消息历史应被原地截短"
-    # system + user 头两条不可删
+    assert len(messages) < original_len, (
+        "\u8d85\u9650\u65f6\u6d88\u606f\u5386\u53f2\u5e94\u88ab\u539f\u5730\u622a\u77ed"
+    )
+
     assert messages[0]["role"] == "system"
     assert messages[1]["role"] == "user"
 
 
 # ──────────────────────────────────────────────────────────────
-# Test 3: loop 结束后记录 token 用量
+
 # ──────────────────────────────────────────────────────────────
 
 
 def test_run_tool_loop_logs_token_usage(monkeypatch):
-    """loop 结束后应在 INFO 日志中输出 prompt_tokens 和 completion_tokens。"""
 
     class _Usage:
         prompt_tokens = 42
@@ -128,7 +126,6 @@ def test_run_tool_loop_logs_token_usage(monkeypatch):
     cfg = _make_cfg(llm_retry_attempts=1)
     monkeypatch.setattr(llm_mod, "call_llm", _stub)
 
-    # 直接 mock logger.info，不依赖 propagate 状态
     logged: list[str] = []
     monkeypatch.setattr(llm_mod.logger, "info", lambda fmt, *args: logged.append(fmt % args))
 

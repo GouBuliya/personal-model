@@ -614,7 +614,7 @@ func main() {
 
     if let targetName = config.appName {
         // Capture a specific app by name.
-        // Match against localizedName (e.g. "飞书") and process name
+        // Match against localizedName (for example, a translated app name) and process name.
         // (e.g. "Feishu") since Electron's AppleScript reports the
         // process name, not the localized display name.
         let targetLower = targetName.lowercased()

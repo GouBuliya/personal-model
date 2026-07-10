@@ -1,22 +1,4 @@
-"""P3 件1 (A1) — compact unifies on rebuild_index (markdown 主写模式).
-
-``compact_file`` used to do its own per-file FTS re-ingest with a STALE two-way
-superseded judgment (``1 if e.superseded_by else 0``) that ignored
-``_body_is_striked`` (a latent bug: a whole-body-struck orphan read as live).
-
-A1 replaces that per-file re-ingest with a single ``rebuild_index`` call (after the
-compacted markdown is written to disk), so the superseded judgment is the unified
-EVO-02 three-way one (fixes the orphan bug) and the FTS rows match a fresh rebuild.
-（entry_chain 自愈断言已随该表在 PR-7 退役——链真相在 evo_nodes，compact 的
-evo 侧滞后由 ``note_out_of_band_rewrite`` 记账、幂等 backfill 修复。）
-
-bug_012 then moved that single rebuild from ``compact_file`` up into ``run_pending``
-— it now rebuilds ONCE after the whole flagged-file sweep (was O(K·N): K rebuilds
-per tick) — so these A1 post-rebuild assertions drive compaction through
-``run_pending`` (via ``_compact_via_run_pending``), the production caller that owns
-the rebuild. Correctness is identical (markdown SSOT → one rebuild over the final
-on-disk state), just batched.
-"""
+"Tests for test compact chain p3."
 
 from __future__ import annotations
 
@@ -103,7 +85,6 @@ def test_compact_keeps_supersede_judgment_fresh(ac_root, monkeypatch):
 
 
 def test_compact_preserves_reconciliation_invariant(ac_root, monkeypatch):
-    """增量 superseded 判定 == rebuild 重放判定 holds after a compact accept."""
     with fts.cursor() as conn:
         entries_mod.create_file(conn, name="project-z.md", description="z", tags=["t"])
         old = entries_mod.append_entry(conn, name="project-z.md", content="v1", tags=["t"])

@@ -109,27 +109,25 @@ router = APIRouter()
 
 @router.get("/health", response_model=ApiResponse, tags=["system"])
 def health() -> ApiResponse:
-    """健康检查，返回服务存活状态。"""
+    """Return the service liveness status."""
     return ApiResponse(data={"status": "ok"})
 
 
 @router.get("/permissions", response_model=ApiResponse, tags=["system"])
 def permissions() -> ApiResponse:
-    """返回 daemon 自身需要的 macOS 权限实时状态。
+    """Return the daemon's current macOS permission state.
 
-    辅助功能（Accessibility）由 **daemon 进程**申请——真正读 AX 树的
-    ``mac-ax-helper`` / ``mac-ax-watcher`` 都由 daemon 派生，TCC 按 daemon 的
-    身份记授权。GUI app 自己从不读 AX 树，所以引导页应轮询本端点反映 daemon
-    的真实信任态，而不是在 app 进程里自查（那会多出一个冗余 TCC 主体、多弹一次框）。
-
-    ``accessibility`` 取值 ``granted`` / ``denied``（非 macOS 主机恒为 ``denied``）。
+    Accessibility belongs to the daemon process because it launches the AX
+    helpers that read the tree. A GUI onboarding flow should poll this endpoint
+    instead of creating a second TCC identity. ``accessibility`` is ``granted``
+    or ``denied`` and is always ``denied`` on non-macOS hosts.
     """
     return ApiResponse(data={"accessibility": "granted" if ax_capture.ax_trusted() else "denied"})
 
 
 @router.get("/status", response_model=ApiResponse, tags=["system"])
 def status() -> ApiResponse:
-    """获取完整运行状态，包括版本、守护进程状态、运行时长、捕获状态、记忆统计、各阶段 LLM 连通性等。"""
+    """Return version, daemon, capture, memory, and LLM connectivity status."""
     cfg = _get_cfg()
     pid = _read_pid()
     paused = paths.paused_flag().exists()
@@ -312,8 +310,9 @@ def model_graph() -> dict[str, Any]:
 
 @router.get("/model/node", tags=["model"])
 def model_node(id: str) -> dict[str, Any]:
-    """Raw receipts behind one graph node (§2.1 每个向量指回符号收据 — the
-    click-through from the 记忆图 to the symbolic layer). Lazy per-node fetch
+    """Return the symbolic receipts behind one graph node.
+
+    This is the click-through from the visual graph to the symbolic layer. Lazy per-node fetch
     so the graph payload stays lean. Zero-LLM, read-only, fail-open:
 
     - ``event:<source-kind>:<source-id>`` → the canonical Activity source;
@@ -395,12 +394,13 @@ _TREE_FANOUT = 8
 
 
 def _node_tree(root: str) -> dict[str, Any]:
-    """The relation tree rooted at ONE point (§1.2: 点开一个事物 → 以它为根的
-    整棵树). Bounded BFS over relation_edges — both statuses (the dev view
+    """Return the relation tree rooted at one Point.
+
+    Uses bounded BFS over relation_edges with both statuses (the dev view
     exists to show the shadow/active split), strongest-first per node
     (observations desc), fan-out ≤ 8, depth ≤ 2, cycle-guarded. Each hop
     carries predicate/direction/label/strength/status so the path reads as a
-    narrative (§3.4 路径即叙事, rooted at the point instead of USER)."""
+    narrative rooted at the Point instead of the memory owner."""
     from ..store import fts as fts_store
 
     def expand(

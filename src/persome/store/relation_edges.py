@@ -1,4 +1,4 @@
-"""DAO for ``relation_edges`` — the横轴 relation layer of the user-centric graph memory.
+"""DAO for the horizontal relation layer of the user-centric memory graph.
 
 Implements the predicate closed set, ``src×dst`` completeness table, schema,
 write entrances, and an as-of-T read helper.
@@ -38,7 +38,7 @@ logger = get("persome.store.relation_edges")
 
 
 class EntityKind(StrEnum):
-    """节点种类闭集（§4.1）——覆盖「人事物」，用于端点合法性校验。"""
+    """Closed entity-kind set used to validate relation endpoints."""
 
     SELF = "self"
     PERSON = "person"
@@ -49,16 +49,14 @@ class EntityKind(StrEnum):
 
 
 class Predicate(StrEnum):
-    """关系谓词闭集（§4.2）。**两层**（transformer 类比：原始 attention + 多头类型）：
+    """Closed relation predicates with an open-text label for finer semantics.
 
-    - **① 关联地板** ``engaged_with`` —— 均匀·无类型·稠密的「碰过/关注过」关系（= 原始
-      attention）。共现即建、确定性零 LLM、**kind 无关**（self 关联任何东西）。连通性只靠这层，
-      永远完备（共现普适）；kind 判错只错②层标签，永不掉孤儿（attention 不看词性）。
-    - **② 语义结构** 其余 6 谓词 —— LLM 给强关联贴的类型标签（= 多头学到的关系）。
+    ``engaged_with`` is the dense, kind-independent co-occurrence floor. The
+    remaining predicates add typed semantic structure without determining graph
+    connectivity.
+    """
 
-    具体语义走开集 ``label``，不进谓词。"""
-
-    ENGAGED_WITH = "engaged_with"  # ① 关联地板（attention 基底）
+    ENGAGED_WITH = "engaged_with"
     PARTICIPATES_IN = "participates_in"
     PART_OF = "part_of"
     REPORTS_TO = "reports_to"
@@ -78,16 +76,12 @@ def _pairs(
     return frozenset((s, d) for s in srcs for d in dsts)
 
 
-# §4.2 完备表的规范方向合法端点：predicate -> 允许的 (src_kind, dst_kind) 集合。
-# 反向（``↩``）不在这里 —— 每条 tie 只存一个规范方向，反向靠 dst 索引查（§4.6）。
-# 全部 dst kind（关联地板 ``engaged_with`` 的规范 dst——kind 无关，故列全）。
 _ALL_DST = {_K.PERSON, _K.ORG, _K.PROJECT, _K.EVENT, _K.ARTIFACT}
 _LEGAL_ENDPOINTS: dict[Predicate, frozenset[tuple[EntityKind, EntityKind]]] = {
-    # ① 关联地板：agent（含 self）→ 任何事物。均匀无类型；连通性靠它，永远完备。
     Predicate.ENGAGED_WITH: _pairs({_K.SELF, _K.PERSON, _K.ORG}, _ALL_DST),
     Predicate.PARTICIPATES_IN: _pairs({_K.SELF, _K.PERSON, _K.ORG}, {_K.PROJECT, _K.EVENT}),
     Predicate.PART_OF: (
-        _pairs({_K.SELF, _K.PERSON, _K.ORG}, {_K.ORG})  # O→O 组织嵌套（部门 part_of 公司）
+        _pairs({_K.SELF, _K.PERSON, _K.ORG}, {_K.ORG})
         | _pairs({_K.PROJECT}, {_K.ORG})
         | _pairs({_K.ARTIFACT}, {_K.PROJECT})
     ),
@@ -103,28 +97,28 @@ _LEGAL_ENDPOINTS: dict[Predicate, frozenset[tuple[EntityKind, EntityKind]]] = {
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS relation_edges (
     edge_id      TEXT PRIMARY KEY,
-    src_identity TEXT NOT NULL,          -- 稳定 identity（person_graph 规范名 / PROJECT slug），非版本 node_id
+    src_identity TEXT NOT NULL,          -- stable canonical identity, never a version node ID
     dst_identity TEXT NOT NULL,
-    predicate    TEXT NOT NULL,          -- 6 谓词闭集之一
-    label        TEXT,                   -- 自由文本关系（开集语义）
-    valid_from   TEXT NOT NULL,          -- 有效时间起（ISO8601）
-    valid_to     TEXT,                   -- NULL = 当前有效
+    predicate    TEXT NOT NULL,          -- one closed-set predicate
+    label        TEXT,                   -- open-text relation semantics
+    valid_from   TEXT NOT NULL,          -- validity start in ISO 8601
+    valid_to     TEXT,                   -- NULL while currently valid
     provenance   TEXT NOT NULL,          -- 'user_committed' | 'inferred'
     confidence   REAL NOT NULL,
-    quote        TEXT,                   -- ≤120 字支撑原文（证据）
+    quote        TEXT,                   -- short source excerpt supporting the relation
     status       TEXT NOT NULL,          -- MemoryStatus: 'shadow'|'active'|'superseded'|'archived'
-    created_at   TEXT NOT NULL,          -- 事务时间（版本轴，不可变）
-    observations INTEGER NOT NULL DEFAULT 1,  -- 强度=支撑该关系的证据数（event 蒸馏计数，单调不减）
-    last_observed_at TEXT,              -- 最近一次证据强化时刻（ISO8601）
-    recall_count INTEGER NOT NULL DEFAULT 0  -- 读也是强化（§3.3 testing effect）：树链走过这条边即 +1
+    created_at   TEXT NOT NULL,          -- immutable transaction time
+    observations INTEGER NOT NULL DEFAULT 1,  -- monotone supporting-evidence count
+    last_observed_at TEXT,               -- latest reinforcement in ISO 8601
+    recall_count INTEGER NOT NULL DEFAULT 0  -- increments when a delivered chain uses this edge
 );
 CREATE INDEX IF NOT EXISTS ix_edges_src ON relation_edges(src_identity, valid_from);
 CREATE INDEX IF NOT EXISTS ix_edges_dst ON relation_edges(dst_identity, valid_from);
 """
 
-# Edge polarity closed set (§1.2 边状态轴): deterministic extractors always
+
 # stamp neutral '0'; the LLM relation pass may stamp ± when the quote carries
-# sentiment. Rendered by the §7-6 graph view's 极性 lens.
+
 POLARITIES = frozenset({"+", "-", "0"})
 
 # Columns added after the first shipped schema — ensure_schema back-fills them on old DBs.
@@ -133,7 +127,6 @@ _EXTRA_COLUMNS: tuple[tuple[str, str], ...] = (
     ("last_observed_at", "TEXT"),
     ("recall_count", "INTEGER NOT NULL DEFAULT 0"),
     # §7-6 graph-projection axes: kinds were validated at add_edge but never
-    # persisted, so the node 种类 axis (PERSON/ORG/PROJECT/EVENT/…) could not
     # be recovered from the table; polarity had no storage at all.
     ("src_kind", "TEXT"),
     ("dst_kind", "TEXT"),
@@ -327,7 +320,7 @@ def reinforce_edge(
 ) -> bool:
     """Monotone evidence reinforcement: raise an OPEN edge's strength to ``observations``.
 
-    Strength = number of distinct supporting evidence items (event 蒸馏计数). The caller
+    Strength is the number of distinct supporting evidence items. The caller
     computes the count FROM the evidence itself and this sets ``observations =
     MAX(current, given)`` — so re-running the extraction over the same data is a no-op
     (idempotent), while genuinely new evidence raises it.
@@ -435,7 +428,7 @@ def neighbors(
     at ``as_of`` — the relation head's production traversal primitive.
 
     Returns the REACHED identities only (seeds excluded). ``status`` defaults
-    to ``active``, so shadow edges stay out of retrieval (§3.3 策略闸) — with
+    to ``active``, so shadow edges stay out of retrieval — with
     today's extraction writing shadow-only, production traversal honestly
     reaches nothing until edges are proven and promoted. ``include_shadow``
     additionally walks shadow edges (§7-3 gain unlock: audited-clean shadow
@@ -449,7 +442,6 @@ def neighbors(
             break
         rows = list(edges_as_of(conn, frontier, as_of=as_of, status=status))
         if include_shadow:
-            # §7-3 关系头喂食: structural quality is proven (edge-audit 0%
             # hallucination on the full shadow population), so shadow edges may
             # join TRAVERSAL when the caller opts in — retrieval then downweights
             # the shadow-reached pool (fts), it never equals ACTIVE.
@@ -472,7 +464,9 @@ def promote_edges(
     max_per_identity: int = 20,
     predicate: str = "knows",
 ) -> int:
-    """Promote shadow edges to ACTIVE — the §3.3 边转正判据 (memory-rebuild
+    """Promote shadow edges to ACTIVE using evidence and fan-out gates.
+
+    The original design
     §7-3, designed WITH the RRF pool weights, PR #504 finding).
 
     Two gates, and the second is the load-bearing one:
@@ -518,7 +512,9 @@ def promote_edges(
 
 
 def bump_recall(conn: sqlite3.Connection, edge_ids: Iterable[str]) -> None:
-    """读也是强化 (§3.3, KV-cache-H2O/testing-effect transfer): every edge a
+    """Reinforce every edge traversed by a delivered chain.
+
+    Every edge a
     delivered tree chain walked gets ``recall_count += 1`` — the read side of
     the consolidation axis (``observations`` is the write side). Feeds the
     strength bias and, later, tiered forgetting (an often-recalled edge resists

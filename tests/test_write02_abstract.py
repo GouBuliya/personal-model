@@ -1,19 +1,4 @@
-"""WRITE-02 — ABSTRACT 多源 provenance (N→1 merge, chain semantics ②).
-
-A synthesized entry C absorbs N(≥2) source entries A, B. Per the chosen chain
-semantics (option ②, lead-approved):
-
-- ``abstracted-from:{A,B}`` is a **provenance** multi-value tag on C. It is NOT a
-  linear supersede chain — none of C, A, B carries a ``#superseded-by`` pointer
-  (avoiding the back-map collision that N sources pointing ``#superseded-by:C``
-  would cause).
-- The sources are retired via the durable strike path (``mark_entry_deleted``) so
-  rebuild judges them ``superseded=1``; C is the live head (``superseded=0``).
-  This keeps the fold judgment consistent — the key selling point of ②.
-- The reconciler treats ABSTRACT as a controlled N→1 convergence: exempt from the
-  anti-fork second-supersede demotion (fork is 1→N, ABSTRACT is its inverse), but
-  demoted to ADD if fewer than 2 sources or any source id is unknown.
-"""
+"Tests for test write02 abstract."
 
 from __future__ import annotations
 
@@ -100,7 +85,7 @@ def test_abstract_chain_semantics_option_two_no_supersede_pointers(ac_root):
         entries_mod.rebuild_index(conn)
         parsed = files_mod.read_file(files_mod.memory_path("project-x.md"))
         by_id = {e.id: e for e in parsed.entries}
-        assert by_id[a].superseded_by is None  # 源走 retire，不写线性链指针
+        assert by_id[a].superseded_by is None
         assert by_id[b].superseded_by is None
         assert by_id[c].superseded_by is None
         assert _superseded(conn, a) == 1 and _superseded(conn, b) == 1
@@ -122,7 +107,7 @@ def test_abstract_preserves_reconciliation_invariant(ac_root):
         before = _superseded_all(conn)
         entries_mod.rebuild_index(conn)
         after = _superseded_all(conn)
-    assert before == after  # 增量判定 == rebuild 重放判定
+    assert before == after
     live = {eid for eid, s in after.items() if s == 0}
     assert a not in live and b not in live  # both absorbed
 

@@ -103,9 +103,11 @@ class TestRecognize:
 
     def test_parses_rec_texts(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            ocr_local, "_engines", {"tiny": _FakeEngine([{"rec_texts": ["你好", "世界"]}])}
+            ocr_local,
+            "_engines",
+            {"tiny": _FakeEngine([{"rec_texts": ["\u4f60\u597d", "\u4e16\u754c"]}])},
         )
-        assert ocr_local.recognize(_jpeg_bytes()) == "你好\n世界"
+        assert ocr_local.recognize(_jpeg_bytes()) == "\u4f60\u597d\n\u4e16\u754c"
 
     def test_empty_result_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(ocr_local, "_engines", {"tiny": _FakeEngine([{"rec_texts": []}])})
@@ -178,8 +180,10 @@ class TestDisableKillSwitch:
     def test_enabled_recognize_still_runs(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Guard against the kill-switch accidentally disabling OCR when unset/off.
         monkeypatch.setenv("PERSOME_DISABLE_OCR", "0")
-        monkeypatch.setattr(ocr_local, "_engines", {"tiny": _FakeEngine([{"rec_texts": ["你好"]}])})
-        assert ocr_local.recognize(_jpeg_bytes()) == "你好"
+        monkeypatch.setattr(
+            ocr_local, "_engines", {"tiny": _FakeEngine([{"rec_texts": ["\u4f60\u597d"]}])}
+        )
+        assert ocr_local.recognize(_jpeg_bytes()) == "\u4f60\u597d"
 
 
 # ─── result extraction ───────────────────────────────────────────────────────
@@ -208,7 +212,10 @@ def test_real_recognition_chinese() -> None:
 
     img = Image.new("RGB", (520, 90), (255, 255, 255))
     ImageDraw.Draw(img).text(
-        (20, 24), "微信测试消息", font=ImageFont.truetype(font_path, 40), fill=(0, 0, 0)
+        (20, 24),
+        "\u5fae\u4fe1\u6d4b\u8bd5\u6d88\u606f",
+        font=ImageFont.truetype(font_path, 40),
+        fill=(0, 0, 0),
     )
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=80)
@@ -216,4 +223,4 @@ def test_real_recognition_chinese() -> None:
     text = ocr_local.recognize(buf.getvalue(), "tiny")
     assert text is not None and text.strip(), "real OCR returned no text"
     # tiny isn't perfect, but it should recover at least one of the rendered glyphs.
-    assert any(ch in text for ch in "微信测试消息")
+    assert any(ch in text for ch in "\u5fae\u4fe1\u6d4b\u8bd5\u6d88\u606f")

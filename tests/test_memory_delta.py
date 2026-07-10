@@ -50,17 +50,17 @@ def _payload(**overrides) -> str:
     base = {
         "entities": [
             {
-                "new_entity": "张三",
+                "new_entity": "\u5f20\u4e09",
                 "kind": "person",
-                "quote": "和张三确认了评审结论",
+                "quote": "\u548c\u5f20\u4e09\u786e\u8ba4\u4e86\u8bc4\u5ba1\u7ed3\u8bba",
                 "confidence": 0.9,
             }
         ],
         "assertions": [
             {
-                "subject": _ref("张三"),
-                "text": "张三确认了评审结论",
-                "quote": "和张三确认了评审结论",
+                "subject": _ref("\u5f20\u4e09"),
+                "text": "\u5f20\u4e09\u786e\u8ba4\u4e86\u8bc4\u5ba1\u7ed3\u8bba",
+                "quote": "\u548c\u5f20\u4e09\u786e\u8ba4\u4e86\u8bc4\u5ba1\u7ed3\u8bba",
                 "confidence": 0.8,
             }
         ],
@@ -71,7 +71,7 @@ def _payload(**overrides) -> str:
     return json.dumps(base, ensure_ascii=False)
 
 
-SESSION_ENTRY = '[Feishu] 聊天: 和张三确认了评审结论。"周五版本可以发"'
+SESSION_ENTRY = '[Feishu] \u804a\u5929: \u548c\u5f20\u4e09\u786e\u8ba4\u4e86\u8bc4\u5ba1\u7ed3\u8bba\u3002"\u5468\u4e94\u7248\u672c\u53ef\u4ee5\u53d1"'
 
 
 def test_flag_off_is_a_strict_noop(ac_root, fake_llm) -> None:
@@ -94,15 +94,15 @@ def test_delta_persisted_shadow_with_counts(ac_root, fake_llm) -> None:
         row = deltas_store.latest_for_session(conn, "s2")
     assert row is not None and row["status"] == "shadow"
     delta = json.loads(row["payload"])
-    assert delta["entities"][0]["new_entity"] == "张三"
+    assert delta["entities"][0]["new_entity"] == "\u5f20\u4e09"
     # the LLM actually received roster + session_events sections (now cache-control blocks)
     blocks = fake_llm.calls[0]["messages"][1]["content"]
     sent = "".join(b["text"] for b in blocks)
-    assert "<roster>" in sent and "<session_events>" in sent and "张三" in sent
-    # prompt-cache 断点：system + roster 块带 cache_control
+    assert "<roster>" in sent and "<session_events>" in sent and "\u5f20\u4e09" in sent
+
     sys_blocks = fake_llm.calls[0]["messages"][0]["content"]
     assert sys_blocks[0].get("cache_control") == {"type": "ephemeral"}
-    assert blocks[0].get("cache_control") == {"type": "ephemeral"}  # roster 块
+    assert blocks[0].get("cache_control") == {"type": "ephemeral"}
 
 
 def test_quote_evidence_gate_drops_unquoted_items(ac_root, fake_llm) -> None:
@@ -113,9 +113,9 @@ def test_quote_evidence_gate_drops_unquoted_items(ac_root, fake_llm) -> None:
         _payload(
             entities=[
                 {
-                    "new_entity": "张三",
+                    "new_entity": "\u5f20\u4e09",
                     "kind": "person",
-                    "quote": "这句话不在会话里",
+                    "quote": "\u8fd9\u53e5\u8bdd\u4e0d\u5728\u4f1a\u8bdd\u91cc",
                     "confidence": 0.9,
                 }
             ],
@@ -127,17 +127,15 @@ def test_quote_evidence_gate_drops_unquoted_items(ac_root, fake_llm) -> None:
 
 
 def test_identity_gate_rejects_bare_store_probing_strings(ac_root, fake_llm) -> None:
-    """A new_entity whose name never appears in the session text is rejected —
-    the LLM can't invent identities that probe the store (§4.1 选择题)."""
     start, end = _seed_session_blocks([SESSION_ENTRY])
     fake_llm.set_default(
         delta_mod.STAGE,
         _payload(
             entities=[
                 {
-                    "new_entity": "凭空捏造的人",
+                    "new_entity": "\u51ed\u7a7a\u634f\u9020\u7684\u4eba",
                     "kind": "person",
-                    "quote": "和张三确认了评审结论",
+                    "quote": "\u548c\u5f20\u4e09\u786e\u8ba4\u4e86\u8bc4\u5ba1\u7ed3\u8bba",
                     "confidence": 0.9,
                 }
             ],
@@ -157,19 +155,19 @@ def test_relation_gate_enforces_closed_predicate_set(ac_root, fake_llm) -> None:
             assertions=[],
             relations=[
                 {
-                    "src": _ref("张三"),
-                    "dst": _ref("张三"),
+                    "src": _ref("\u5f20\u4e09"),
+                    "dst": _ref("\u5f20\u4e09"),
                     "predicate": "loves",  # not in the 6-predicate closed set
                     "label": "",
-                    "quote": "和张三确认了评审结论",
+                    "quote": "\u548c\u5f20\u4e09\u786e\u8ba4\u4e86\u8bc4\u5ba1\u7ed3\u8bba",
                     "confidence": 0.9,
                 },
                 {
-                    "src": _ref("张三"),
-                    "dst": _ref("张三"),
+                    "src": _ref("\u5f20\u4e09"),
+                    "dst": _ref("\u5f20\u4e09"),
                     "predicate": "knows",
-                    "label": "同事",
-                    "quote": "和张三确认了评审结论",
+                    "label": "\u540c\u4e8b",
+                    "quote": "\u548c\u5f20\u4e09\u786e\u8ba4\u4e86\u8bc4\u5ba1\u7ed3\u8bba",
                     "confidence": 0.9,
                 },
             ],
@@ -186,9 +184,9 @@ def test_confidence_floor_drops_hedges(ac_root, fake_llm) -> None:
         _payload(
             entities=[
                 {
-                    "new_entity": "张三",
+                    "new_entity": "\u5f20\u4e09",
                     "kind": "person",
-                    "quote": "和张三确认了评审结论",
+                    "quote": "\u548c\u5f20\u4e09\u786e\u8ba4\u4e86\u8bc4\u5ba1\u7ed3\u8bba",
                     "confidence": 0.2,
                 }
             ],
@@ -269,99 +267,16 @@ def test_active_windows_are_incremental_and_idempotent(ac_root, fake_llm) -> Non
 
 
 def test_gate_canonicalizes_honorific_ref_through_the_funnel(ac_root) -> None:
-    """§4.3 the ONE funnel at work inside the gate: a "张总" ref resolves to the
-    roster canonical and is REWRITTEN in the stored payload — downstream reads
-    one identity space."""
     from persome.evomem import identity as identity_mod
 
-    roster = identity_mod.Roster.build([("张伟", ["伟哥"])])
-    session_text = "[Feishu] 聊天: 张总确认了对账方案"
-    raw = {
-        "entities": [
-            {"ref": "张总", "kind": "person", "quote": "张总确认了对账方案", "confidence": 0.9}
-        ],
-        "assertions": [],
-        "relations": [],
-        "events": [],
-    }
-    clean, dropped = delta_mod.gate_delta(
-        raw, roster=roster, session_text=session_text, min_confidence=0.5
-    )
-    assert dropped == 0
-    assert clean["entities"][0]["ref"] == "张伟"  # canonicalized, not the raw mention
-    assert "new_entity" not in clean["entities"][0]
-
-
-def test_gate_adds_deterministic_cooccurrence_knows(ac_root) -> None:
-    """② 确定性共现 knows：同一 session 每对 person 互相 knows（subsume legacy relation_extractor
-    的确定性腿）。LLM 没给关系，gate 也补齐 → delta relations ⊇ legacy、退役无召回损失。"""
-    from persome.evomem import identity as identity_mod
-
-    roster = identity_mod.Roster.build([("张伟", []), ("李四", []), ("王五", [])])
-    session_text = "[Feishu] 群聊: 张伟、李四、王五 三人一起过了方案"
-    q = "张伟、李四、王五 三人一起过了方案"
-    raw = {
-        "entities": [
-            {"ref": "张伟", "kind": "person", "quote": q, "confidence": 0.9},
-            {"ref": "李四", "kind": "person", "quote": q, "confidence": 0.9},
-            {"ref": "王五", "kind": "person", "quote": q, "confidence": 0.9},
-        ],
-        "relations": [],  # LLM 一条关系没给
-        "events": [],
-        "assertions": [],
-    }
-    clean, _ = delta_mod.gate_delta(
-        raw, roster=roster, session_text=session_text, min_confidence=0.5
-    )
-    knows = {
-        frozenset((r["src"]["ref"], r["dst"]["ref"]))
-        for r in clean["relations"]
-        if r["predicate"] == "knows"
-    }
-    assert knows == {  # 3 人 → C(3,2)=3 条
-        frozenset(("张伟", "李四")),
-        frozenset(("张伟", "王五")),
-        frozenset(("李四", "王五")),
-    }
-
-
-def test_gate_cooccurrence_off_is_noop(ac_root) -> None:
-    """cooccurrence=False kill-switch → 不补共现 knows。"""
-    from persome.evomem import identity as identity_mod
-
-    roster = identity_mod.Roster.build([("张伟", []), ("李四", [])])
-    raw = {
-        "entities": [
-            {"ref": "张伟", "kind": "person", "quote": "张伟 和 李四", "confidence": 0.9},
-            {"ref": "李四", "kind": "person", "quote": "张伟 和 李四", "confidence": 0.9},
-        ],
-        "relations": [],
-        "events": [],
-        "assertions": [],
-    }
-    clean, _ = delta_mod.gate_delta(
-        raw,
-        roster=roster,
-        session_text="[Feishu] 张伟 和 李四",
-        min_confidence=0.5,
-        cooccurrence=False,
-    )
-    assert clean["relations"] == []
-
-
-def test_gate_folds_known_name_posing_as_new_entity(ac_root) -> None:
-    """A new_entity whose name resolves to a known identity folds to its ref —
-    the LLM cannot re-mint an existing person as a fresh node."""
-    from persome.evomem import identity as identity_mod
-
-    roster = identity_mod.Roster.build([("张伟", ["伟哥"])])
-    session_text = "[Feishu] 聊天: 伟哥确认了对账方案"
+    roster = identity_mod.Roster.build([("\u5f20\u4f1f", ["\u4f1f\u54e5"])])
+    session_text = "[Feishu] \u804a\u5929: \u5f20\u603b\u786e\u8ba4\u4e86\u5bf9\u8d26\u65b9\u6848"
     raw = {
         "entities": [
             {
-                "new_entity": "伟哥",
+                "ref": "\u5f20\u603b",
                 "kind": "person",
-                "quote": "伟哥确认了对账方案",
+                "quote": "\u5f20\u603b\u786e\u8ba4\u4e86\u5bf9\u8d26\u65b9\u6848",
                 "confidence": 0.9,
             }
         ],
@@ -373,23 +288,125 @@ def test_gate_folds_known_name_posing_as_new_entity(ac_root) -> None:
         raw, roster=roster, session_text=session_text, min_confidence=0.5
     )
     assert dropped == 0
-    assert clean["entities"][0].get("ref") == "张伟" and "new_entity" not in clean["entities"][0]
+    assert clean["entities"][0]["ref"] == "\u5f20\u4f1f"  # canonicalized, not the raw mention
+    assert "new_entity" not in clean["entities"][0]
+
+
+def test_gate_adds_deterministic_cooccurrence_knows(ac_root) -> None:
+    from persome.evomem import identity as identity_mod
+
+    roster = identity_mod.Roster.build(
+        [("\u5f20\u4f1f", []), ("\u674e\u56db", []), ("\u738b\u4e94", [])]
+    )
+    session_text = "[Feishu] \u7fa4\u804a: \u5f20\u4f1f\u3001\u674e\u56db\u3001\u738b\u4e94 \u4e09\u4eba\u4e00\u8d77\u8fc7\u4e86\u65b9\u6848"
+    q = "\u5f20\u4f1f\u3001\u674e\u56db\u3001\u738b\u4e94 \u4e09\u4eba\u4e00\u8d77\u8fc7\u4e86\u65b9\u6848"
+    raw = {
+        "entities": [
+            {"ref": "\u5f20\u4f1f", "kind": "person", "quote": q, "confidence": 0.9},
+            {"ref": "\u674e\u56db", "kind": "person", "quote": q, "confidence": 0.9},
+            {"ref": "\u738b\u4e94", "kind": "person", "quote": q, "confidence": 0.9},
+        ],
+        "relations": [],
+        "events": [],
+        "assertions": [],
+    }
+    clean, _ = delta_mod.gate_delta(
+        raw, roster=roster, session_text=session_text, min_confidence=0.5
+    )
+    knows = {
+        frozenset((r["src"]["ref"], r["dst"]["ref"]))
+        for r in clean["relations"]
+        if r["predicate"] == "knows"
+    }
+    assert knows == {
+        frozenset(("\u5f20\u4f1f", "\u674e\u56db")),
+        frozenset(("\u5f20\u4f1f", "\u738b\u4e94")),
+        frozenset(("\u674e\u56db", "\u738b\u4e94")),
+    }
+
+
+def test_gate_cooccurrence_off_is_noop(ac_root) -> None:
+    from persome.evomem import identity as identity_mod
+
+    roster = identity_mod.Roster.build([("\u5f20\u4f1f", []), ("\u674e\u56db", [])])
+    raw = {
+        "entities": [
+            {
+                "ref": "\u5f20\u4f1f",
+                "kind": "person",
+                "quote": "\u5f20\u4f1f \u548c \u674e\u56db",
+                "confidence": 0.9,
+            },
+            {
+                "ref": "\u674e\u56db",
+                "kind": "person",
+                "quote": "\u5f20\u4f1f \u548c \u674e\u56db",
+                "confidence": 0.9,
+            },
+        ],
+        "relations": [],
+        "events": [],
+        "assertions": [],
+    }
+    clean, _ = delta_mod.gate_delta(
+        raw,
+        roster=roster,
+        session_text="[Feishu] \u5f20\u4f1f \u548c \u674e\u56db",
+        min_confidence=0.5,
+        cooccurrence=False,
+    )
+    assert clean["relations"] == []
+
+
+def test_gate_folds_known_name_posing_as_new_entity(ac_root) -> None:
+    """A new_entity whose name resolves to a known identity folds to its ref —
+    the LLM cannot re-mint an existing person as a fresh node."""
+    from persome.evomem import identity as identity_mod
+
+    roster = identity_mod.Roster.build([("\u5f20\u4f1f", ["\u4f1f\u54e5"])])
+    session_text = "[Feishu] \u804a\u5929: \u4f1f\u54e5\u786e\u8ba4\u4e86\u5bf9\u8d26\u65b9\u6848"
+    raw = {
+        "entities": [
+            {
+                "new_entity": "\u4f1f\u54e5",
+                "kind": "person",
+                "quote": "\u4f1f\u54e5\u786e\u8ba4\u4e86\u5bf9\u8d26\u65b9\u6848",
+                "confidence": 0.9,
+            }
+        ],
+        "assertions": [],
+        "relations": [],
+        "events": [],
+    }
+    clean, dropped = delta_mod.gate_delta(
+        raw, roster=roster, session_text=session_text, min_confidence=0.5
+    )
+    assert dropped == 0
+    assert (
+        clean["entities"][0].get("ref") == "\u5f20\u4f1f"
+        and "new_entity" not in clean["entities"][0]
+    )
 
 
 def test_gate_rejects_unknown_ref_but_keeps_genuine_new_entity(ac_root) -> None:
-    """An unknown ref is a store-probing string (rejected); an unknown name
-    declared as new_entity and quoted verbatim stays a candidate (候选宁滥毋缺)."""
     from persome.evomem import identity as identity_mod
 
-    roster = identity_mod.Roster.build([("张伟", [])])
-    session_text = "[Feishu] 聊天: 王五提交了新的接口文档"
+    roster = identity_mod.Roster.build([("\u5f20\u4f1f", [])])
+    session_text = (
+        "[Feishu] \u804a\u5929: \u738b\u4e94\u63d0\u4ea4\u4e86\u65b0\u7684\u63a5\u53e3\u6587\u6863"
+    )
     raw = {
         "entities": [
-            {"ref": "王五", "kind": "person", "quote": "王五提交了新的接口文档", "confidence": 0.9},
             {
-                "new_entity": "王五",
+                "ref": "\u738b\u4e94",
                 "kind": "person",
-                "quote": "王五提交了新的接口文档",
+                "quote": "\u738b\u4e94\u63d0\u4ea4\u4e86\u65b0\u7684\u63a5\u53e3\u6587\u6863",
+                "confidence": 0.9,
+            },
+            {
+                "new_entity": "\u738b\u4e94",
+                "kind": "person",
+                "quote": "\u738b\u4e94\u63d0\u4ea4\u4e86\u65b0\u7684\u63a5\u53e3\u6587\u6863",
                 "confidence": 0.9,
             },
         ],
@@ -404,17 +421,15 @@ def test_gate_rejects_unknown_ref_but_keeps_genuine_new_entity(ac_root) -> None:
     assert clean["entities"] == [
         {
             "kind": "person",
-            "quote": "王五提交了新的接口文档",
+            "quote": "\u738b\u4e94\u63d0\u4ea4\u4e86\u65b0\u7684\u63a5\u53e3\u6587\u6863",
             "confidence": 0.9,
-            "new_entity": "王五",
+            "new_entity": "\u738b\u4e94",
             "ended": False,
         }
     ]
 
 
 def test_relation_polarity_and_ended_normalize(ac_root, fake_llm) -> None:
-    """§4.1 极性/结束轴: polarity coerces to the closed ±0 set (default 0),
-    ended coerces to a strict bool — decoration never drops the relation."""
     start, end = _seed_session_blocks([SESSION_ENTRY])
     fake_llm.set_default(
         delta_mod.STAGE,
@@ -423,21 +438,21 @@ def test_relation_polarity_and_ended_normalize(ac_root, fake_llm) -> None:
             assertions=[],
             relations=[
                 {
-                    "src": _ref("张三"),
-                    "dst": _ref("张三"),
+                    "src": _ref("\u5f20\u4e09"),
+                    "dst": _ref("\u5f20\u4e09"),
                     "predicate": "knows",
                     "polarity": "positive",  # off-set → coerced to "0"
                     "ended": "yes",  # non-bool → False
-                    "quote": "和张三确认了评审结论",
+                    "quote": "\u548c\u5f20\u4e09\u786e\u8ba4\u4e86\u8bc4\u5ba1\u7ed3\u8bba",
                     "confidence": 0.9,
                 },
                 {
-                    "src": _ref("张三"),
-                    "dst": _ref("张三"),
+                    "src": _ref("\u5f20\u4e09"),
+                    "dst": _ref("\u5f20\u4e09"),
                     "predicate": "knows",
                     "polarity": "-",
                     "ended": True,
-                    "quote": "和张三确认了评审结论",
+                    "quote": "\u548c\u5f20\u4e09\u786e\u8ba4\u4e86\u8bc4\u5ba1\u7ed3\u8bba",
                     "confidence": 0.9,
                 },
             ],
@@ -464,9 +479,9 @@ def test_entity_ended_defaults_false(ac_root, fake_llm) -> None:
         _payload(
             entities=[
                 {
-                    "new_entity": "张三",
+                    "new_entity": "\u5f20\u4e09",
                     "kind": "person",
-                    "quote": "和张三确认了评审结论",
+                    "quote": "\u548c\u5f20\u4e09\u786e\u8ba4\u4e86\u8bc4\u5ba1\u7ed3\u8bba",
                     "confidence": 0.9,
                 }
             ],

@@ -1,4 +1,4 @@
-"""Tests for parser_ticks telemetry DAO (per-app parser hit/miss/fallback埋点)."""
+"""Tests for parser telemetry persistence."""
 
 from __future__ import annotations
 

@@ -18,87 +18,90 @@ class ChatMessageBlock(BaseModel):
     ``exclude_none``-style consumers).
     """
 
-    type: Literal["text", "tool_use", "tool_result", "thinking"] = Field(description="块类型")
-    text: str | None = Field(default=None, description="文本块的文本内容（type=text）")
+    type: Literal["text", "tool_use", "tool_result", "thinking"] = Field(
+        description="Content block type"
+    )
+    text: str | None = Field(default=None, description="Text content when type=text")
     thinking: str | None = Field(
         default=None,
         description=(
-            "模型 extended thinking 的文本内容（type=thinking）。"
-            "Anthropic SDK 持久化该字段，重放对话时必须保留以满足签名校验。"
+            "Extended-thinking content when type=thinking. The Anthropic SDK persists "
+            "this field, and replay must retain it for signature validation."
         ),
     )
     name: str | None = Field(
         default=None,
-        description="工具名（type=tool_use / tool_result）",
+        description="Tool name when type=tool_use or type=tool_result",
     )
     input: dict[str, Any] | None = Field(
         default=None,
-        description="工具调用入参（type=tool_use）",
+        description="Tool arguments when type=tool_use",
     )
     content: str | None = Field(
         default=None,
-        description="工具调用结果字符串（type=tool_result，daemon 已序列化好）",
+        description="Daemon-serialized tool result when type=tool_result",
     )
     tool_use_id: str | None = Field(
         default=None,
-        description="关联 tool_use 块的 id（type=tool_result）",
+        description="ID of the associated tool_use block when type=tool_result",
     )
 
 
 class ChatMessage(BaseModel):
-    role: str = Field(description="消息角色：system/user/assistant")
+    role: str = Field(description="Message role: system, user, or assistant")
     content: str | None = Field(
         default=None,
         description=(
-            "消息内容的纯文本投影 —— 所有 text 块拼接而成。Tool 调用结构化信息见 ``blocks``。"
+            "Plain-text projection formed by concatenating text blocks. Structured tool "
+            "call data is available in ``blocks``."
         ),
     )
     blocks: list[ChatMessageBlock] | None = Field(
         default=None,
         description=(
-            "按时序排列的内容块（text / thinking / tool_use / tool_result）。"
-            "支持的客户端用它复刻 agent 一轮里 text↔tool 的交错时序；"
-            "不支持的客户端仍可以只读 ``content`` 拿到纯文本投影。"
+            "Content blocks in chronological order: text, thinking, tool_use, and "
+            "tool_result. Capable clients can preserve interleaved text and tool events; "
+            "other clients may read the plain-text ``content`` projection."
         ),
     )
 
 
 class ChatSessionInfo(BaseModel):
-    id: str = Field(description="会话 ID（8 位短 UUID）")
-    created_at: str = Field(description="创建时间 ISO8601")
-    updated_at: str = Field(description="更新时间 ISO8601")
-    turn_count: int = Field(description="对话轮次（user 消息数）")
-    archived: bool = Field(default=False, description="是否已归档")
+    id: str = Field(description="Eight-character session UUID")
+    created_at: str = Field(description="Creation time in ISO 8601 format")
+    updated_at: str = Field(description="Last update time in ISO 8601 format")
+    turn_count: int = Field(description="Conversation turn count, measured by user messages")
+    archived: bool = Field(default=False, description="Whether the session is archived")
     title: str | None = Field(
         default=None,
         description=(
-            "LLM 生成的短标题（≤24 字），首轮 assistant 回复后异步生成并落盘。"
-            "客户端侧边栏应优先使用此字段；未生成或失败时为 null。"
+            "Short LLM-generated title produced after the first assistant response. "
+            "Clients should prefer it in sidebars; it is null when unavailable."
         ),
     )
     preview: str | None = Field(
         default=None,
         description=(
-            "首条 user 消息截断后的预览（≤80 字），用于侧边栏 fallback；"
-            "空会话为 null。优先级低于 ``title``。"
+            "Truncated preview of the first user message for sidebar fallback. It is null "
+            "for an empty session and has lower priority than ``title``."
         ),
     )
 
 
 class CreateSessionResponse(BaseModel):
-    session: ChatSessionInfo = Field(description="会话信息")
+    session: ChatSessionInfo = Field(description="Session metadata")
 
 
 # ─── Messages ──────────────────────────────────────────────────────────────
 
 
 class SendMessageRequest(BaseModel):
-    content: str = Field(..., description="用户消息内容")
+    content: str = Field(..., description="User message content")
 
 
 class ChatSessionDetail(BaseModel):
-    session: ChatSessionInfo = Field(description="会话信息")
-    messages: list[ChatMessage] = Field(description="消息列表")
+    session: ChatSessionInfo = Field(description="Session metadata")
+    messages: list[ChatMessage] = Field(description="Messages")
 
 
 # ─── SSE events (POST /chat/sessions/{id}/messages) ────────────────────────
@@ -110,37 +113,37 @@ class ChatSessionDetail(BaseModel):
 
 
 class SSEReplyEvent(BaseModel):
-    type: Literal["reply"] = Field(description="事件类型常量")
-    content: str = Field(description="增量 token 文本片段")
+    type: Literal["reply"] = Field(description="Event type constant")
+    content: str = Field(description="Incremental token text")
 
 
 class SSEReasoningEvent(BaseModel):
-    type: Literal["reasoning"] = Field(description="事件类型常量")
-    content: str = Field(description="增量 thinking / 推理片段（extended thinking）")
+    type: Literal["reasoning"] = Field(description="Event type constant")
+    content: str = Field(description="Incremental extended-thinking text")
 
 
 class SSEToolCallEvent(BaseModel):
-    type: Literal["tool_call"] = Field(description="事件类型常量")
-    name: str = Field(description="工具调用名称")
-    arguments: dict = Field(description="工具调用参数")
+    type: Literal["tool_call"] = Field(description="Event type constant")
+    name: str = Field(description="Tool name")
+    arguments: dict = Field(description="Tool arguments")
 
 
 class SSEToolResultEvent(BaseModel):
-    type: Literal["tool_result"] = Field(description="事件类型常量")
-    name: str = Field(description="工具调用名称")
-    content: str = Field(description="工具调用结果字符串")
+    type: Literal["tool_result"] = Field(description="Event type constant")
+    name: str = Field(description="Tool name")
+    content: str = Field(description="Tool result text")
 
 
 class SSEErrorEvent(BaseModel):
-    type: Literal["error"] = Field(description="事件类型常量")
-    message: str = Field(description="错误描述")
+    type: Literal["error"] = Field(description="Event type constant")
+    message: str = Field(description="Error description")
 
 
 class SSEDoneEvent(BaseModel):
-    type: Literal["done"] = Field(description="事件类型常量；表示本轮 SSE 正常完成")
+    type: Literal["done"] = Field(description="Event type constant for a completed SSE turn")
     ttft_ms: float | None = Field(
         default=None,
-        description="本轮首 token 到达耗时（毫秒，time-to-first-token）；无 token 流出时为 null",
+        description="Time to first token in milliseconds; null when no token was emitted",
     )
 
 

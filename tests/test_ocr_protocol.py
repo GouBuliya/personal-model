@@ -63,7 +63,7 @@ class TestRequest:
 
 class TestResponse:
     def test_round_trip(self) -> None:
-        result = (["你好", "world"], [[1, 2, 3, 4], [5, 6, 7, 8]], [0.9, 0.8])
+        result = (["\u4f60\u597d", "world"], [[1, 2, 3, 4], [5, 6, 7, 8]], [0.9, 0.8])
         decoded = p.decode_response(p.encode_response(result))
         assert decoded == result
 

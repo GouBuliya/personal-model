@@ -1,32 +1,4 @@
-"""Tree-chain delivery — the §3.4 retrieval unit (memory-rebuild spec).
-
-Atoms are the SCORING unit; chains are the DELIVERY unit. After the six-head
-RRF picks anchors (``fts.search_associative``), this module pulls each anchor's
-path back to USER through the skeleton and merges the paths into one small
-USER-rooted subtree:
-
-- **Beam search** (``chain_to_user``): from an anchor identity, walk ACTIVE
-  ``relation_edges`` toward ``self``, keeping the top-``beam`` partial paths
-  per depth. A path's score is its **bottleneck strength** — the weakest hop's
-  ``observations`` (a chain is only as trustworthy as its weakest evidence).
-- **Prefix merge** (``merge_chains``): chains share their root end, so they
-  fold into a subtree — the shared ``USER →knows→ 张伟`` prefix renders once.
-- **Path as narrative** (``render_delivery``): each hop carries predicate,
-  label, strength and validity; each anchor carries its RECEIPT POINTERS
-  (entry id + path — the §2.1 progressive-disclosure handle: the consumer
-  drills event md → AX text → screenshot on demand, never inlined).
-- **Over budget → compress, never cut** (§3.4): rendering degrades through
-  levels (drop annotations → drop tree indentation → names only); a chain is
-  never dropped to fit — losing the path to USER is losing the memory's
-  provenance.
-- **Read is reinforcement** (§3.3): every edge a delivered chain walked gets
-  ``recall_count += 1`` (``relation_edges.bump_recall``); the entry side
-  already counts via ``entry_retrieval_stats``.
-
-An anchor with NO path to USER is delivered as an honest ORPHAN (flagged, not
-fabricated) — §1.5's invariants make that rare; the flag is how the integrity
-check sees it from the read side.
-"""
+"Relation-chain delivery with receipt pointers."
 
 from __future__ import annotations
 
@@ -215,8 +187,8 @@ def pull_chains(
 
 
 def _hop_text(hop: Hop, *, annotated: bool) -> str:
-    label = f"（{hop.label}）" if hop.label else ""
-    note = f"  [强度 {hop.observations}·自 {hop.valid_from[:10]}]" if annotated else ""
+    label = f" ({hop.label})" if hop.label else ""
+    note = f"  [strength {hop.observations} · since {hop.valid_from[:10]}]" if annotated else ""
     return f"─{hop.predicate}{label}→ {hop.dst}{note}"
 
 
@@ -237,9 +209,9 @@ def render_delivery(delivery: Delivery, *, budget_chars: int = 2000) -> str:
     — NEVER by dropping a chain. Degrade levels: full → no annotations → flat
     one-line chains → identities only. Receipts always survive (they are the
     §2.1 disclosure handles)."""
-    receipts = "收据: " + " ".join(f"⟨{eid}:{path}⟩" for eid, path in delivery.receipts)
+    receipts = "Receipts: " + " ".join(f"⟨{eid}:{path}⟩" for eid, path in delivery.receipts)
     orphans = (
-        "孤儿锚(无链到 USER): " + ", ".join(delivery.orphan_anchors)
+        "Orphan anchors without a chain to USER: " + ", ".join(delivery.orphan_anchors)
         if delivery.orphan_anchors
         else ""
     )

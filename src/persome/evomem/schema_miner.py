@@ -1,9 +1,4 @@
-"""System2 Schema Miner —— 从关联事实归纳预测性心智模型（teardown §6）。
-
-对齐 Hy-Memory 的 ``Abstractor.abstract_schema``：产出
-``{central_proposition, supporting_summary, expected_inferences[], confidence}``，
-写入 L6_SCHEMA。LLM 走依赖注入的 ``llm_call``（OpenAI 形返回），测试注入 fake。
-"""
+"LLM adapter for predictive schema mining."
 
 from __future__ import annotations
 
@@ -46,11 +41,11 @@ class SchemaMiner:
         self._prompt = prompt if prompt is not None else _load_prompt()
 
     def mine_schema(self, facts: list[str]) -> SchemaResult:
-        """从一组关联事实归纳 schema；解析失败时 ``success=False``。"""
+        """Infer a schema from related facts and fail cleanly on invalid output."""
         messages = self._build_messages(facts)
         parsed = parse_json_object(_content_of(self._llm_call(messages)))
         if parsed is None:
-            return SchemaResult(success=False, error="无法解析 schema JSON")
+            return SchemaResult(success=False, error="could not parse schema JSON")
         inferences = parsed.get("expected_inferences") or []
         if not isinstance(inferences, list):
             inferences = []
@@ -63,8 +58,11 @@ class SchemaMiner:
         )
 
     def _build_messages(self, facts: list[str]) -> list[dict]:
-        fact_lines = "\n".join(f"- {f}" for f in facts) or "（无事实）"
-        user = f"## 关联事实\n{fact_lines}\n\n请按系统提示归纳 schema 并输出 JSON。"
+        fact_lines = "\n".join(f"- {f}" for f in facts) or "(no facts)"
+        user = (
+            f"## Related facts\n{fact_lines}\n\n"
+            "Infer a schema and return the JSON object defined by the system prompt."
+        )
         return [
             {"role": "system", "content": self._prompt},
             {"role": "user", "content": user},

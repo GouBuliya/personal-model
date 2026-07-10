@@ -1,35 +1,4 @@
-"""as-of-T node resolution — the §1.4 evomem half of the bitemporal contract.
-
-Memory-rebuild spec §1.4: the relation graph (横轴) and evomem (纵轴) are two
-orthogonal layers joined at a narrow interface — **edges bind to a stable
-identity, never to a node version**; "what state was that identity in at time
-T" is evomem's question. `relation_edges.edges_as_of` already answers the
-edge half (validity window on edges); this module answers the node half:
-given an identity's `file_name` (the canonical route the §4.3 identity funnel
-resolves to, e.g. ``person-张伟.md``) and a timestamp T, return the node
-versions that were live at T.
-
-Two clocks, composed persistent-structure style (主席树语义: append-only,
-any T replayable):
-
-1. **Transaction clock (`gmt_created` + supersede pointers)** — the replay
-   axis. A node was the live version at T iff it was created at or before T
-   and not yet superseded at T (its earliest successor, if any, was created
-   after T). The version chain IS the persistence structure: nothing is ever
-   deleted, so walking `gmt_created` against successors reconstructs the head
-   set at any past T exactly.
-2. **Validity clock (`valid_from`/`valid_until`)** — the world-time filter,
-   applied when present: a node whose validity window excludes T is not an
-   answer to "at T" even if it was already written ("他三月的老板" wants the
-   assertion VALID in March, not merely recorded by March). Nodes carrying no
-   validity fields pass — most durable facts are un-windowed, and refusing
-   them would empty every answer (fail-open, the same discipline as the
-   retrieval-side time slot).
-
-Read-only over ``evo_nodes``; never mutates. Timezone mixing between stored
-values and the caller's T is tolerated (mixed compare falls back to naive) —
-an as-of question must never explode on a legacy naive timestamp.
-"""
+"Bitemporal as-of resolution for evolutionary memory nodes."
 
 from __future__ import annotations
 

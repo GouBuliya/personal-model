@@ -348,10 +348,6 @@ def _seconds_until_next_local(hour: int, minute: int) -> float:
 
 
 def _reproject_entries_from_evomem() -> tuple[int, int]:
-    """从 evo_nodes 重投影 entries/entry_metadata 检索层（reader↔重建保鲜，spec 2026-07-04）。
-    直接调 ``entries._rebuild_from_evo_nodes``（rebuild-index 的 evomem 混合重建腿），不依赖
-    write_authority——delta 的 add_direct 只写 evo_nodes，此函数把重建投进检索读的 entries。
-    幂等（DELETE+重投）。返回 (files, entries)。"""
     from ..store import entries as entries_mod
 
     with fts.cursor() as conn:
@@ -374,21 +370,21 @@ async def run_daily_safety_net(cfg: Config, manager: SessionManager) -> None:
                 # chance to finish before the catch-up pass would re-process it.
                 await asyncio.sleep(2)
                 await asyncio.to_thread(writer_agent.run, cfg)
-            # ② reader↔重建保鲜（apply_enabled=True，delta 铸点已上线，spec 2026-07-04 §reader-cutover）：
-            # add_direct 只写 evo_nodes、不投影 entries（inversion 只投 choke-point 动词），classifier
-            # 又已退役 → 检索读的 entries 会随新写陈旧。每日从 evo_nodes 全量重投影 entries/entry_metadata
-            # （_rebuild_from_evo_nodes，已测的 rebuild-index 混合重建腿），让检索看到重建（≤1 天 lag）。
-            # fail-open，永不杀 tick。
+
             if getattr(getattr(cfg, "memory_delta", None), "apply_enabled", False):
                 try:
                     files, ents = await asyncio.to_thread(_reproject_entries_from_evomem)
-                    logger.info("daily 检索投影 evo_nodes→entries: %d 文件 / %d 条目", files, ents)
+                    logger.info(
+                        "daily retrieval projection evo_nodes->entries: %d files / %d entries",
+                        files,
+                        ents,
+                    )
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("daily 检索投影重建失败: %s", exc)
+                    logger.warning("daily retrieval projection rebuild failed: %s", exc)
             # Semantic-contradiction self-check (memory-rebuild spec §4.4,
             # gated OFF by default — nightly LLM cost): pair same-file live
             # facts, LLM-judge a bounded batch, MARK contradictions
-            # (entry_metadata.conflicted → recall's ⚠(冲突未裁决) + the
+
             # memory_contradictions adjudication queue). Never auto-supersedes.
             # Side channel — never kills the tick.
             if cfg.evomem.contradiction_check_enabled:
@@ -411,7 +407,7 @@ async def run_daily_safety_net(cfg: Config, manager: SessionManager) -> None:
             # 2026-07-03-text-axis-graded-forgetting-design.md; gated OFF by
             # default — lossy transform + nightly LLM cost): distill old,
             # never-retrieved durable fact clusters into coarser summaries
-            # (细节链→粗摘要→一行事实) via the existing choke-point verbs.
+
             # Side channel — never kills the tick.
             if cfg.memory_decay.enabled:
                 try:
@@ -431,8 +427,7 @@ async def run_daily_safety_net(cfg: Config, manager: SessionManager) -> None:
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("daily memory decay failed: %s", exc)
-            # §1.5-2 图侧孤儿收敛：delta apply 过度生产的一次性点（长不出实质边）到期遗忘。
-            # delta apply 的收敛腿——side channel，绝不杀 tick。
+
             if getattr(getattr(cfg, "orphan_reaper", None), "enabled", False):
                 try:
 

@@ -46,7 +46,7 @@ def _seed_person(mem, name, when=None):
             [
                 PersonEvent(
                     name=name,
-                    summary="出现过",
+                    summary="\u51fa\u73b0\u8fc7",
                     occurred_at=when or datetime(2026, 6, 20, tzinfo=UTC),
                     confidence=0.9,
                 )
@@ -61,14 +61,14 @@ def _persons(mem):
 
 def test_retype_renames_across_stores_and_leaves_roster(ac_root):
     mem = _mem()
-    _seed_person(mem, "研发群")
+    _seed_person(mem, "\u7814\u53d1\u7fa4")
     md = paths.memory_dir()
     md.mkdir(parents=True, exist_ok=True)
     with fts.cursor() as conn:
-        old = retype._find_entity_file(conn, "研发群")
+        old = retype._find_entity_file(conn, "\u7814\u53d1\u7fa4")
     assert old is not None
     (md / old).write_text("# receipts")
-    res = retype.retype_entity("研发群", "org")
+    res = retype.retype_entity("\u7814\u53d1\u7fa4", "org")
     assert res.new_file.startswith("org-") and res.evo_rows > 0 and res.md_renamed
     with fts.cursor() as conn:
         rows = conn.execute(
@@ -76,22 +76,22 @@ def test_retype_renames_across_stores_and_leaves_roster(ac_root):
         ).fetchone()[0]
     assert rows == 0
     # the kind SSOT is the prefix: the person roster no longer lists it
-    assert "研发群" not in _persons(mem)
+    assert "\u7814\u53d1\u7fa4" not in _persons(mem)
 
 
 def test_retype_rejects_unknown_kind_and_missing_entity(ac_root):
     mem = _mem()
-    _seed_person(mem, "张伟")
+    _seed_person(mem, "\u5f20\u4f1f")
     with pytest.raises(ValueError, match="kind"):
-        retype.retype_entity("张伟", "group_chat")
+        retype.retype_entity("\u5f20\u4f1f", "group_chat")
     with pytest.raises(ValueError, match="no person entity"):
-        retype.retype_entity("不存在", "org")
+        retype.retype_entity("\u4e0d\u5b58\u5728", "org")
 
 
 def test_shadow_entity_retires_without_deleting(ac_root):
     mem = _mem()
-    _seed_person(mem, "客户")
-    res = retype.shadow_entity("客户")
+    _seed_person(mem, "\u5ba2\u6237")
+    res = retype.shadow_entity("\u5ba2\u6237")
     assert res.shadowed > 0
     with fts.cursor() as conn:
         left = conn.execute(
@@ -102,17 +102,19 @@ def test_shadow_entity_retires_without_deleting(ac_root):
             "SELECT COUNT(*) FROM evo_nodes WHERE file_name = ?", (res.old_file,)
         ).fetchone()[0]
     assert left == 0 and total > 0  # retired, never deleted
-    assert "客户" not in _persons(mem)
+    assert "\u5ba2\u6237" not in _persons(mem)
 
 
 def test_merge_alias_folds_and_shadows_duplicate(ac_root):
     mem = _mem()
-    _seed_person(mem, "沈砚舟")
-    _seed_person(mem, "singularity-沈砚舟")
+    _seed_person(mem, "\u6c88\u781a\u821f")
+    _seed_person(mem, "singularity-\u6c88\u781a\u821f")
     cfg = SimpleNamespace(person_graph_enabled=True)
-    res = retype.merge_alias("singularity-沈砚舟", "沈砚舟", cfg, memory=mem)
+    res = retype.merge_alias(
+        "singularity-\u6c88\u781a\u821f", "\u6c88\u781a\u821f", cfg, memory=mem
+    )
     assert res.alias_folded and res.shadowed > 0
     pg = PersonGraph(mem, cfg=SimpleNamespace())
     people = {p.canonical: p for p in pg.list_persons()}
-    assert "singularity-沈砚舟" not in people
-    assert "singularity-沈砚舟" in people["沈砚舟"].aliases
+    assert "singularity-\u6c88\u781a\u821f" not in people
+    assert "singularity-\u6c88\u781a\u821f" in people["\u6c88\u781a\u821f"].aliases

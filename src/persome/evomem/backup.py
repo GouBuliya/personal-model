@@ -1,37 +1,4 @@
-"""每日快照 + 保留策略 + 坏快照报警（SSOT 切换设计稿 §3.2，PR-1 生存性设施）。
-
-Creates and verifies bounded SQLite snapshots.
-
-诚实账本（§3.1，原话不许粉饰）：现行架构的王牌是「DB 是可弃投影，rebuild_index 从
-markdown 重放零损失自愈」。evo_nodes 升格 SSOT 后这张王牌没了——DB 损坏 = 数据丢失。
-本模块（连同 WAL checkpoint 纪律与 ``evomem/integrity.py`` 自检）是**对冲，不是等价
-替代**：快照只能把丢失窗口压到一天以内，不能把代价变回零。
-
-机制：
-
-- 每日快照：``VACUUM INTO backup/evo-YYYYMMDD.db``（SQLite 原生在线一致性快照，
-  不锁写）。挂在 daemon 既有的 23:55 daily-safety-net tick 末尾、**紧跟**已有的
-  ``PRAGMA wal_checkpoint(TRUNCATE)`` 之后——checkpoint 先行保证快照取到的主库是
-  新的（§3.2 顺序）。
-- 快照验证：先落到 ``.tmp``，对快照文件跑一遍 §3.3 自检；通过才原子 promote 到
-  最终名（同日重跑 = 原子替换）。**坏快照立即写入结构化错误日志并丢弃 tmp，
-  绝不静默覆盖已有的好快照。**
-- 保留策略：近 ``snapshot_keep_daily`` 日逐日 + 近 ``snapshot_keep_weekly`` 周逐周
-  （每周留周一的），过期自动清理。未来日期（时钟回拨）防御性保留。
-
-变更前快照（设计稿 §3.2，issue #489 已闭环）：任何 schema migration / backfill 在改
-库前**强制**一次验证式 ``VACUUM INTO`` 变更前快照，由框架层兜底而非靠人记得；快照
-失败一律 fail-fast 中止，绝不在无救生艇状态下做破坏性变更：
-
-- evo_nodes schema 迁移（``store.py:_migrate`` 的 ``ALTER TABLE``）：确有缺列要补时
-  强制 ``create_snapshot(structural_only=True)`` 后才改 schema，失败 →
-  ``store.MigrationSnapshotError``，schema 原样不动。
-- 一次性数据搬运（``backfill.run_backfill`` / ``restore.import_from_markdown``）：
-  写 evo_nodes 前同样强制该快照，失败即 ``raise`` 中止。
-
-``structural_only`` 让这条变更前快照只把结构性违例（§3.3 1–5 类）当失败、对 alert-only
-的投影对账类（check 6）放行——见 ``create_snapshot`` docstring。
-"""
+"Validated SQLite snapshots for canonical evomem state."
 
 from __future__ import annotations
 
@@ -64,19 +31,6 @@ def create_snapshot(
     now: datetime | None = None,
     structural_only: bool = False,
 ) -> Path | None:
-    """Take today's verified snapshot. Returns its path, or ``None`` on failure.
-
-    Sequence: ``VACUUM INTO`` a ``.tmp`` sibling → run the §3.3 check suite
-    against the tmp file → atomically promote (``rename``) over today's name.
-    A snapshot that fails verification is alerted (``integrity_alert``) and
-    discarded — an existing good snapshot is never overwritten by a bad one.
-    Never raises: any failure alerts and returns ``None`` so the daily tick
-    survives.
-
-    ``structural_only``（PR-2 变更前快照用）：只把**结构性**违例（§3.3 1–5 类）当
-    verification 失败；alert-only 的投影对账类（check 6）照常报警但不否决快照——
-    投影坏 = 可自愈侧，而 backfill 本身就是修齐投影对账的动作，若被它否决则
-    幂等重跑永远无法自愈。每日 tick 保持默认 ``False``（任何违例都否决）。"""
     from ..store import fts  # local import keeps module import light
 
     dest = snapshot_path(_local_today(now))

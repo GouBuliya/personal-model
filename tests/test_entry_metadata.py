@@ -1,16 +1,4 @@
-"""Meta-cognition layer (Hy-Memory migration): confidence / conflicted / occurred_at.
-
-Three things are pinned here:
-
-1. **Round-trip**: the three fields ride heading colon-tags (markdown SSOT) and
-   land in the ``entry_metadata`` derived table on the incremental write path, and
-   are re-parsed identically.
-2. **Invariant**: ``entry_metadata`` built incrementally equals a fresh
-   ``rebuild_index`` row-for-row — the load-bearing增量 == rebuild guarantee.
-   A row exists IFF the entry carries a non-default tag (all-default → no row).
-3. **Recall projection**: the production MCP search returns confidence and
-   conflict fields as structured metadata.
-"""
+"Tests for test entry metadata."
 
 from __future__ import annotations
 
@@ -141,9 +129,7 @@ def test_production_recall_returns_confidence_and_conflict_metadata(ac_root):
 
 
 def test_occurred_at_with_space_is_normalized_and_round_trips(ac_root):
-    # issue #434：空格分隔的 ISO 值（LLM 完全可能产出 "2026-06-09 14:30:00"）不能裸写进
-    # heading tag——会被按空白切断，增量存全值、rebuild 只剩日期。首个空格归一为 T 后整值
-    # 无空白，能被 heading 解析完整拿回，增量≡rebuild 不变量保持。
+
     with fts.cursor() as conn:
         entries_mod.create_file(conn, name="project-w.md", description="w", tags=["t"])
         eid = entries_mod.append_entry(
@@ -161,8 +147,7 @@ def test_occurred_at_with_space_is_normalized_and_round_trips(ac_root):
 
 
 def test_occurred_at_with_residual_whitespace_is_dropped(ac_root):
-    # 归一首空格后仍含空白（如带时区后缀 "... UTC"）→ 整条丢弃，等同未标注，绝不写出
-    # 无法 round-trip 的 tag。
+
     with fts.cursor() as conn:
         entries_mod.create_file(conn, name="project-d.md", description="d", tags=["t"])
         eid = entries_mod.append_entry(

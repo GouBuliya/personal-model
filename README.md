@@ -109,6 +109,11 @@ An LLM key is therefore optional for collection and BM25 access, but required
 for real semantic modeling. `PERSOME_LLM_MOCK=1` exists only for deterministic
 tests and produces synthetic verification output, not a real person's model.
 
+Runtime prompts and repository documentation are written in English, but
+generated memory is not forced into English. Modeling stages preserve or follow
+the dominant language of their source evidence, so a multilingual user's model
+reflects the language of that user's captured work.
+
 The optional Chat surface is model-focused by default. Shell, arbitrary
 filesystem, and Web tools require the explicit
 `[chat] unsafe_local_tools_enabled = true` opt-in. Web search/page fetch also

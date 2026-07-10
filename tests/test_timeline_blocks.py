@@ -63,10 +63,10 @@ def _write_capture(ts: datetime, *, value: str, role: str = "AXTextField") -> Pa
 
 def _seed_window(start: datetime) -> tuple[datetime, datetime]:
     """Plant two captures inside a 1-min window starting at ``start``."""
-    _write_capture(start + timedelta(seconds=10), value="想想晚上吃啥")
+    _write_capture(start + timedelta(seconds=10), value="\u60f3\u60f3\u665a\u4e0a\u5403\u5565")
     _write_capture(
         start + timedelta(seconds=40),
-        value="好啊，明天下午5点聊一下",
+        value="\u597d\u554a\uff0c\u660e\u5929\u4e0b\u53485\u70b9\u804a\u4e00\u4e0b",
     )
     return start, start + timedelta(minutes=1)
 
@@ -80,9 +80,9 @@ _HAPPY_PAYLOAD = json.dumps(
     {
         "entries": [
             (
-                '[WeChat] Chat with Test Contact: user replied "好啊，明天下午5点聊一下",'
+                '[WeChat] Chat with Test Contact: user replied "\u597d\u554a\uff0c\u660e\u5929\u4e0b\u53485\u70b9\u804a\u4e00\u4e0b",'
                 " accepting the proposed time. Involving: Test Contact."
-                " Helpful intent: meeting with Test Contact at 明天下午5点."
+                " Helpful intent: meeting with Test Contact at \u660e\u5929\u4e0b\u53485\u70b9."
             )
         ],
     },
@@ -100,9 +100,9 @@ def test_produce_block_round_trips_entries(ac_root: Path, fake_llm) -> None:
 
     assert block is not None
     assert block.entries == [
-        '[WeChat] Chat with Test Contact: user replied "好啊，明天下午5点聊一下",'
+        '[WeChat] Chat with Test Contact: user replied "\u597d\u554a\uff0c\u660e\u5929\u4e0b\u53485\u70b9\u804a\u4e00\u4e0b",'
         " accepting the proposed time. Involving: Test Contact."
-        " Helpful intent: meeting with Test Contact at 明天下午5点."
+        " Helpful intent: meeting with Test Contact at \u660e\u5929\u4e0b\u53485\u70b9."
     ]
 
 
@@ -153,7 +153,7 @@ def test_produce_block_records_calls_with_json_mode(ac_root: Path, fake_llm) -> 
     # the cached system prompt (list-of-blocks with cache_control), messages[1]
     # is the per-call user payload carrying the rendered events_text.
     user_content = call["messages"][1]["content"]
-    assert "好啊，明天下午5点聊一下" in user_content
+    assert "\u597d\u554a\uff0c\u660e\u5929\u4e0b\u53485\u70b9\u804a\u4e00\u4e0b" in user_content
     system_block = call["messages"][0]["content"][0]
     assert system_block["cache_control"] == {"type": "ephemeral"}
 
@@ -172,12 +172,17 @@ def _lark_capture(ts: datetime | None = None) -> dict:
             {
                 "role": "AXGroup",
                 "domClassList": ["message-info-name"],
-                "children": [{"role": "AXStaticText", "value": "测试联系人"}],
+                "children": [{"role": "AXStaticText", "value": "\u6d4b\u8bd5\u8054\u7cfb\u4eba"}],
             },
             {
                 "role": "AXGroup",
                 "domClassList": ["message-content"],
-                "children": [{"role": "AXStaticText", "value": "运行时状态已更新"}],
+                "children": [
+                    {
+                        "role": "AXStaticText",
+                        "value": "\u8fd0\u884c\u65f6\u72b6\u6001\u5df2\u66f4\u65b0",
+                    }
+                ],
             },
         ],
     }
@@ -188,7 +193,7 @@ def _lark_capture(ts: datetime | None = None) -> dict:
             {
                 "role": "AXGroup",
                 "domClassList": ["message-content"],
-                "children": [{"role": "AXStaticText", "value": "收到"}],
+                "children": [{"role": "AXStaticText", "value": "\u6536\u5230"}],
             }
         ],
     }
@@ -196,17 +201,20 @@ def _lark_capture(ts: datetime | None = None) -> dict:
         "role": "AXGroup",
         "domClassList": ["a11y_feed_card_item"],
         "children": [
-            {"role": "AXStaticText", "value": "会议"},
+            {"role": "AXStaticText", "value": "\u4f1a\u8bae"},
             {"role": "AXStaticText", "value": "20:00 - 20:30"},
-            {"role": "AXStaticText", "value": "今晚运行时对齐会议"},
+            {
+                "role": "AXStaticText",
+                "value": "\u4eca\u665a\u8fd0\u884c\u65f6\u5bf9\u9f50\u4f1a\u8bae",
+            },
         ],
     }
     return {
         "timestamp": (ts or datetime(2026, 6, 2, 12, 20, tzinfo=_TZ)).isoformat(),
         "schema_version": 2,
         "window_meta": {
-            "app_name": "飞书",
-            "title": "飞书",
+            "app_name": "\u98de\u4e66",
+            "title": "\u98de\u4e66",
             "bundle_id": "com.electron.lark",
         },
         "ax_tree": {
@@ -221,7 +229,12 @@ def _lark_capture(ts: datetime | None = None) -> dict:
                                 {
                                     "role": "AXGroup",
                                     "domClassList": ["chatWindow_chatName"],
-                                    "children": [{"role": "AXStaticText", "value": "测试联系人"}],
+                                    "children": [
+                                        {
+                                            "role": "AXStaticText",
+                                            "value": "\u6d4b\u8bd5\u8054\u7cfb\u4eba",
+                                        }
+                                    ],
                                 },
                                 message_in,
                                 message_out,
@@ -269,8 +282,6 @@ def _latest_parser_tick() -> sqlite3.Row | None:
 
 
 def test_produce_block_records_parser_hit_for_feishu(ac_root: Path, fake_llm) -> None:
-    """A window with a synthetic 飞书 capture whose parser renders → one ``hit`` tick
-    attributed to bundle com.electron.lark."""
     start = datetime(2026, 6, 2, 12, 20, tzinfo=_TZ)
     _write_lark_capture(start + timedelta(seconds=20))
     fake_llm.set_default("timeline", _HAPPY_PAYLOAD)
@@ -308,13 +319,10 @@ def test_produce_block_records_fallback_for_unparsed_bundle(ac_root: Path, fake_
 def test_produce_block_records_miss_when_parser_declines(
     ac_root: Path, fake_llm, monkeypatch
 ) -> None:
-    """A 飞书 capture whose parser returns ``None`` (declines) → one ``miss``
-    tick attributed to com.electron.lark."""
     start = datetime(2026, 6, 2, 12, 40, tzinfo=_TZ)
     _write_lark_capture(start + timedelta(seconds=20))
     fake_llm.set_default("timeline", _HAPPY_PAYLOAD)
 
-    # Force the registered 飞书 parser to decline so we exercise the miss branch
     # without depending on a malformed fixture.
     from persome.parsers import feishu as feishu_mod
 
@@ -460,13 +468,15 @@ def test_focus_excerpt_roundtrip(ac_root: Path) -> None:
         entries=["[Feishu] browsed conversations"],
         apps_used=["Feishu"],
         capture_count=1,
-        focus_excerpt="温子墨: 晚上8点约一个会议",
+        focus_excerpt="\u6e29\u5b50\u58a8: \u665a\u4e0a8\u70b9\u7ea6\u4e00\u4e2a\u4f1a\u8bae",
     )
     with fts.cursor() as conn:
         timeline_store.ensure_schema(conn)
         timeline_store.insert(conn, blk)
         got = timeline_store.query_recent(conn, limit=1)[0]
-    assert got.focus_excerpt == "温子墨: 晚上8点约一个会议"
+    assert (
+        got.focus_excerpt == "\u6e29\u5b50\u58a8: \u665a\u4e0a8\u70b9\u7ea6\u4e00\u4e2a\u4f1a\u8bae"
+    )
 
 
 def test_focus_excerpt_picks_last_nonempty_and_truncates() -> None:
@@ -495,7 +505,7 @@ _FIXTURES = Path(__file__).parent / "fixtures" / "captures" / "lark"
 def test_focus_structured_roundtrip(ac_root: Path) -> None:
     """A block with ``focus_structured`` stores and reads back the raw text."""
     start = datetime(2026, 6, 2, 12, 20, tzinfo=_TZ)
-    structured = "飞书\n[收到|沈砚舟|12:20] 我超\n[收到|温子墨|11:27] 晚上8点约一个会议"
+    structured = "\u98de\u4e66\n[\u6536\u5230|\u6c88\u781a\u821f|12:20] \u6211\u8d85\n[\u6536\u5230|\u6e29\u5b50\u58a8|11:27] \u665a\u4e0a8\u70b9\u7ea6\u4e00\u4e2a\u4f1a\u8bae"
     blk = timeline_store.TimelineBlock(
         start_time=start,
         end_time=start + timedelta(minutes=1),
@@ -517,7 +527,7 @@ def test_focus_structured_roundtrip(ac_root: Path) -> None:
 
 
 def _cmux_capture(ts: datetime) -> tuple[Path, dict]:
-    chrome = "## cmux [active]\nworkspace 1/7\n有可用更新：0.64.16\n切换侧边栏"
+    chrome = "## cmux [active]\nworkspace 1/7\n\u6709\u53ef\u7528\u66f4\u65b0\uff1a0.64.16\n\u5207\u6362\u4fa7\u8fb9\u680f"
     pane = "❯ uv run pytest -k attention\n12 passed real work here"
     data = {
         "timestamp": ts.isoformat(),
@@ -537,7 +547,7 @@ def test_format_events_cmux_primary_drops_chrome() -> None:
     assert "PRIMARY:" in events_text
     assert "12 passed real work here" in events_text
     assert "workspace 1/7" not in events_text  # chrome dropped
-    assert "有可用更新" not in events_text
+    assert "\u6709\u53ef\u7528\u66f4\u65b0" not in events_text
     assert loc is not None and loc.rung == "pane"
     assert loc.confidence > 0.0
 
@@ -628,7 +638,7 @@ def test_ensure_schema_migrates_table_without_focus_structured(ac_root: Path) ->
                 "2026-06-02T12:21:05+08:00",
                 "[]",
                 "[]",
-                "Test Contact: 晚上8点约一个会议",
+                "Test Contact: \u665a\u4e0a8\u70b9\u7ea6\u4e00\u4e2a\u4f1a\u8bae",
             ),
         )
 
@@ -642,7 +652,9 @@ def test_ensure_schema_migrates_table_without_focus_structured(ac_root: Path) ->
         full = conn.execute("SELECT * FROM timeline_blocks WHERE id = 'tlb-pre-p2'").fetchone()
         block = timeline_store._row_to_block(full)
         assert block.id == "tlb-pre-p2"
-        assert block.focus_excerpt == "Test Contact: 晚上8点约一个会议"
+        assert (
+            block.focus_excerpt == "Test Contact: \u665a\u4e0a8\u70b9\u7ea6\u4e00\u4e2a\u4f1a\u8bae"
+        )
         assert block.focus_structured == ""
 
 
@@ -655,13 +667,13 @@ def test_focus_structured_renders_feishu_fixture() -> None:
     assert bundle == "com.electron.lark"
     assert outcome == "hit"
     assert reason is None
-    assert "会议" in out
-    assert "测试联系人" in out
+    assert "\u4f1a\u8bae" in out
+    assert "\u6d4b\u8bd5\u8054\u7cfb\u4eba" in out
     assert 'dir="sent"' in out  # XML message tag for an outgoing turn
     # The two-section XML layout: current thread vs other-conversation previews,
     # kept distinct so N unrelated previews don't read as one conversation. The
     # current-conversation tag names which conversation is open.
-    assert '<current_conversation name="测试联系人">' in out
+    assert '<current_conversation name="\u6d4b\u8bd5\u8054\u7cfb\u4eba">' in out
     assert "<other_conversations" in out
     assert "<preview" in out
 
@@ -681,7 +693,7 @@ def test_focus_structured_empty_for_unparsed_bundle() -> None:
 
 def test_focus_structured_empty_when_no_ax_tree() -> None:
     """A capture missing ax_tree is skipped (parser needs the tree)."""
-    data = {"window_meta": {"bundle_id": "com.electron.lark", "title": "飞书"}}
+    data = {"window_meta": {"bundle_id": "com.electron.lark", "title": "\u98de\u4e66"}}
     assert aggregator._focus_structured_with_outcome([(Path("cap.json"), data)]) == (
         "",
         None,
@@ -713,8 +725,8 @@ def _iron_capture(ts: datetime | None = None) -> dict:
     return {
         "timestamp": (ts or datetime(2026, 6, 11, 22, 0, tzinfo=_TZ)).isoformat(),
         "window_meta": {
-            "app_name": "飞书会议",
-            "title": "飞书会议",
+            "app_name": "\u98de\u4e66\u4f1a\u8bae",
+            "title": "\u98de\u4e66\u4f1a\u8bae",
             "bundle_id": "com.electron.lark.iron",
         },
         "ax_tree": {
@@ -822,9 +834,6 @@ def test_miss_reason_exception(monkeypatch, caplog) -> None:
 
 
 def test_produce_block_records_miss_for_iron_meeting_window(ac_root: Path, fake_llm) -> None:
-    """End-to-end #548: a window whose newest capture is the 飞书会议 (lark.iron)
-    window now records a ``miss`` tick attributed to com.electron.lark.iron —
-    previously an unowned ``fallback`` (the bundle had no registered parser)."""
     start = datetime(2026, 6, 11, 22, 0, tzinfo=_TZ)
     ts = start + timedelta(seconds=20)
     data = _iron_capture(ts)

@@ -97,11 +97,11 @@ CREATE TABLE IF NOT EXISTS entry_retrieval_stats (
     last_retrieved_at TEXT
 );
 
--- markdown 投影态（evomem SSOT 切换 PR-6b，write_authority="evomem" 专用）。
--- 每次反转写口成功把投影写进 live memory/ 后记录其内容 hash；daemon 的
--- manual-edit 检测用「当前文件 hash ≠ 上次投影 hash」识别手改（Q1 裁定 (b)：
--- 报警 + 提供 evomem-import-markdown 回灌，不做自动回灌）。投影写失败不更新
--- 本表（滞后 ≠ 手改，靠 markdown_projection_lag 计数器另行报警）。
+-- Markdown projection state used when evomem is authoritative.
+-- A successful live projection records its content hash. Manual-edit detection
+-- compares the current file with this hash and offers explicit import instead
+-- of automatic reconciliation. Failed projections do not update this table, so
+-- projection lag remains distinct from a manual edit.
 CREATE TABLE IF NOT EXISTS projection_state (
     file_name    TEXT PRIMARY KEY,
     content_hash TEXT NOT NULL,
@@ -150,7 +150,7 @@ def _ensure_entry_temporal(conn: sqlite3.Connection) -> None:
 # Per-entry reliability metadata: how trustworthy a memory is, whether it
 # conflicts with another belief, and when the underlying event actually
 # happened (distinct from the write-time ``timestamp``). Regular table because
-# ``entries`` is FTS5 (no ALTER TABLE) — same旁挂 pattern as ``entry_temporal``.
+
 # These columns are a pure projection of the heading colon-tags
 # ``#confidence:<level>`` / ``#conflicted`` / ``#occurred:<iso>``, rebuilt
 # wholesale by ``rebuild_index``.
@@ -405,7 +405,7 @@ def mark_superseded(conn: sqlite3.Connection, entry_id: str) -> None:
 
 _FTS5_SPECIALS = set('":*()^+-')
 
-# 轴A 匹配面 (issue #557): the FTS5 ``entries`` table indexes the ``tags`` column, so a
+
 # bare MATCH also hits classification LABELS (#intent #kind:meeting schema fact entity …).
 # Old stores can contain label-only rows that should not be recalled as content.
 # Default False restricts matching
@@ -419,26 +419,6 @@ def set_tags_matchable(enabled: bool) -> None:
 
 
 def _safe_fts_query(query: str, *, restrict_to_content: bool = False) -> str:
-    """Turn a (possibly LLM- or question-shaped) query into a safe FTS5 MATCH expr.
-
-    FTS5 treats ``col:value``, quotes, parens, etc. as syntax. An LLM that
-    writes ``"interview 20:00"`` otherwise crashes the search. We turn special
-    characters into token boundaries, wrap every surviving token as a quoted
-    phrase, and join them with **OR** so ``bm25()`` ranking decides relevance
-    (best-matching entries first), instead of requiring EVERY token to appear.
-    Boundaries matter: deleting punctuation would incorrectly glue ``18:00``
-    into ``1800`` and ``用户说"好"`` into ``用户说好``.
-
-    Why OR, not the old implicit-AND: AND demands every token be present, so a
-    natural-language query ("What breed is my dog Mochi?") returns NOTHING when
-    its filler words ("What", "breed", "is") are absent from the stored text —
-    even though the entry that names the dog's breed is right there. Measured on
-    LongMemEval, implicit-AND retrieved the evidence session for only ~8.5% of
-    questions; OR + bm25 ranking preserves useful partial matches.
-    Single-term queries are unaffected (one token → no OR). ``search`` already
-    ``ORDER BY bm25(entries)``, so OR does not flood results — it widens the
-    candidate set and lets rank do the selection.
-    """
     tokens: list[str] = []
     for raw in query.split():
         cleaned = "".join(" " if c in _FTS5_SPECIALS else c for c in raw)
@@ -447,7 +427,6 @@ def _safe_fts_query(query: str, *, restrict_to_content: bool = False) -> str:
         return '""'
     expr = " OR ".join(tokens)
     if restrict_to_content and not _MATCH["tags_matchable"]:
-        # 轴A: match CONTENT only — classification labels (the ``entries.tags``
         # column) stop being matchable text, so a query token like "meeting"/
         # "intent" can no longer recall a candidate row by its label (#557).
         # ONLY the entries table has a content column — captures_fts callers
@@ -615,7 +594,6 @@ def set_pool_weights(*, slot: float, relation: float) -> None:
     _POOL_WEIGHTS["relation"] = max(0.0, float(relation))
 
 
-# ─── 轴B recency decay (issue #557) ────────────────────────────────────────
 # The RRF fusion is rank-only — the text backbone (BM25 + dense) is time-BLIND, so a
 # 3-week-old "we ship 0.3.9" fact outranks yesterday's "we ship 0.4.x" whenever it
 # matches the query slightly better, and a recap agent reports the stale one as current.
@@ -699,18 +677,6 @@ def hybrid_enabled() -> bool:
 
 
 def wire_read_path(cfg: Any) -> None:
-    """Wire EVERY module-level read gate from config — the one entrance for the
-    满血版 read path (#557 design principle).
-
-    DESIGN PRINCIPLE: an MCP-side caller must get the FULL-POWER memory — the
-    same hybrid dense ⊕ associative heads ⊕ recency decay ⊕ content-only match
-    stack — no matter which process hosts the server. These gates default to
-    the conservative/legacy values at import time, so any spawn path that skips
-    this call serves a silently DEGRADED memory (the standalone ``persome mcp``
-    stdio server ran BM25-only for exactly this reason). Every read-path
-    entrance (daemon boot, MCP ``build_server`` — which covers stdio AND
-    in-daemon HTTP) calls this; add it to any new one. Idempotent and cheap.
-    """
     from ..writer import embeddings_client  # lazy: avoid an import cycle at module load
     from . import vectors as vectors_mod
 
@@ -777,12 +743,6 @@ def _dense_pool(
 
 
 def _rerank_by_query_sim(conn: sqlite3.Connection, ids: list[str], qv: Any) -> list[str]:
-    """§7-10 池内查询感知重排: order pool candidates by cosine to the query
-    embedding (desc, stable). The per-needle seat lands on the NEWEST entry,
-    which is not necessarily the relevant one — the residual 3/12 relation
-    probes had seats but exited top-k in the RRF tail. Candidates without a
-    vector keep their relative recency order AFTER the ranked ones; any
-    failure returns the input untouched (fail-open to recency)."""
     if not ids or qv is None:
         return ids
     try:
@@ -815,7 +775,7 @@ def _rerank_by_query_sim(conn: sqlite3.Connection, ids: list[str], qv: Any) -> l
         sim_order = [eid for _s, _r, eid in scored] + tail
         # BLEND, don't replace (§7-10 per-probe verdict): pure sim order wins
         # the "seat landed on newest non-gold" cases but LOSES recency-intent
-        # queries (最近/现在/状态… — three Persome probes flipped off). Both
+
         # signals are real, so fuse the two orderings with an in-pool RRF —
         # a candidate near the top of EITHER order stays near the pool head.
         return _rrf_fuse(ids, sim_order, rrf_k=5)
@@ -963,16 +923,6 @@ def _contains_pool(
     since: str | None = None,
     until: str | None = None,
 ) -> list[str]:
-    """Content-substring candidate pool, newest first — the WHO entity head and
-    the WHERE scene head share this shape (memory-rebuild spec §3.3).
-
-    Substring LIKE by design: unicode61 folds a Chinese run into one token, so
-    FTS cannot find 张伟 inside 张伟负责… (nor 飞书 inside 在飞书上…) — exactly
-    where these heads matter. A LIKE scan over live entries is the honest v1;
-    a dedicated alias/scene FTS column is the optimization when production
-    latency data asks for it. ``since``/``until`` prune the pool so the WHEN
-    slot cuts across every head (§3.3 硬头先砍).
-    """
     # §7-9 fair-share seating: fetch each needle's list (newest first), then
     # ROUND-ROBIN merge until top_k. Sequential fill starved every needle after
     # the first — with 44 relation neighbors, the alphabetically-first hub ate
@@ -1020,11 +970,6 @@ def _contains_pool(
 
 
 def _window_pool(conn: sqlite3.Connection, *, since: str, until: str, top_k: int) -> list[str]:
-    """WHEN-head candidate pool: live entries inside the distilled day window,
-    newest first. The time slot is BOTH a filter (硬头先砍 — it prunes every
-    other pool) and its own ranked list — without the list, a "6月5号做了什么"
-    query with no lexical overlap would prune everything and return nothing.
-    """
     rows = conn.execute(
         "SELECT id FROM entries WHERE superseded = 0 AND timestamp >= ? AND timestamp <= ? "
         "ORDER BY timestamp DESC LIMIT ?",
@@ -1046,11 +991,6 @@ def _bigram_sim(a: str, b: str) -> float:
 def _mmr_rerank(
     conn: sqlite3.Connection, ids: list[str], *, top_k: int, diversity: float
 ) -> list[str]:
-    """§3.4 step 3 — the CONSUMER knob for breadth (检索温度/MMR): iteratively
-    pick the candidate maximizing rank_score − diversity·max_sim(selected).
-    ``diversity=0`` is byte-identical to plain RRF order (the accuracy-first
-    grounding default); a DR-style caller passes >0 to trade redundancy for
-    coverage. Deterministic — the knob widens, it never randomizes."""
     if not ids:
         return []
     rows = conn.execute(
@@ -1136,8 +1076,7 @@ def search_associative(
     # entity slot had a unique hit (e.g. the user's own entry): early exit
     # fired before the graph ever spread. Expand the Q's identities through
     # ACTIVE edges (shadow stays out — the status gate) and pool the entries
-    # naming the REACHED identities: the query names 张伟, the graph knows
-    # 张伟↔Bob, so Bob's entries join the vote without ever being mentioned.
+
     relation_ids: list[str] = []
     relation_shadow_ids: list[str] = []
     inc_shadow = (
@@ -1158,9 +1097,8 @@ def search_associative(
                 conn, neighbor_names, top_k=recall_n, since=since, until=until
             )
         if inc_shadow:
-            # §7-3 关系头喂食: audited-clean shadow edges may vote, at HALF the
             # relation weight — the shadow-ONLY reach (names not already reached
-            # via ACTIVE) forms its own pool so 未证明 never outranks 已转正.
+
             try:
                 reached_all = _edges_store.neighbors(
                     conn, entities, depth=2, as_of=until, include_shadow=True
@@ -1189,7 +1127,7 @@ def search_associative(
             )
             increment_retrieval_counts(conn, (hit.id,))
             return [hit]
-    # §7-10 池内查询感知重排 — AFTER the early exit (re-rank changes pool ORDER,
+
     # never membership, so the exit's uniqueness check is unaffected — and the
     # "unique hard hit → dense embedding never runs" latency invariant holds).
     do_rerank = (
@@ -1239,7 +1177,7 @@ def search_associative(
     if not pools:
         return []
     fused_all = _rrf_fuse_weighted(pools, rrf_k=int(_HYBRID["rrf_k"]))
-    # 轴B (#557): recency decay re-ranks the fused candidates before the cut —
+
     # anchored at the Q's own ``until`` when a day window was distilled/passed.
     fused_all = _apply_recency(conn, fused_all, until=until)
     if mmr_diversity > 0.0:

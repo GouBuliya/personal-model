@@ -90,8 +90,15 @@ def test_deterministic_self_and_cooccurrence_knows(ac_root):
     _ingest(
         mem,
         [
-            PersonEvent(name="Alice", summary="周会同步", occurred_at=_ts(20), confidence=0.9),
-            PersonEvent(name="Bob", summary="周会同步", occurred_at=_ts(20), confidence=0.9),
+            PersonEvent(
+                name="Alice",
+                summary="\u5468\u4f1a\u540c\u6b65",
+                occurred_at=_ts(20),
+                confidence=0.9,
+            ),
+            PersonEvent(
+                name="Bob", summary="\u5468\u4f1a\u540c\u6b65", occurred_at=_ts(20), confidence=0.9
+            ),
         ],
     )
     res = rx.run_relation_extraction(
@@ -109,7 +116,12 @@ def test_deterministic_self_and_cooccurrence_knows(ac_root):
 def test_single_person_only_self_knows(ac_root):
     mem = _mem()
     _ingest(
-        mem, [PersonEvent(name="Carol", summary="约了 Carol", occurred_at=_ts(21), confidence=0.9)]
+        mem,
+        [
+            PersonEvent(
+                name="Carol", summary="\u7ea6\u4e86 Carol", occurred_at=_ts(21), confidence=0.9
+            )
+        ],
     )
     res = rx.run_relation_extraction(
         _on(), memory=mem, llm_call=_empty_llm, conn_factory=fts.cursor
@@ -132,8 +144,8 @@ def test_idempotent_across_runs(ac_root):
     _ingest(
         mem,
         [
-            PersonEvent(name="Alice", summary="周会", occurred_at=_ts(20), confidence=0.9),
-            PersonEvent(name="Bob", summary="周会", occurred_at=_ts(20), confidence=0.9),
+            PersonEvent(name="Alice", summary="\u5468\u4f1a", occurred_at=_ts(20), confidence=0.9),
+            PersonEvent(name="Bob", summary="\u5468\u4f1a", occurred_at=_ts(20), confidence=0.9),
         ],
     )
     first = rx.run_relation_extraction(
@@ -149,13 +161,25 @@ def test_idempotent_across_runs(ac_root):
 
 
 def test_new_evidence_reinforces_strength(ac_root):
-    """边强度=证据数：新交互到来 → observations 单调上涨（而非跳过）。"""
     mem = _mem()
-    _ingest(mem, [PersonEvent(name="Alice", summary="第一次", occurred_at=_ts(20), confidence=0.9)])
+    _ingest(
+        mem,
+        [
+            PersonEvent(
+                name="Alice", summary="\u7b2c\u4e00\u6b21", occurred_at=_ts(20), confidence=0.9
+            )
+        ],
+    )
     rx.run_relation_extraction(_on(), memory=mem, llm_call=_empty_llm, conn_factory=fts.cursor)
 
-    # 第二次真实交互 → sightings 2 → 边应被强化而不是 skip
-    _ingest(mem, [PersonEvent(name="Alice", summary="第二次", occurred_at=_ts(21), confidence=0.9)])
+    _ingest(
+        mem,
+        [
+            PersonEvent(
+                name="Alice", summary="\u7b2c\u4e8c\u6b21", occurred_at=_ts(21), confidence=0.9
+            )
+        ],
+    )
     res = rx.run_relation_extraction(
         _on(), memory=mem, llm_call=_empty_llm, conn_factory=fts.cursor
     )
@@ -172,7 +196,13 @@ def test_new_evidence_reinforces_strength(ac_root):
 
 
 def _seed_intent(
-    *, status, people=(), rationale="做完的事", kind="reminder", iid=None, resolution_outcome=None
+    *,
+    status,
+    people=(),
+    rationale="\u505a\u5b8c\u7684\u4e8b",
+    kind="reminder",
+    iid=None,
+    resolution_outcome=None,
 ):
     ts = _ts(22).isoformat()
     with fts.cursor() as conn:
@@ -212,22 +242,33 @@ def _seed_intent(
 
 
 def test_terminal_intents_become_activity_points(ac_root):
-    """生命周期切分：done 终态（consumed/resolved/completed）→ Activity(EVENT) 点 +
-    participates_in 边；open/armed（将来）绝不进图。"""
     mem = _mem()
-    _ingest(mem, [PersonEvent(name="Alice", summary="合作", occurred_at=_ts(20), confidence=0.9)])
-    _seed_intent(status="consumed", people=["Alice"], rationale="和 Alice 定稿了方案")
+    _ingest(
+        mem,
+        [PersonEvent(name="Alice", summary="\u5408\u4f5c", occurred_at=_ts(20), confidence=0.9)],
+    )
+    _seed_intent(
+        status="consumed", people=["Alice"], rationale="\u548c Alice \u5b9a\u7a3f\u4e86\u65b9\u6848"
+    )
     # resolved is DONE only with resolution_outcome='done' (#461) → this one enters.
-    _seed_intent(status="resolved", resolution_outcome="done", rationale="接受了团队邀请")
-    _seed_intent(status="open", rationale="下周要做的事")  # future → must NOT enter
-    _seed_intent(status="armed", rationale="等触发的事")  # future → must NOT enter
+    _seed_intent(
+        status="resolved",
+        resolution_outcome="done",
+        rationale="\u63a5\u53d7\u4e86\u56e2\u961f\u9080\u8bf7",
+    )
+    _seed_intent(
+        status="open", rationale="\u4e0b\u5468\u8981\u505a\u7684\u4e8b"
+    )  # future → must NOT enter
+    _seed_intent(
+        status="armed", rationale="\u7b49\u89e6\u53d1\u7684\u4e8b"
+    )  # future → must NOT enter
 
     res = rx.run_relation_extraction(
         _on(), memory=mem, llm_call=_empty_llm, conn_factory=fts.cursor
     )
     rows = _all_edges()
     part = [r for r in rows if r[2] == "participates_in"]
-    # consumed: self→event + Alice→event（已巩固的参与者）；resolved: self→event
+
     assert len(part) == 3
     assert all(r[1].startswith("event:") for r in part)
     srcs = sorted(r[0] for r in part)
@@ -235,7 +276,7 @@ def test_terminal_intents_become_activity_points(ac_root):
     # Legacy intent rows are read through the neutral Activity adapter and no
     # longer carry product status semantics into relation provenance.
     assert {r[4] for r in part} == {"inferred"}
-    # open/armed 一条都没进：participates_in 只有 3 条
+
     assert res.written_count >= 3
 
 
@@ -278,12 +319,17 @@ def test_durable_event_entry_becomes_sourced_activity_edge(ac_root):
 
 
 def test_resolved_rejected_is_not_an_activity(ac_root):
-    """#461 tense gate：resolved 是证据驱动自动关闭通道，真实结局在 resolution_outcome。
-    只有 resolution_outcome='done' 才是「真的发生过」；'rejected'（后来拒绝/没做）与
-    'superseded'（被替换）都没有发生，绝不能作为 participates_in 活动入图。"""
     mem = _mem()
-    _seed_intent(status="resolved", resolution_outcome="rejected", rationale="本来要去但拒绝了")
-    _seed_intent(status="resolved", resolution_outcome="superseded", rationale="被后续替换掉的事")
+    _seed_intent(
+        status="resolved",
+        resolution_outcome="rejected",
+        rationale="\u672c\u6765\u8981\u53bb\u4f46\u62d2\u7edd\u4e86",
+    )
+    _seed_intent(
+        status="resolved",
+        resolution_outcome="superseded",
+        rationale="\u88ab\u540e\u7eed\u66ff\u6362\u6389\u7684\u4e8b",
+    )
     res = rx.run_relation_extraction(
         _on(), memory=mem, llm_call=_empty_llm, conn_factory=fts.cursor
     )
@@ -292,7 +338,11 @@ def test_resolved_rejected_is_not_an_activity(ac_root):
     assert res.written_count == 0
 
     # ...but a resolved intent that DID happen (outcome='done') still enters, as before.
-    _seed_intent(status="resolved", resolution_outcome="done", rationale="真的做完并接受了")
+    _seed_intent(
+        status="resolved",
+        resolution_outcome="done",
+        rationale="\u771f\u7684\u505a\u5b8c\u5e76\u63a5\u53d7\u4e86",
+    )
     rx.run_relation_extraction(_on(), memory=mem, llm_call=_empty_llm, conn_factory=fts.cursor)
     part2 = [r for r in _all_edges() if r[2] == "participates_in"]
     assert [r[0] for r in part2] == ["self"], f"resolved+done must produce self→event; got {part2}"
@@ -300,12 +350,15 @@ def test_resolved_rejected_is_not_an_activity(ac_root):
 
 
 def test_unconsolidated_participant_is_skipped(ac_root):
-    """终态意图里的陌生名字（未经过 person_graph 巩固）不铸新点——只连已巩固的人。"""
     mem = _mem()
-    _seed_intent(status="consumed", people=["陌生人甲"], rationale="和陌生人做完某事")
+    _seed_intent(
+        status="consumed",
+        people=["\u964c\u751f\u4eba\u7532"],
+        rationale="\u548c\u964c\u751f\u4eba\u505a\u5b8c\u67d0\u4e8b",
+    )
     rx.run_relation_extraction(_on(), memory=mem, llm_call=_empty_llm, conn_factory=fts.cursor)
     part = [r for r in _all_edges() if r[2] == "participates_in"]
-    assert [r[0] for r in part] == ["self"]  # 只有 self→event，没有陌生人点
+    assert [r[0] for r in part] == ["self"]
 
 
 def test_no_people_is_empty(ac_root):
@@ -324,9 +377,17 @@ def test_llm_pass_adds_reports_to(ac_root):
         mem,
         [
             PersonEvent(
-                name="Alice", summary="Alice 向 Boss 汇报进度", occurred_at=_ts(20), confidence=0.9
+                name="Alice",
+                summary="Alice \u5411 Boss \u6c47\u62a5\u8fdb\u5ea6",
+                occurred_at=_ts(20),
+                confidence=0.9,
             ),
-            PersonEvent(name="Boss", summary="听 Alice 汇报", occurred_at=_ts(21), confidence=0.9),
+            PersonEvent(
+                name="Boss",
+                summary="\u542c Alice \u6c47\u62a5",
+                occurred_at=_ts(21),
+                confidence=0.9,
+            ),
         ],
     )
     llm = _scripted_llm(
@@ -335,8 +396,8 @@ def test_llm_pass_adds_reports_to(ac_root):
                 "src": "Alice",
                 "dst": "Boss",
                 "predicate": "reports_to",
-                "label": "老板",
-                "quote": "Alice 向 Boss 汇报进度",
+                "label": "\u8001\u677f",
+                "quote": "Alice \u5411 Boss \u6c47\u62a5\u8fdb\u5ea6",
                 "confidence": 0.9,
             }
         ]
@@ -358,9 +419,14 @@ def test_llm_drops_bad_relations(ac_root):
         mem,
         [
             PersonEvent(
-                name="Alice", summary="Alice 向 Boss 汇报进度", occurred_at=_ts(20), confidence=0.9
+                name="Alice",
+                summary="Alice \u5411 Boss \u6c47\u62a5\u8fdb\u5ea6",
+                occurred_at=_ts(20),
+                confidence=0.9,
             ),
-            PersonEvent(name="Boss", summary="听汇报", occurred_at=_ts(21), confidence=0.9),
+            PersonEvent(
+                name="Boss", summary="\u542c\u6c47\u62a5", occurred_at=_ts(21), confidence=0.9
+            ),
         ],
     )
     llm = _scripted_llm(
@@ -376,28 +442,28 @@ def test_llm_drops_bad_relations(ac_root):
                 "src": "Alice",
                 "dst": "Boss",
                 "predicate": "reports_to",
-                "quote": "查无此句",
+                "quote": "\u67e5\u65e0\u6b64\u53e5",
                 "confidence": 0.9,
             },
             {
                 "src": "Zed",
                 "dst": "Boss",
                 "predicate": "reports_to",
-                "quote": "Alice 向 Boss 汇报进度",
+                "quote": "Alice \u5411 Boss \u6c47\u62a5\u8fdb\u5ea6",
                 "confidence": 0.9,
             },
             {
                 "src": "Alice",
                 "dst": "Boss",
                 "predicate": "participates_in",
-                "quote": "Alice 向 Boss 汇报进度",
+                "quote": "Alice \u5411 Boss \u6c47\u62a5\u8fdb\u5ea6",
                 "confidence": 0.9,
             },
             {
                 "src": "Alice",
                 "dst": "Boss",
                 "predicate": "reports_to",
-                "quote": "Alice 向 Boss 汇报进度",
+                "quote": "Alice \u5411 Boss \u6c47\u62a5\u8fdb\u5ea6",
                 "confidence": 0.3,
             },
         ]
@@ -412,8 +478,8 @@ def test_llm_failure_is_fail_open(ac_root):
     _ingest(
         mem,
         [
-            PersonEvent(name="Alice", summary="周会", occurred_at=_ts(20), confidence=0.9),
-            PersonEvent(name="Bob", summary="周会", occurred_at=_ts(20), confidence=0.9),
+            PersonEvent(name="Alice", summary="\u5468\u4f1a", occurred_at=_ts(20), confidence=0.9),
+            PersonEvent(name="Bob", summary="\u5468\u4f1a", occurred_at=_ts(20), confidence=0.9),
         ],
     )
 
@@ -426,43 +492,39 @@ def test_llm_failure_is_fail_open(ac_root):
 
 
 def test_knows_dedup_is_direction_insensitive(ac_root):
-    """#436: (A,B,knows) 与 (B,A,knows) 是同一条边——反向不重插、只强化。"""
     mem = _mem()
     _ingest(
         mem,
         [
-            PersonEvent(name="Bob", summary="周会", occurred_at=_ts(20), confidence=0.9),
-            PersonEvent(name="Alice", summary="周会", occurred_at=_ts(20), confidence=0.9),
+            PersonEvent(name="Bob", summary="\u5468\u4f1a", occurred_at=_ts(20), confidence=0.9),
+            PersonEvent(name="Alice", summary="\u5468\u4f1a", occurred_at=_ts(20), confidence=0.9),
         ],
     )
     rx.run_relation_extraction(_on(), memory=mem, llm_call=_empty_llm, conn_factory=fts.cursor)
-    # 手工塞一条反向 knows 应被识别为已存在（经 _open_edges 的规范键）
+
     res2 = rx.run_relation_extraction(
         _on(), memory=mem, llm_call=_empty_llm, conn_factory=fts.cursor
     )
     knows_pp = [r for r in _all_edges() if r[2] == "knows" and r[0] != "self" and r[1] != "self"]
-    assert len(knows_pp) == 1  # 只有一条 person↔person knows，方向无关
+    assert len(knows_pp) == 1
     assert res2.deterministic_count == 0
 
 
 def test_self_never_in_cooccurrence_pair(ac_root):
-    """#435: co-occurrence 对里任一端是 self 都跳过（self↔person 已由第一段循环覆盖）。"""
     mem = _mem()
-    # 铸一个 canonical 恰为 "self" 的实体（对抗性）+ 一个正常人，同一时间桶
+
     _ingest(
         mem,
         [
-            PersonEvent(name="self", summary="对抗写法", occurred_at=_ts(20), confidence=0.9),
-            PersonEvent(name="Alice", summary="周会", occurred_at=_ts(20), confidence=0.9),
+            PersonEvent(
+                name="self", summary="\u5bf9\u6297\u5199\u6cd5", occurred_at=_ts(20), confidence=0.9
+            ),
+            PersonEvent(name="Alice", summary="\u5468\u4f1a", occurred_at=_ts(20), confidence=0.9),
         ],
     )
     rx.run_relation_extraction(_on(), memory=mem, llm_call=_empty_llm, conn_factory=fts.cursor)
     for r in _all_edges():
-        # 不存在 self 作为 person↔person 共现对的产物（self→Alice 的 SELF 循环产物除外）
         assert not (r[2] == "knows" and r[0] == "self" and r[1] == "self")
-
-
-# ── evidence-time valid_from (§1.2 bitemporal: 有效时间可回填，不是事务时间) ──
 
 
 def _valid_froms():
@@ -483,10 +545,17 @@ def test_knows_edges_carry_first_evidence_time(ac_root):
     _ingest(
         mem,
         [
-            PersonEvent(name="Alice", summary="单独出现", occurred_at=_ts(20), confidence=0.9),
-            PersonEvent(name="Bob", summary="单独出现", occurred_at=_ts(21), confidence=0.9),
-            PersonEvent(name="Alice", summary="周会", occurred_at=_ts(22), confidence=0.9),
-            PersonEvent(name="Bob", summary="周会", occurred_at=_ts(22), confidence=0.9),
+            PersonEvent(
+                name="Alice",
+                summary="\u5355\u72ec\u51fa\u73b0",
+                occurred_at=_ts(20),
+                confidence=0.9,
+            ),
+            PersonEvent(
+                name="Bob", summary="\u5355\u72ec\u51fa\u73b0", occurred_at=_ts(21), confidence=0.9
+            ),
+            PersonEvent(name="Alice", summary="\u5468\u4f1a", occurred_at=_ts(22), confidence=0.9),
+            PersonEvent(name="Bob", summary="\u5468\u4f1a", occurred_at=_ts(22), confidence=0.9),
         ],
     )
     rx.run_relation_extraction(_on(), memory=mem, llm_call=_empty_llm, conn_factory=fts.cursor)
@@ -502,7 +571,14 @@ def test_activity_edges_carry_source_event_time(ac_root):
     mem = _mem()
     _ingest(
         mem,
-        [PersonEvent(name="Alice", summary="做完的事", occurred_at=_ts(20), confidence=0.9)],
+        [
+            PersonEvent(
+                name="Alice",
+                summary="\u505a\u5b8c\u7684\u4e8b",
+                occurred_at=_ts(20),
+                confidence=0.9,
+            )
+        ],
     )
     # resolved is DONE only with resolution_outcome='done' (#461) → this one enters.
     _seed_intent(status="resolved", resolution_outcome="done", people=("Alice",))
@@ -536,16 +612,23 @@ def test_event_about_org_reconnects_typed_point(ac_root):
     mem = _mem()
     _ingest(
         mem,
-        [PersonEvent(name="Alice", summary="做完的事", occurred_at=_ts(20), confidence=0.9)],
+        [
+            PersonEvent(
+                name="Alice",
+                summary="\u505a\u5b8c\u7684\u4e8b",
+                occurred_at=_ts(20),
+                confidence=0.9,
+            )
+        ],
     )
-    _seed_typed_entity("研发群")
-    _seed_intent(status="consumed", people=("Alice", "研发群"))
+    _seed_typed_entity("\u7814\u53d1\u7fa4")
+    _seed_intent(status="consumed", people=("Alice", "\u7814\u53d1\u7fa4"))
     rx.run_relation_extraction(_on(), memory=mem, llm_call=_empty_llm, conn_factory=fts.cursor)
     rows = {(r[0], r[1], r[2]): r for r in _all_edges()}
     about = [k for k in rows if k[2] == "about"]
     assert len(about) == 1
     src, dst, _ = about[0]
-    assert src.startswith("event:") and dst == "研发群"
+    assert src.startswith("event:") and dst == "\u7814\u53d1\u7fa4"
     with fts.cursor() as conn:
         row = conn.execute(
             "SELECT src_kind, dst_kind, provenance FROM relation_edges WHERE predicate='about'"
@@ -559,10 +642,17 @@ def test_tools_stay_honest_orphans_no_about(ac_root):
     mem = _mem()
     _ingest(
         mem,
-        [PersonEvent(name="Alice", summary="做完的事", occurred_at=_ts(20), confidence=0.9)],
+        [
+            PersonEvent(
+                name="Alice",
+                summary="\u505a\u5b8c\u7684\u4e8b",
+                occurred_at=_ts(20),
+                confidence=0.9,
+            )
+        ],
     )
-    _seed_typed_entity("微信", prefix="tool-")
-    _seed_intent(status="consumed", people=("Alice", "微信"))
+    _seed_typed_entity("\u5fae\u4fe1", prefix="tool-")
+    _seed_intent(status="consumed", people=("Alice", "\u5fae\u4fe1"))
     rx.run_relation_extraction(_on(), memory=mem, llm_call=_empty_llm, conn_factory=fts.cursor)
     assert not [r for r in _all_edges() if r[2] == "about"]
 
@@ -573,7 +663,7 @@ def test_project_file_evidences_self_participates_in(ac_root):
     mem = _mem()
     _ingest(
         mem,
-        [PersonEvent(name="Alice", summary="出现", occurred_at=_ts(20), confidence=0.9)],
+        [PersonEvent(name="Alice", summary="\u51fa\u73b0", occurred_at=_ts(20), confidence=0.9)],
     )
     from datetime import UTC, datetime
 
@@ -585,7 +675,7 @@ def test_project_file_evidences_self_participates_in(ac_root):
         store.save(
             MemoryNode(
                 node_id=f"n-acme-{i}",
-                content=f"Acme 事实 {i}",
+                content=f"Acme \u4e8b\u5b9e {i}",
                 layer=MemoryLayer.L2_FACT,
                 file_name="project-Acme.md",
                 memory_at=datetime(2026, 6, day, tzinfo=UTC),
@@ -610,10 +700,13 @@ def test_org_has_no_deterministic_self_leg(ac_root):
     mem = _mem()
     _ingest(
         mem,
-        [PersonEvent(name="Alice", summary="出现", occurred_at=_ts(20), confidence=0.9)],
+        [PersonEvent(name="Alice", summary="\u51fa\u73b0", occurred_at=_ts(20), confidence=0.9)],
     )
-    _seed_typed_entity("腾讯混元大语言模型部")
+    _seed_typed_entity("\u817e\u8baf\u6df7\u5143\u5927\u8bed\u8a00\u6a21\u578b\u90e8")
     rx.run_relation_extraction(_on(), memory=mem, llm_call=_empty_llm, conn_factory=fts.cursor)
     assert not [
-        r for r in _all_edges() if r[1] == "腾讯混元大语言模型部" or r[0] == "腾讯混元大语言模型部"
+        r
+        for r in _all_edges()
+        if r[1] == "\u817e\u8baf\u6df7\u5143\u5927\u8bed\u8a00\u6a21\u578b\u90e8"
+        or r[0] == "\u817e\u8baf\u6df7\u5143\u5927\u8bed\u8a00\u6a21\u578b\u90e8"
     ]

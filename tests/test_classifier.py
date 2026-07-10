@@ -94,7 +94,7 @@ def test_classifier_appends_durable_preference(ac_root: Path, fake_llm) -> None:
     )
 
     cfg = config_mod.load(ac_root / "config.toml")
-    cfg.memory_delta.apply_enabled = False  # 测 classifier legacy append 路径；apply_enabled=True 下 classifier 已退役（守卫短路）
+    cfg.memory_delta.apply_enabled = False
     result = classifier_mod.classify_after_reduce(
         cfg,
         session_id="sess_abc",
@@ -145,7 +145,7 @@ def test_classifier_rejects_event_write(ac_root: Path, fake_llm) -> None:
     )
 
     cfg = config_mod.load(ac_root / "config.toml")
-    cfg.memory_delta.apply_enabled = False  # 测 classifier legacy append 路径；apply_enabled=True 下 classifier 已退役（守卫短路）
+    cfg.memory_delta.apply_enabled = False
     result = classifier_mod.classify_after_reduce(
         cfg,
         session_id="sess_reject",
@@ -173,7 +173,7 @@ def test_classifier_empty_commit_when_nothing_classifiable(
     )
 
     cfg = config_mod.load(ac_root / "config.toml")
-    cfg.memory_delta.apply_enabled = False  # 测 classifier legacy append 路径；apply_enabled=True 下 classifier 已退役（守卫短路）
+    cfg.memory_delta.apply_enabled = False
     result = classifier_mod.classify_after_reduce(
         cfg,
         session_id="sess_noop",
@@ -188,7 +188,7 @@ def test_classifier_empty_commit_when_nothing_classifiable(
 
 def test_classifier_skips_when_event_daily_missing(ac_root: Path) -> None:
     cfg = config_mod.load(ac_root / "config.toml")
-    cfg.memory_delta.apply_enabled = False  # 测 classifier legacy append 路径；apply_enabled=True 下 classifier 已退役（守卫短路）
+    cfg.memory_delta.apply_enabled = False
     result = classifier_mod.classify_after_reduce(
         cfg,
         session_id="sess_no_file",

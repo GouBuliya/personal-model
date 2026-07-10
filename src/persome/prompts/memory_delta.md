@@ -12,9 +12,9 @@ If you are unsure whether a mention is a roster identity, prefer the roster `ref
 
 An entity must denote ONE concrete individual (a specific person, a specific group, a specific project). Classes, roles, and generic references (a customer, an interviewer, "the team", "group chat" as a form) are NOT entities — express a role as the relation's `label` instead, and skip the generic mention entirely.
 
-The **memory owner** — the first-person "I"/"me"/"我" whose screen and activity this is — is NEVER an entity. Never emit the owner, their own login name, or their handle as a person. Reference the owner as `self` (the roster's own identity) when they are one endpoint of a relation.
+The **memory owner** — the first-person speaker whose screen and activity this is — is NEVER an entity. This applies to first-person pronouns in every language. Never emit the owner, their own login name, or their handle as a person. Reference the owner as `self` (the roster's own identity) when they are one endpoint of a relation.
 
-**Kind discipline.** A `person` is a human being. Coding assistants and CLI agents the owner operates (claude, codex, cc, opencode, cursor, "the agent"/"助手"), and apps, files, repos, branches, builds, DMGs, and documents, are `artifact` — never `person`. An organization / team / company / group is `org`. A named body of ongoing work is `project`. When unsure between `artifact` and `project`, a shippable named undertaking is a `project`; a concrete file/tool/build is an `artifact`.
+**Kind discipline.** A `person` is a human being. Coding assistants and CLI agents the owner operates (claude, codex, cc, opencode, cursor, or "the agent" in any language), and apps, files, repos, branches, builds, DMGs, and documents, are `artifact` — never `person`. An organization, team, company, or group is `org`. A named body of ongoing work is `project`. When unsure between `artifact` and `project`, a shippable named undertaking is a `project`; a concrete file, tool, or build is an `artifact`.
 
 ## Evidence rule (critical)
 

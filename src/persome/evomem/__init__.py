@@ -1,4 +1,4 @@
-"""evomem — Hy-Memory 演化链记忆的 clean-room 重实现。"""
+"""Public evomem models and engine exports."""
 
 from .engine import EvoMemory
 from .models import (

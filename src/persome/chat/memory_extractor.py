@@ -1,13 +1,4 @@
-"""Background memory extraction from chat conversations.
-
-写权反转（PR-6b，SSOT 切换设计 §1.3/§5）：``write_authority="evomem"`` 时本站点
-的记忆写（``_write_memory`` 的 create+append）经 ``store/entries.py`` 的
-choke-point dispatch 走 evomem engine 落 evo_nodes，markdown 由投影器再生成；
-``_content_already_present`` 的 dedup 守卫读的是投影文件（写后同步刷新）。
-抽取决策仍由本站点的 LLM 完成——经 engine reconcile 调和（``add``）的语义升级
-与写权反转解耦，留待后续显式启用。逐站输出等价由
-``tests/test_evomem/test_inversion_stations.py`` 钉死。
-"""
+"Durable memory extraction from completed Chat turns."
 
 from __future__ import annotations
 

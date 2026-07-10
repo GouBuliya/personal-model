@@ -31,7 +31,6 @@ def _make_assistant(tool_call_id: str = "call_1") -> dict[str, Any]:
 
 
 def test_large_result_truncated():
-    """构造 32KB result，验证 make_tool_response 输出 content ≤ 16KB。"""
     max_bytes = 16_384
     big_result = {"content": "x" * 40_000}
     msg = make_tool_response(_make_assistant(), 0, "read_memory", big_result, max_bytes=max_bytes)
@@ -44,14 +43,12 @@ def test_large_result_truncated():
 
 
 def test_truncated_flag_injected():
-    """验证截断后结果中有 _truncated=True 字段。"""
     big_result = {"content": "y" * 40_000}
     truncated = _truncate_result(big_result, 16_384)
     assert truncated.get("_truncated") is True
 
 
 def test_small_result_not_truncated():
-    """验证小结果不被截断（无 _truncated 字段）。"""
     small = {"content": "hello"}
     out = _truncate_result(small, 16_384)
     assert "_truncated" not in out
@@ -64,7 +61,6 @@ def test_small_result_not_truncated():
 
 
 def test_microcompact_oldest_results():
-    """构造超过 total_budget 的 messages，验证最旧 tool result 被替换。"""
     budget = 100  # very small budget
     big_content = "z" * 200
 
@@ -86,7 +82,6 @@ def test_microcompact_oldest_results():
 
 
 def test_microcompact_noop_within_budget():
-    """总量未超限时不做任何修改。"""
     messages: list[dict[str, Any]] = [
         {"role": "tool", "content": "small"},
     ]

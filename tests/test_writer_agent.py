@@ -88,9 +88,7 @@ def test_writer_run_reduces_pending_and_classifies(ac_root: Path, monkeypatch) -
     monkeypatch.setattr(llm_mod, "call_llm", fake_call_llm)
 
     cfg = config_mod.load(ac_root / "config.toml")
-    cfg.memory_delta.apply_enabled = (
-        False  # 测 reduce+classify legacy 路径；apply_enabled=True 下 classifier 退役
-    )
+    cfg.memory_delta.apply_enabled = False
     result = agent.run(cfg)
 
     assert result.reduced == 1
@@ -124,7 +122,9 @@ def test_terminal_finalizer_applies_default_person_model(
             timeline_store.TimelineBlock(
                 start_time=start,
                 end_time=end,
-                entries=['[Feishu] 聊天: 和张三确认了评审结论。"周五版本可以发"'],
+                entries=[
+                    '[Feishu] \u804a\u5929: \u548c\u5f20\u4e09\u786e\u8ba4\u4e86\u8bc4\u5ba1\u7ed3\u8bba\u3002"\u5468\u4e94\u7248\u672c\u53ef\u4ee5\u53d1"'
+                ],
                 apps_used=["Feishu"],
                 capture_count=1,
             ),
@@ -145,9 +145,9 @@ def test_terminal_finalizer_applies_default_person_model(
             {
                 "entities": [
                     {
-                        "new_entity": "张三",
+                        "new_entity": "\u5f20\u4e09",
                         "kind": "person",
-                        "quote": "和张三确认了评审结论",
+                        "quote": "\u548c\u5f20\u4e09\u786e\u8ba4\u4e86\u8bc4\u5ba1\u7ed3\u8bba",
                         "confidence": 0.9,
                     }
                 ],
@@ -189,7 +189,7 @@ def test_active_session_flush_mints_model_before_session_end(
             timeline_store.TimelineBlock(
                 start_time=start,
                 end_time=end,
-                entries=["[Feishu] 和张三确认了评审结论"],
+                entries=["[Feishu] \u548c\u5f20\u4e09\u786e\u8ba4\u4e86\u8bc4\u5ba1\u7ed3\u8bba"],
                 apps_used=["Feishu"],
                 capture_count=1,
             ),
@@ -206,9 +206,9 @@ def test_active_session_flush_mints_model_before_session_end(
             {
                 "entities": [
                     {
-                        "new_entity": "张三",
+                        "new_entity": "\u5f20\u4e09",
                         "kind": "person",
-                        "quote": "和张三确认了评审结论",
+                        "quote": "\u548c\u5f20\u4e09\u786e\u8ba4\u4e86\u8bc4\u5ba1\u7ed3\u8bba",
                         "confidence": 0.9,
                     }
                 ],
@@ -230,7 +230,7 @@ def test_active_session_flush_mints_model_before_session_end(
     with fts.cursor() as conn:
         row = session_store.get_by_id(conn, "sess_live")
         point_count = conn.execute(
-            "SELECT COUNT(*) FROM evo_nodes WHERE file_name='person-张三.md'"
+            "SELECT COUNT(*) FROM evo_nodes WHERE file_name='person-\u5f20\u4e09.md'"
         ).fetchone()[0]
         dirty = session_store.get_system_state(conn, "model_structure_dirty")
     assert row is not None and row.status == "active"
@@ -245,8 +245,8 @@ def test_active_model_resumes_failed_apply_before_new_tail(ac_root: Path, fake_l
     end = middle + timedelta(minutes=1)
     with fts.cursor() as conn:
         for block_start, text in (
-            (start, "[Feishu] 和张三确认了评审结论"),
-            (middle, "[Feishu] 和李四确认了发布结论"),
+            (start, "[Feishu] \u548c\u5f20\u4e09\u786e\u8ba4\u4e86\u8bc4\u5ba1\u7ed3\u8bba"),
+            (middle, "[Feishu] \u548c\u674e\u56db\u786e\u8ba4\u4e86\u53d1\u5e03\u7ed3\u8bba"),
         ):
             timeline_store.insert(
                 conn,
@@ -279,9 +279,9 @@ def test_active_model_resumes_failed_apply_before_new_tail(ac_root: Path, fake_l
             {
                 "entities": [
                     {
-                        "new_entity": "李四",
+                        "new_entity": "\u674e\u56db",
                         "kind": "person",
-                        "quote": "和李四确认了发布结论",
+                        "quote": "\u548c\u674e\u56db\u786e\u8ba4\u4e86\u53d1\u5e03\u7ed3\u8bba",
                         "confidence": 0.9,
                     }
                 ],

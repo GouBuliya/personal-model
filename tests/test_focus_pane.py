@@ -12,14 +12,14 @@ from persome.timeline.aggregator import _focus_pane
 
 
 def test_extracts_region_after_marker_and_drops_chrome() -> None:
-    chrome = "## cmux [active] workspace 1/7 workspace 2/7 有可用更新 切换侧边栏 "
+    chrome = "## cmux [active] workspace 1/7 workspace 2/7 \u6709\u53ef\u7528\u66f4\u65b0 \u5207\u6362\u4fa7\u8fb9\u680f "
     pane = "❯ pytest -k attention\n12 passed real work here"
     text = chrome + "### [cmux terminal]\n" + pane
     region, focused = _focus_pane(text)
     assert focused is True
     assert region == pane
     assert "workspace 1/7" not in region
-    assert "有可用更新" not in region
+    assert "\u6709\u53ef\u7528\u66f4\u65b0" not in region
 
 
 def test_no_marker_returns_input_unchanged() -> None:

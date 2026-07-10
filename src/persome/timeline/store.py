@@ -90,7 +90,7 @@ class TimelineBlock:
     # never lost to normalization.
     focus_excerpt: str = ""
     # Structured conversation produced by a per-app parser (parsers.get_parser),
-    # rendered to ``[收到|发送者|时间] 正文`` lines. When non-empty it is preferred
+
     # over the raw ``focus_excerpt`` as the modeler's focus input — the parser
     # has already split sender/time/body deterministically, so it is cleaner than
     # the verbatim AX dump. Empty when no parser handles the focused app (the

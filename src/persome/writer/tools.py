@@ -1,14 +1,4 @@
-"""Writer tool implementations + JSON Schema declarations for the LLM.
-
-写权反转（PR-6b，SSOT 切换设计 §1.3/§5）：本模块是 classifier /
-classifier / pattern_detector 共用的写工具层；``write_authority="evomem"`` 时
-``tool_create``/``tool_append``/``tool_supersede`` 经 ``store/entries.py`` 的
-choke-point dispatch 走 evomem engine 落 evo_nodes，markdown 由投影器再生成
-（``tool_flag_compact`` 改走 ``inversion.flag_needs_compact``——files 行是真相，
-重投影替代直接 ``update_frontmatter``，避免投影态 hash 失配触发手改误报）。
-写 op 由各 stage 的 LLM agent 决定，engine 不再重新决策——reconcile 调和升级与反转解耦。逐站输出
-等价由 ``tests/test_evomem/test_inversion_stations.py`` 钉死。
-"""
+"Shared memory write and diagnostic tools used by modeling stages."
 
 from __future__ import annotations
 
@@ -186,9 +176,6 @@ def tool_flag_compact(
     if not p.exists():
         return {"error": f"file not found: {path}"}
     if evo_inversion.routes_to_engine(path):
-        # 反转模式：files 行是文件级元数据的真相，frontmatter 由重投影带回——
-        # 直接 update_frontmatter 会让盘上文件偏离 projection_state 的 hash，
-        # 被手改检测误报。
         evo_inversion.flag_needs_compact(conn, name=path, value=True)
     else:
         fts.set_needs_compact(conn, p.name, True)
@@ -524,7 +511,7 @@ _CLASSIFIER_DRILL_SCHEMAS: list[dict[str, Any]] = [
             "name": "drill_chat_captures",
             "description": (
                 "Reconstruct a chat conversation from raw screen captures for a given "
-                "app (e.g. '飞书', 'WeChat', 'Messages') between two ISO-8601 timestamps. "
+                "app (for example, 'Feishu', 'WeChat', or 'Messages') between two ISO-8601 timestamps. "
                 "Returns timestamped visible_text snapshots with ⚠️ scroll-gap markers "
                 "where content may be missing. Use when classifying a session with "
                 "significant chat app activity to extract durable facts from the "
@@ -535,7 +522,7 @@ _CLASSIFIER_DRILL_SCHEMAS: list[dict[str, Any]] = [
                 "properties": {
                     "app_name": {
                         "type": "string",
-                        "description": "Exact app_name as captured (e.g. '飞书', 'WeChat')",
+                        "description": "Exact app_name as captured (for example, 'Feishu' or 'WeChat')",
                     },
                     "start_ts": {
                         "type": "string",

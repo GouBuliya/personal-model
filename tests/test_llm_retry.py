@@ -39,7 +39,6 @@ class _FakeHeaders(dict):
 
 
 def test_retries_network_error(monkeypatch):
-    """mock 3 次 RuntimeError 后成功，call_llm 共被调用 4 次。"""
     calls: list[int] = []
 
     def _stub(cfg, stage, *, messages, tools=None, json_mode=False):
@@ -73,7 +72,6 @@ def test_retries_network_error(monkeypatch):
 
 
 def test_respects_retry_after_header(monkeypatch):
-    """mock 一次 429 RateLimitError 并带 retry-after=2，验证 sleep(2) 被调用。"""
     slept: list[float] = []
     calls: list[int] = []
 
@@ -124,7 +122,6 @@ def test_respects_retry_after_header(monkeypatch):
 
 
 def test_fallback_on_529(monkeypatch):
-    """mock 3次 overloaded 异常，第4次用 fallback_model 成功。"""
     calls: list[str] = []
     env_snapshots: list[str | None] = []
 
@@ -166,7 +163,6 @@ def test_fallback_on_529(monkeypatch):
 
 
 def test_413_triggers_reactive_trim(monkeypatch):
-    """mock ContextWindowExceededError，验证 messages 缩短后重发。"""
     calls: list[int] = []
     msg_lengths: list[int] = []
 
@@ -215,7 +211,6 @@ def test_413_triggers_reactive_trim(monkeypatch):
 
 
 def test_auth_error_aborts_immediately(monkeypatch):
-    """mock AuthenticationError，验证 loop 立即终止只调用 1 次。"""
     calls: list[int] = []
 
     AuthenticationError = type("AuthenticationError", (Exception,), {})

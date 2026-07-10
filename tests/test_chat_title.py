@@ -146,7 +146,7 @@ def test_skips_tool_result_user_turns() -> None:
 
 def test_clean_strips_quotes_and_collapses_whitespace() -> None:
     assert _clean('  "Deploy guide"  ') == "Deploy guide"
-    assert _clean("「中文标题」") == "中文标题"
+    assert _clean("\u300c\u4e2d\u6587\u6807\u9898\u300d") == "\u4e2d\u6587\u6807\u9898"
     assert _clean("line1\nline2") == "line1 line2"
 
 

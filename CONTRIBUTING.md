@@ -37,6 +37,7 @@ Marker meanings:
 ```bash
 uv run ruff check .
 uv run ruff format --check .
+uv run python scripts/language_scan.py
 ```
 
 To inspect coverage locally:
@@ -54,6 +55,13 @@ test data is synthetic, always. Before pushing:
 ```bash
 uv run python scripts/pii_scan.py   # must exit 0
 ```
+
+## Repository language
+
+Human-authored source, prompts, documentation, and fixtures use English. Run
+`uv run python scripts/language_scan.py` before pushing. Multilingual parser
+test values use Unicode escapes, and the bundled PP-OCRv6 character dictionary
+is allowlisted because changing it would break local OCR.
 
 ## Branches and pull requests
 

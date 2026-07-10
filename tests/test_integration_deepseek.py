@@ -65,7 +65,6 @@ class _State:
 
 
 def test_call_llm_returns_completion():
-    """call_llm 成功返回真实补全，内容非空。"""
     from persome.writer.llm import call_llm
 
     cfg = _make_cfg()
@@ -79,11 +78,7 @@ def test_call_llm_returns_completion():
     assert resp.usage is not None
 
 
-# ── Test 2: extract_usage 读取真实 usage 字段 ──────────────────────────────
-
-
 def test_extract_usage_from_real_response():
-    """extract_usage 从真实响应解析 prompt/completion token 计数。"""
     from persome.writer.llm import call_llm, extract_usage
 
     cfg = _make_cfg()
@@ -99,11 +94,7 @@ def test_extract_usage_from_real_response():
     assert usage["total_tokens"] == usage["prompt_tokens"] + usage["completion_tokens"]
 
 
-# ── Test 3: calculate_usd 对真实 usage 计算成本 ────────────────────────────
-
-
 def test_calculate_usd_with_real_usage():
-    """用真实 token 计数计算 deepseek-chat 的 USD 成本，结果应为正数。"""
     from persome.writer.cost import calculate_usd
     from persome.writer.llm import call_llm, extract_usage
 
@@ -122,11 +113,7 @@ def test_calculate_usd_with_real_usage():
     assert cost > 0
 
 
-# ── Test 4: run_tool_loop 一个完整无工具调用的 loop ────────────────────────
-
-
 def test_run_tool_loop_no_tools():
-    """run_tool_loop 在无工具调用时正常结束，返回 iteration count < max_iter。"""
     from persome.writer.llm import run_tool_loop
 
     cfg = _make_cfg(max_tokens=32)
@@ -153,11 +140,7 @@ def test_run_tool_loop_no_tools():
     assert len(tool_msgs) == 0
 
 
-# ── Test 5: run_tool_loop 带一个真实工具调用 ──────────────────────────────
-
-
 def test_run_tool_loop_with_tool_call():
-    """LLM 主动调用 search_memory 工具，dispatch 返回结果，loop 正常结束。"""
 
     from persome.writer.llm import run_tool_loop
 
@@ -206,11 +189,7 @@ def test_run_tool_loop_with_tool_call():
     assert dispatched[0]["name"] == "search_memory"
 
 
-# ── Test 6: count_tokens_api 对非 Anthropic 模型返回 None ─────────────────
-
-
 def test_count_tokens_api_skips_non_anthropic():
-    """deepseek 不是 Anthropic 模型，count_tokens_api 应直接返回 None。"""
     from persome.writer.llm import count_tokens_api
 
     cfg = _make_cfg()
@@ -222,11 +201,7 @@ def test_count_tokens_api_skips_non_anthropic():
     assert result is None
 
 
-# ── Test 7: _truncate_result 与真实 tool response 集成 ────────────────────
-
-
 def test_make_tool_response_truncates_large_result():
-    """make_tool_response 对超大 tool result 截断到 max_bytes 内。"""
     from persome.writer.llm import make_tool_response
 
     assistant_msg = {
@@ -247,11 +222,7 @@ def test_make_tool_response_truncates_large_result():
     assert parsed.get("_truncated") is True
 
 
-# ── Test 8: F3 输出截断恢复 ────────────────────────────────────────────────
-
-
 def test_f3_output_truncation_recovery():
-    """max_tokens=10 强制 finish_reason='length'，验证 continuation prompt 被注入。"""
     from persome.config import WriterConfig
     from persome.writer.llm import run_tool_loop
 
@@ -261,7 +232,7 @@ def test_f3_output_truncation_recovery():
         max_output_tokens_recovery_count=2,
         max_output_tokens_recovery_limit=65_536,
     )
-    # 重新设置模型（WriterConfig 重置后需恢复）
+
     from persome.config import ModelConfig
 
     cfg.models["default"] = ModelConfig(model=MODEL, max_tokens=10)
@@ -282,7 +253,6 @@ def test_f3_output_truncation_recovery():
         max_iter=5,
     )
 
-    # continuation prompt 应被注入到 messages
     user_contents = [m.get("content") or "" for m in messages if m["role"] == "user"]
     continuation_injected = any("Continue directly" in c for c in user_contents)
     assert continuation_injected, (
@@ -291,11 +261,7 @@ def test_f3_output_truncation_recovery():
     )
 
 
-# ── Test 9: F4 多轮 token 成本累计 ────────────────────────────────────────
-
-
 def test_f4_cost_accumulates_across_iterations(monkeypatch):
-    """两轮 LLM 调用，extract_usage 被调用 2 次，累计 prompt_tokens > 单轮。"""
     from persome.writer import llm as llm_mod
     from persome.writer.cost import calculate_usd
     from persome.writer.llm import run_tool_loop
@@ -346,13 +312,12 @@ def test_f4_cost_accumulates_across_iterations(monkeypatch):
         max_iter=4,
     )
 
-    # extract_usage 应被调用 ≥2 次（第1次 LLM call + 工具调用后的第2次）
     assert len(usage_records) >= 2, f"Expected ≥2 extract_usage calls, got {len(usage_records)}"
     total_prompt = sum(u["prompt_tokens"] for u in usage_records)
     total_completion = sum(u["completion_tokens"] for u in usage_records)
-    # 累计 prompt tokens 应多于第一次单独调用（第二轮输入包含工具结果，更多 tokens）
+
     assert total_prompt > usage_records[0]["prompt_tokens"]
-    # cost 应为正数
+
     cost = calculate_usd(
         "deepseek-chat",
         {
@@ -365,11 +330,7 @@ def test_f4_cost_accumulates_across_iterations(monkeypatch):
     assert cost is not None and cost > 0
 
 
-# ── Test 10: F6 真实 LLM 并发 safe tool 执行 ──────────────────────────────
-
-
 def test_f6_parallel_safe_tools_with_real_llm():
-    """LLM 同时发出 2 个 search_memory 调用时，验证两个 start 事件先于第一个 end 事件。"""
     import time
 
     from persome.writer.llm import run_tool_loop
@@ -435,7 +396,6 @@ def test_f6_parallel_safe_tools_with_real_llm():
             "parallel execution could not be verified"
         )
 
-    # 两个 start 都先于第一个 end
     first_end_idx = next(i for i, e in enumerate(execution_order) if e.startswith("end:"))
     starts_before_first_end = sum(
         1 for e in execution_order[:first_end_idx] if e.startswith("start:")
@@ -445,11 +405,7 @@ def test_f6_parallel_safe_tools_with_real_llm():
     )
 
 
-# ── Test 11: F7 真实 args Pydantic 验证流转 ───────────────────────────────
-
-
 def test_f7_real_llm_args_pass_pydantic_validation():
-    """LLM 调用 search_memory，args 经 _validate_tool_args 验证通过后正常执行。"""
     from persome.writer.llm import run_tool_loop
     from persome.writer.tools import _validate_tool_args
 

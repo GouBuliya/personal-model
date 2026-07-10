@@ -56,7 +56,7 @@ Ask in this order:
 Write a preference entry only when one of the following is true — all three routes require concrete grounding text you can cite from the session entries or timeline blocks:
 
 1. **The reducer explicitly flagged a regularity.** The current session entry (or a recent one) contains a sentence starting with `Observed regularity:` that directly supports the preference. You may quote or paraphrase that sentence. This is the common path; trust it.
-2. **The user directly stated a preference in authored text.** A verbatim quote in the session entries / timeline blocks of the user typing something like "I prefer X over Y", "从现在开始用 X", "don't use Y", etc. One explicit statement is enough — quote it in the entry.
+2. **The user directly stated a preference in authored text.** A verbatim quote in the session entries or timeline blocks of the user typing something like "I prefer X over Y", "use X from now on", or "don't use Y" is sufficient. Quote the explicit statement in the entry.
 3. **You can see the same behavior repeated across multiple entries.** Use `search_memory` or check preceding-day context to confirm ≥ 4 independent occurrences in different sessions. Record what you saw, with counts. Do not infer from a single session's repetition.
 
 ### When to skip

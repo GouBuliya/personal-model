@@ -1,33 +1,4 @@
-"""Case extraction (慢回路 E2 / 问题→解法卡).
-
-A slow-loop stage that distills reusable ``error → resolution`` cards from the
-activity timeline. These cards preserve how the person solved a recurring
-problem without turning the Runtime into an automation engine.
-
-Pipeline (deterministic pre-filter → one LLM call per candidate):
-
-1. **Deterministic pre-filter** (``find_candidates``) — no LLM. Walk the
-   timeline's per-line text in chronological order, mark a line that matches an
-   *error* signal (``error|失败|异常|exception|failed|报错…``), then look ahead a
-   bounded window for a *resolution* signal (``解决|修好|fixed|resolved…``). An
-   error with **no** trailing resolution within the window is dropped (we never
-   mint half a card / hallucinate a fix). Plain log noise that matches neither
-   signal never enters the candidate set.
-
-2. **LLM distillation** (one call per candidate, stage ``case_extractor``) — turn
-   the windowed error+resolution text into a ``{problem, solution}`` card. A
-   throwing / unparseable / empty LLM reply drops *that* candidate only (the
-   stage is fault-tolerant; one bad candidate never sinks the run).
-
-3. **Sink** — each card lands through evomem's public deterministic write
-   entrance (``EvoMemory(...).add_direct``) at ``MemoryLayer.L5_KNOWLEDGE``,
-   routed to ``topic-cases.md`` (an L5 knowledge file under a VALID prefix). We
-   only *import* evomem's public API — never edit it.
-
-The whole stage is behind ``getattr(cfg, "case_extraction_enabled", False)``
-(default on). The LLM call is an injectable seam (``llm_call``) so tests run
-with the ``fake_llm`` fixture / ``PERSOME_LLM_MOCK=1`` without a network.
-"""
+"Extraction of reusable problem-solution cards from activity history."
 
 from __future__ import annotations
 
@@ -53,15 +24,18 @@ logger = get("persome.writer")
 CASE_FILE = "topic-cases.md"
 
 # Deterministic error/resolution discriminators. Kept narrow + bilingual so plain
-# log noise ("opened Safari", "已读消息") never trips the pre-filter — an anchor
+
 # must actually look like a reported error / an actual fix.
 _ERROR_RE = re.compile(
-    r"error|exception|failed|failure|traceback|报错|失败|异常|出错|崩溃|无法|不能",
+    r"error|exception|failed|failure|traceback|"
+    r"\u62a5\u9519|\u5931\u8d25|\u5f02\u5e38|\u51fa\u9519|\u5d29\u6e83|"
+    r"\u65e0\u6cd5|\u4e0d\u80fd",
     re.IGNORECASE,
 )
 _RESOLUTION_RE = re.compile(
     r"resolved|fixed|fix|solved|works?\s+now|passing|succeed|"
-    r"解决|修好|修复|搞定|跑通|通过|成功|好了|可以了",
+    r"\u89e3\u51b3|\u4fee\u597d|\u4fee\u590d|\u641e\u5b9a|\u8dd1\u901a|"
+    r"\u901a\u8fc7|\u6210\u529f|\u597d\u4e86|\u53ef\u4ee5\u4e86",
     re.IGNORECASE,
 )
 
@@ -80,9 +54,9 @@ class CaseCandidate:
     context: list[str] = field(default_factory=list)
 
     def to_prompt_block(self) -> str:
-        lines = [f"报错信号: {self.error_text}", f"解决信号: {self.resolution_text}"]
+        lines = [f"Error signal: {self.error_text}", f"Resolution signal: {self.resolution_text}"]
         if self.context:
-            lines.append("上下文片段:")
+            lines.append("Context:")
             lines.extend(f"- {c}" for c in self.context)
         return "\n".join(lines)
 
@@ -176,15 +150,16 @@ def find_candidates(blocks: list[tl_store.TimelineBlock]) -> list[CaseCandidate]
 
 
 _SYSTEM_PROMPT = (
-    "你是用户的私人助理。下面是从用户的活动时间线里确定性筛出的一段"
-    "「遇到问题→解决问题」的片段。请把它蒸馏成一张可复用的「问题→解法卡」。\n"
-    "要求：\n"
-    "1. 只输出 JSON，形如 "
+    "You are the user's private assistant. The following activity span was "
+    "deterministically selected because it appears to contain a problem and its resolution. "
+    "Distill it into a reusable problem-solution card.\n"
+    "Requirements:\n"
+    "1. Return JSON only, shaped as "
     '{"problem": "...", "solution": "..."}\n'
-    "2. problem 简洁描述遇到的问题/报错；solution 描述是怎么解决的（可复用的步骤）。\n"
-    "3. 如果片段其实并不构成一个有效的「问题→解法」（比如只是噪音、没真正解决），"
-    '返回 {"problem": "", "solution": ""}。\n'
-    "4. 不要复述原始日志，要归纳成下次能照着做的知识。"
+    "2. problem concisely describes the failure; solution gives reusable resolution steps.\n"
+    "3. If the span is noise or has no real resolution, return "
+    '{"problem": "", "solution": ""}.\n'
+    "4. Generalize reusable knowledge instead of repeating the raw log."
 )
 
 
@@ -233,7 +208,7 @@ def _unfence(text: str) -> str:
 
 
 def _card_content(card: dict[str, str]) -> str:
-    return f"问题：{card['problem']}\n解法：{card['solution']}"
+    return f"Problem: {card['problem']}\nSolution: {card['solution']}"
 
 
 def run_case_extraction(
@@ -259,11 +234,13 @@ def run_case_extraction(
             on_event(kind, payload)
 
     if not getattr(cfg, "case_extraction_enabled", False):
-        return CaseResult(committed=False, summary="案例抽取未启用", skipped_reason="disabled")
+        return CaseResult(
+            committed=False, summary="Case extraction is disabled", skipped_reason="disabled"
+        )
 
     llm_call = llm_call or _default_llm_call
 
-    _emit("progress", {"value": 0.1, "label": "收集近期时间线"})
+    _emit("progress", {"value": 0.1, "label": "Collecting recent timeline"})
     since = datetime.now().astimezone() - timedelta(hours=lookback_hours)
     with fts.cursor() as conn:
         blocks = tl_store.query_since(conn, since)
@@ -272,12 +249,12 @@ def run_case_extraction(
     if not candidates:
         return CaseResult(
             committed=False,
-            summary="近期无「问题→解法」候选",
+            summary="No recent problem-solution candidates",
             candidates=0,
             skipped_reason="no candidates",
         )
 
-    _emit("progress", {"value": 0.4, "label": f"蒸馏 {len(candidates)} 个候选"})
+    _emit("progress", {"value": 0.4, "label": f"Distilling {len(candidates)} candidates"})
 
     # ``add_direct`` is the deterministic public write entrance (no reconciler /
     # no LLM); a default-constructed EvoMemory provides it.
@@ -299,15 +276,15 @@ def run_case_extraction(
     if not created_ids:
         return CaseResult(
             committed=False,
-            summary="候选均未蒸馏出有效案例卡",
+            summary="No candidate produced a valid case card",
             candidates=len(candidates),
             skipped_reason="no cards",
         )
 
-    _emit("progress", {"value": 1.0, "label": f"写入 {len(created_ids)} 张案例卡"})
+    _emit("progress", {"value": 1.0, "label": f"Writing {len(created_ids)} case cards"})
     return CaseResult(
         committed=True,
-        summary=f"抽取 {len(created_ids)} 张「问题→解法卡」",
+        summary=f"Extracted {len(created_ids)} problem-solution cards",
         created_ids=created_ids,
         candidates=len(candidates),
     )

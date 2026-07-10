@@ -176,20 +176,20 @@ END;
 
 CREATE TABLE relation_edges (
     edge_id      TEXT PRIMARY KEY,
-    src_identity TEXT NOT NULL,          -- 稳定 identity（person_graph 规范名 / PROJECT slug），非版本 node_id
+    src_identity TEXT NOT NULL,          -- stable canonical identity, never a version node ID
     dst_identity TEXT NOT NULL,
-    predicate    TEXT NOT NULL,          -- 6 谓词闭集之一
-    label        TEXT,                   -- 自由文本关系（开集语义）
-    valid_from   TEXT NOT NULL,          -- 有效时间起（ISO8601）
-    valid_to     TEXT,                   -- NULL = 当前有效
+    predicate    TEXT NOT NULL,          -- one closed-set predicate
+    label        TEXT,                   -- open-text relation semantics
+    valid_from   TEXT NOT NULL,          -- validity start in ISO 8601
+    valid_to     TEXT,                   -- NULL while currently valid
     provenance   TEXT NOT NULL,          -- 'user_committed' | 'inferred'
     confidence   REAL NOT NULL,
-    quote        TEXT,                   -- ≤120 字支撑原文（证据）
+    quote        TEXT,                   -- short source excerpt supporting the relation
     status       TEXT NOT NULL,          -- MemoryStatus: 'shadow'|'active'|'superseded'|'archived'
-    created_at   TEXT NOT NULL,          -- 事务时间（版本轴，不可变）
-    observations INTEGER NOT NULL DEFAULT 1,  -- 强度=支撑该关系的证据数（event 蒸馏计数，单调不减）
-    last_observed_at TEXT,              -- 最近一次证据强化时刻（ISO8601）
-    recall_count INTEGER NOT NULL DEFAULT 0  -- 读也是强化（§3.3 testing effect）：树链走过这条边即 +1
+    created_at   TEXT NOT NULL,          -- immutable transaction time
+    observations INTEGER NOT NULL DEFAULT 1,  -- monotone supporting-evidence count
+    last_observed_at TEXT,               -- latest reinforcement in ISO 8601
+    recall_count INTEGER NOT NULL DEFAULT 0  -- increments when a delivered chain uses this edge
 , src_kind TEXT, dst_kind TEXT, polarity TEXT NOT NULL DEFAULT '0', source_kind TEXT, source_id TEXT, source_receipt TEXT);
 
 CREATE INDEX ix_edges_dst ON relation_edges(dst_identity, valid_from);
@@ -248,14 +248,14 @@ CREATE INDEX idx_parser_ticks_ts ON parser_ticks(ts DESC);
 
 CREATE TABLE schema_faces (
     face_id      TEXT PRIMARY KEY,
-    level        INTEGER NOT NULL DEFAULT 1,   -- 1=面, 2=体（同表递归，高一层同一操作）
-    parent_face  TEXT,                          -- §1.5 rollup：面归体、体锚 USER
-    signature    TEXT NOT NULL DEFAULT '',      -- 签名（md 投影的中心命题）
-    members      TEXT NOT NULL DEFAULT '[]',    -- 足迹：成员键 JSON（最新快照）
-    footprints   TEXT NOT NULL DEFAULT '[]',    -- 最近 N 次足迹快照（重采样闸的输入）
-    provenance   TEXT NOT NULL,                 -- mined | emergent | both（双信号=转正门槛）
-    observations INTEGER NOT NULL DEFAULT 1,    -- 证据棘轮（每次 record +1）
-    confidence   REAL NOT NULL DEFAULT 0.5,     -- 单调 MAX
+    level        INTEGER NOT NULL DEFAULT 1,   -- 1=Face, 2=Volume, 3=Root
+    parent_face  TEXT,                          -- Face-to-Volume or Volume-to-Root rollup
+    signature    TEXT NOT NULL DEFAULT '',      -- central proposition in Markdown projection
+    members      TEXT NOT NULL DEFAULT '[]',    -- latest member-key snapshot as JSON
+    footprints   TEXT NOT NULL DEFAULT '[]',    -- recent member snapshots for stability gate
+    provenance   TEXT NOT NULL,                 -- mined | emergent | both
+    observations INTEGER NOT NULL DEFAULT 1,    -- monotone evidence count
+    confidence   REAL NOT NULL DEFAULT 0.5,     -- monotone maximum
     status       TEXT NOT NULL,                 -- MemoryStatus: shadow|active|superseded|archived
     valid_from   TEXT NOT NULL,
     valid_to     TEXT,

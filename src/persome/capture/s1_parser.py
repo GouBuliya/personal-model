@@ -30,9 +30,9 @@ _URL_RE = re.compile(r"https?://\S+")
 # loading page shouldn't blank the capture).
 _MIN_BROWSER_CONTENT = 40
 _CHROME_COUNT_ROLES = {
-    "AXButton": "按钮/书签",
-    "AXRadioButton": "标签页",
-    "AXPopUpButton": "菜单/扩展",
+    "AXButton": "buttons/bookmarks",
+    "AXRadioButton": "tabs",
+    "AXPopUpButton": "menus/expanders",
 }
 
 _EDITABLE_ROLES = {"AXTextField", "AXTextArea", "AXComboBox"}
@@ -94,7 +94,7 @@ def _extract_focused_element(app_data: dict[str, Any]) -> FocusedElement:
     # now emits on the app dict — the actual keyboard/caret focus. The legacy
     # scan below only inspects the focused window's DIRECT children for a couple
     # of roles, so it misses browsers/editors (their focused control nests deep
-    # under an AXGroup) — which is why `聚焦` was empty for them.
+
     fe = app_data.get("focused_element")
     if isinstance(fe, dict) and (fe.get("role") or ""):
         return FocusedElement(
@@ -156,7 +156,7 @@ def _chrome_digest(app_data: dict[str, Any], web_areas: list[dict[str, Any]]) ->
     parts = [f"{counts[r]} {label}" for r, label in _CHROME_COUNT_ROLES.items() if counts.get(r)]
     if not parts:
         return ""
-    return "[浏览器外壳已折叠：" + " · ".join(parts) + " · 完整结构见 ax_tree]"
+    return "[browser chrome folded: " + " · ".join(parts) + " · full structure in ax_tree]"
 
 
 def _render_browser_content(app_data: dict[str, Any]) -> str | None:
@@ -202,17 +202,6 @@ def _render_browser_content(app_data: dict[str, Any]) -> str | None:
 
 
 def _render_chat_content(app_data: dict[str, Any], bundle: str) -> str | None:
-    """Chat/IM apps (Feishu/Lark, …): render the conversation WITH direction (sent/received) + sender
-    via the per-app parser, so ``visible_text`` preserves who-said-what.
-
-    A flat AX dump drops direction, so downstream consumers of ``visible_text``
-    (session modeling and ``current_context``) cannot tell the user's own
-    messages from the counterpart's, and the LLM mis-attributes them (the reported "把我发的信息检测成
-    对方发给我的" bug). The fast path already builds this structured view
-    (``ParsedConversation.render()`` → ``<message dir="sent|received" sender=…>``); reuse it so the
-    capture-level text carries the same direction. Returns None for a non-chat app or an empty parse →
-    fall open to the generic render (e.g. WeChat is AX-blind, so its parse is empty and the OCR-injected
-    text stays the source). Lazy import avoids a capture↔parsers cycle."""
     try:
         from ..parsers import parser_for_capture
         from ..parsers.base import ParsedConversation

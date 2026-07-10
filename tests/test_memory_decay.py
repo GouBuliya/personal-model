@@ -21,15 +21,18 @@ from persome.writer import memory_decay as decay
 
 OLD_TS = "2025-01-01-1000"  # far past the 90-day default window
 FACTS = [
-    "张伟负责支付模块的联调",
-    "支付模块的联调用的是沙箱环境",
-    "联调里踩过一次超时配置的坑",
-    "最终结论是超时要设 30 秒",
+    "\u5f20\u4f1f\u8d1f\u8d23\u652f\u4ed8\u6a21\u5757\u7684\u8054\u8c03",
+    "\u652f\u4ed8\u6a21\u5757\u7684\u8054\u8c03\u7528\u7684\u662f\u6c99\u7bb1\u73af\u5883",
+    "\u8054\u8c03\u91cc\u8e29\u8fc7\u4e00\u6b21\u8d85\u65f6\u914d\u7f6e\u7684\u5751",
+    "\u6700\u7ec8\u7ed3\u8bba\u662f\u8d85\u65f6\u8981\u8bbe 30 \u79d2",
 ]
 
 
 class FakeDistiller:
-    def __init__(self, output: str = "张伟做过支付联调，结论：超时设 30 秒。"):
+    def __init__(
+        self,
+        output: str = "\u5f20\u4f1f\u505a\u8fc7\u652f\u4ed8\u8054\u8c03\uff0c\u7ed3\u8bba\uff1a\u8d85\u65f6\u8bbe 30 \u79d2\u3002",
+    ):
         self.output = output
         self.calls = 0
 
@@ -154,7 +157,9 @@ class TestCellTable:
         cfg = _cfg(ac_root, cluster_min=1)
         judge = FakeDistiller()
         with fts.cursor() as conn:
-            _seed_old(conn, "project-pay.md", ["一行事实"], tags=["fact", "decayed:2"])
+            _seed_old(
+                conn, "project-pay.md", ["\u4e00\u884c\u4e8b\u5b9e"], tags=["fact", "decayed:2"]
+            )
             res = decay.run_memory_decay(cfg, conn, llm_call=judge)
         assert res.clusters_considered == 0
 
@@ -187,12 +192,14 @@ class TestGates:
         assert res.gated == ["no_shrink"] and live == FACTS
 
     def test_new_mention_gated(self, ac_root):
-        # roster knows 李四 via a person file; the distiller "remembers" him
+
         # into a cluster that never mentioned him → gate
         cfg = _cfg(ac_root)
-        judge = FakeDistiller("张伟和李四做过支付联调。")
-        roster = identity_mod.Roster.build([("李四", [])])
-        assert identity_mod.scan_mentions("李四来了", roster)  # roster sees him
+        judge = FakeDistiller(
+            "\u5f20\u4f1f\u548c\u674e\u56db\u505a\u8fc7\u652f\u4ed8\u8054\u8c03\u3002"
+        )
+        roster = identity_mod.Roster.build([("\u674e\u56db", [])])
+        assert identity_mod.scan_mentions("\u674e\u56db\u6765\u4e86", roster)  # roster sees him
         with fts.cursor() as conn:
             _seed_old(conn, "project-pay.md", FACTS)
             res = decay.run_memory_decay(cfg, conn, llm_call=judge, roster=roster)
@@ -208,10 +215,14 @@ class TestTiersAndBounds:
             _seed_old(
                 conn,
                 "project-pay.md",
-                ["张伟做过支付联调，结论：超时设 30 秒，过程曲折。"],
+                [
+                    "\u5f20\u4f1f\u505a\u8fc7\u652f\u4ed8\u8054\u8c03\uff0c\u7ed3\u8bba\uff1a\u8d85\u65f6\u8bbe 30 \u79d2\uff0c\u8fc7\u7a0b\u66f2\u6298\u3002"
+                ],
                 tags=["fact", "decayed:1", "abstracted-from:a,b"],
             )
-            judge = FakeDistiller("张伟支付联调结论：超时 30 秒")
+            judge = FakeDistiller(
+                "\u5f20\u4f1f\u652f\u4ed8\u8054\u8c03\u7ed3\u8bba\uff1a\u8d85\u65f6 30 \u79d2"
+            )
             res = decay.run_memory_decay(cfg, conn, llm_call=judge)
             assert res.clusters_decayed == 1
             row = conn.execute(
@@ -225,10 +236,12 @@ class TestTiersAndBounds:
             _seed_old(
                 conn,
                 "project-pay.md",
-                ["一段很长很长的 decayed:1 摘要，讲了支付联调的种种。"],
+                [
+                    "\u4e00\u6bb5\u5f88\u957f\u5f88\u957f\u7684 decayed:1 \u6458\u8981\uff0c\u8bb2\u4e86\u652f\u4ed8\u8054\u8c03\u7684\u79cd\u79cd\u3002"
+                ],
                 tags=["fact", "decayed:1"],
             )
-            judge = FakeDistiller("第一行\n第二行")  # multi-line → gated
+            judge = FakeDistiller("\u7b2c\u4e00\u884c\n\u7b2c\u4e8c\u884c")  # multi-line → gated
             res = decay.run_memory_decay(cfg, conn, llm_call=judge)
         assert res.gated == ["not_one_line"]
 

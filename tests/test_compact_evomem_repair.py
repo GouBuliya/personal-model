@@ -1,15 +1,4 @@
-"""issue #526 回归：切主读后 compact 致 evo_nodes 丢记忆 → 自动 repair 自修。
-
-链条（复现）：
-- compact（markdown 主写模式）LLM 整文件重写 + ``rebuild_index`` 绕过三条写路，
-  给条目换新 id；
-- 旧行为只 ``note_out_of_band_rewrite`` 记 alert-only miss，daemon 无自动修复；
-- production associative recall and the evo_nodes authority must agree after
-  compact changes entry ids.
-
-修复：``run_pending`` accept 后同步调用 ``restore.import_from_markdown``，从 markdown
-SSOT 整库重建 evo_nodes（清掉换 id 留下的孤儿 head），折叠 recall 当场恢复。
-"""
+"Tests for test compact evomem repair."
 
 from __future__ import annotations
 
@@ -28,14 +17,12 @@ _ID_RE = re.compile(r"\{id:\s*([0-9a-zA-Z-]+)\}")
 
 _HINT = "widgetcorpus"
 _BODY = (
-    "用户在做 widget 项目 widgetcorpus alpha beta gamma delta epsilon zeta eta theta "
+    "\u7528\u6237\u5728\u505a widget \u9879\u76ee widgetcorpus alpha beta gamma delta epsilon zeta eta theta "
     "iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega"
 )
 
 
 def _rewrite_with_new_ids(markdown: str) -> str:
-    """模拟 compact LLM：保留全部正文 token（过 95% 保留闸），但给每个条目换新 id
-    ——真实 compact 重写整文件时模型重新生成 ``{id: ...}`` 标记，原 id 不再出现。"""
     counter = {"n": 0}
 
     def _sub(_m: re.Match[str]) -> str:
@@ -67,7 +54,6 @@ def _evo_node_ids() -> set[str]:
 
 
 def _run_compact_with_id_churn(monkeypatch) -> None:
-    """跑一次会换 id 的 compact（accept）。"""
     original = files_mod.memory_path("project-x.md").read_text()
     rewritten = _rewrite_with_new_ids(original)
     assert "{id: 99999999" in rewritten and original != rewritten
@@ -77,19 +63,24 @@ def _run_compact_with_id_churn(monkeypatch) -> None:
     with fts.cursor() as conn:
         fts.set_needs_compact(conn, "project-x.md", True)
         results = compact_mod.run_pending(cfg, conn)
-    assert any(r.accepted for r in results), "compact 应被接受（保留率 100%）"
+    assert any(r.accepted for r in results), (
+        "compact \u5e94\u88ab\u63a5\u53d7\uff08\u4fdd\u7559\u7387 100%\uff09"
+    )
 
 
 def test_compact_repairs_evomem_synchronously(ac_root, monkeypatch) -> None:
-    """compact 换 id 后同步从 markdown 重建 evo_nodes，折叠 recall 不留坏窗口。"""
     _seed_and_backfill()
     old_ids = _evo_node_ids()
-    assert "widget 项目" in _production_recall(), "backfill 后 production recall 应能看到记忆"
+    assert "widget \u9879\u76ee" in _production_recall(), (
+        "backfill \u540e production recall \u5e94\u80fd\u770b\u5230\u8bb0\u5fc6"
+    )
 
     _run_compact_with_id_churn(monkeypatch)
 
-    assert "widget 项目" in _production_recall(), "同步 repair 后 production recall 应立即恢复记忆"
+    assert "widget \u9879\u76ee" in _production_recall(), (
+        "\u540c\u6b65 repair \u540e production recall \u5e94\u7acb\u5373\u6062\u590d\u8bb0\u5fc6"
+    )
     new_ids = _evo_node_ids()
     assert new_ids and not (old_ids & new_ids), (
-        "restore 应清掉换 id 前的旧 head 孤儿，evo_nodes 只剩 compact 后的新链头"
+        "restore \u5e94\u6e05\u6389\u6362 id \u524d\u7684\u65e7 head \u5b64\u513f\uff0cevo_nodes \u53ea\u5269 compact \u540e\u7684\u65b0\u94fe\u5934"
     )

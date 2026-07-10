@@ -1,13 +1,4 @@
-"""Pixel-axis graded forgetting — the §2.1 thumbnail tier in cleanup_buffer.
-
-全分辨率 → 缩略 → 仅存文本化（strip）→ 删除. Deterministic; uses real PIL
-images so the downscale path is exercised for real. Covers: the tier fires
-only in its age window, off-by-default byte-equivalence, idempotence (marked
-once, never re-read), encrypted round-trip (decrypt → downscale → re-encrypt)
-and key-unavailable fail-open, small-image mark-only, corrupt-image fail-open,
-actionable extended retention keeping FULL resolution, and strip winning over
-thumbnail past the strip cutoff.
-"""
+"Tests for test capture thumbnail decay."
 
 from __future__ import annotations
 

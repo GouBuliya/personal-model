@@ -28,17 +28,18 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("token", re.compile(r"(?i)\b(?:bearer|authorization)\s*[:=]?\s+[A-Za-z0-9._\-]{16,}")),
     # JWTs (three base64url segments).
     ("token", re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}")),
-    # password=/pwd=/secret=… or 密码：…  (the value, not just the label).
     (
         "password",
         re.compile(r"(?i)\b(?:password|passwd|pwd|secret|token|api[_\-]?key)\b\s*[:=]\s*\S+"),
     ),
-    ("password", re.compile(r"(?:密码|口令|密钥)\s*[:：=]\s*\S+")),
+    (
+        "password",
+        re.compile(r"(?:\u5bc6\u7801|\u53e3\u4ee4|\u5bc6\u94a5)\s*[:\uff1a=]\s*\S+"),
+    ),
     # Emails.
     ("email", re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")),
     # Mainland-CN mobile + international phone runs. The international arm
     # REQUIRES a leading ``+`` — without it, ``\+?`` matched any space/dash
-    # grouped digit run (meeting times ``2026-06-30 14:00 到 15:30``, order
     # numbers ``1234 5678 9012``), the #389 false-positive source.
     ("phone", re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")),
     ("phone", re.compile(r"(?<!\d)\+\d[\d\s\-]{9,18}\d(?!\d)")),

@@ -1,8 +1,4 @@
-"""evo_nodes SSOT 扩列（切换设计稿 §1.2 + Q8，PR-2）：建表 / 迁移 / 序列化测试。
-
-两态收敛：新建库（_CREATE_SQL 直接带全列）与旧形态库（PRAGMA 探测 + ALTER TABLE
-ADD COLUMN 迁移）必须落到同一 schema；旧行经迁移后读出为缺省值。
-"""
+"Tests for test store migration."
 
 from __future__ import annotations
 
@@ -54,7 +50,6 @@ def test_fresh_table_has_all_ssot_columns(ac_root: Path) -> None:
 
 
 def test_old_shape_table_is_migrated(ac_root: Path) -> None:
-    """旧形态库（PR-1 时代的 11 列）经 NodeStore 初始化补齐全列，旧行读出缺省值。"""
     with fts.cursor() as conn:
         conn.executescript(_OLD_SHAPE_SQL)
         conn.execute(
@@ -96,7 +91,7 @@ def test_new_fields_round_trip(ac_root: Path) -> None:
     store = NodeStore()
     node = MemoryNode(
         node_id="n-full",
-        content="central: 偏好极简\nsummary: 证据\ninferences:\n- 拒绝重框架",
+        content="central: \u504f\u597d\u6781\u7b80\nsummary: \u8bc1\u636e\ninferences:\n- \u62d2\u7edd\u91cd\u6846\u67b6",
         layer=MemoryLayer.L6_SCHEMA,
         status=MemoryStatus.ACTIVE,
         file_name="schema-project-x.md",
@@ -106,8 +101,8 @@ def test_new_fields_round_trip(ac_root: Path) -> None:
         confidence="high",
         conflicted=True,
         occurred_at="2026-06-01T10:00",
-        schema_summary="证据",
-        schema_inferences=["拒绝重框架"],
+        schema_summary="\u8bc1\u636e",
+        schema_inferences=["\u62d2\u7edd\u91cd\u6846\u67b6"],
         schema_confidence=0.72,
         valid_from="2026-06-01T12:00",
         valid_until="2026-06-02T12:00",
@@ -118,28 +113,18 @@ def test_new_fields_round_trip(ac_root: Path) -> None:
 
 
 def test_defaulted_fields_round_trip(ac_root: Path) -> None:
-    """全缺省节点（engine 现行写形态）round-trip 不变——既有调用方零改动。"""
     store = NodeStore()
     node = MemoryNode(node_id="n-min", content="c", layer=MemoryLayer.L2_FACT)
     store.save(node)
     assert store.get("n-min") == node
 
 
-# ── §3.2 framework-layer 变更前快照（issue #489）─────────────────────────────
-
-
 def test_fresh_table_takes_no_pre_migration_snapshot(ac_root: Path) -> None:
-    """新建库：``_CREATE_SQL`` 直接带全列，没有破坏性 DDL → 不该付快照代价。
-
-    成本克制铁律——``NodeStore()`` 在 daemon 里被频繁实例化，盲目每次打快照会把每日
-    快照纪律退化成「每次开连接都 VACUUM」。
-    """
     NodeStore()
     assert _snapshots() == []
 
 
 def test_old_shape_migration_takes_pre_change_snapshot(ac_root: Path) -> None:
-    """旧形态库经迁移补列前，framework 层强制落一次验证式变更前快照，迁移随后完成。"""
     with fts.cursor() as conn:
         conn.executescript(_OLD_SHAPE_SQL)
         conn.execute(
@@ -159,7 +144,6 @@ def test_old_shape_migration_takes_pre_change_snapshot(ac_root: Path) -> None:
 
 
 def test_already_migrated_reinit_takes_no_snapshot(ac_root: Path) -> None:
-    """已是最新 schema 的库再次 ``NodeStore()``：``_migrate`` no-op，不打快照。"""
     NodeStore()  # fresh — full schema, no snapshot
     assert _snapshots() == []
     NodeStore()  # re-init, columns already present → no destructive DDL
@@ -169,11 +153,6 @@ def test_already_migrated_reinit_takes_no_snapshot(ac_root: Path) -> None:
 def test_snapshot_failure_aborts_migration_fail_safe(
     ac_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """快照失败 → ``MigrationSnapshotError``，``ALTER TABLE`` 不执行（fail-safe）。
-
-    绝不在无救生艇状态下改 SSOT 库的 schema：宁可拒绝初始化，也不留下「快照没拿到
-    但 schema 已破坏性变更」的中间态。
-    """
     with fts.cursor() as conn:
         conn.executescript(_OLD_SHAPE_SQL)
     before = _columns()
@@ -189,8 +168,6 @@ def test_snapshot_failure_aborts_migration_fail_safe(
 
 
 def test_repeated_migration_does_not_overwrite_existing_snapshot(ac_root: Path) -> None:
-    """变更前快照对路径正确且不互相覆盖：同库重复迁移不产生第二次（迁移完成后再
-    init 是 no-op），且快照确实落在 ``paths.backup_dir()`` 下、名字符合约定。"""
     with fts.cursor() as conn:
         conn.executescript(_OLD_SHAPE_SQL)
 

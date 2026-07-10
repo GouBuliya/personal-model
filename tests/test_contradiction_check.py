@@ -34,7 +34,7 @@ class CountingJudge:
 
     def __call__(self, _messages):
         self.calls += 1
-        return _resp({"contradictory": self.contradictory, "reason": "测试判定"})
+        return _resp({"contradictory": self.contradictory, "reason": "\u6d4b\u8bd5\u5224\u5b9a"})
 
 
 def test_default_llm_adapter_uses_current_call_signature(ac_root, monkeypatch) -> None:
@@ -53,10 +53,10 @@ def test_default_llm_adapter_uses_current_call_signature(ac_root, monkeypatch) -
 
 
 # Same-subject, different-claim pair — solidly inside the similarity band.
-FACT_A = "张伟目前全职负责支付模块的后端开发工作"
-FACT_B = "张伟目前全职负责搜索模块的后端开发工作"
+FACT_A = "\u5f20\u4f1f\u76ee\u524d\u5168\u804c\u8d1f\u8d23\u652f\u4ed8\u6a21\u5757\u7684\u540e\u7aef\u5f00\u53d1\u5de5\u4f5c"
+FACT_B = "\u5f20\u4f1f\u76ee\u524d\u5168\u804c\u8d1f\u8d23\u641c\u7d22\u6a21\u5757\u7684\u540e\u7aef\u5f00\u53d1\u5de5\u4f5c"
 # Unrelated fact — below the band floor against both.
-FACT_FAR = "用户习惯在早晨处理邮件"
+FACT_FAR = "\u7528\u6237\u4e60\u60ef\u5728\u65e9\u6668\u5904\u7406\u90ae\u4ef6"
 
 
 def _cfg(ac_root, *, enabled=True, max_pairs=10):
@@ -128,7 +128,7 @@ class TestRunCheck:
                 assert (fts.get_entry_metadata(conn, eid) or {}).get("conflicted") is True
             assert _live_ids(conn, "person-zhangwei.md") == ids
             rows = contradictions_store.list_rows(conn, status="open")
-            assert len(rows) == 1 and rows[0]["reason"] == "测试判定"
+            assert len(rows) == 1 and rows[0]["reason"] == "\u6d4b\u8bd5\u5224\u5b9a"
 
     def test_clean_verdict_dismissed_and_unmarked(self, ac_root):
         cfg = _cfg(ac_root)
@@ -168,7 +168,11 @@ class TestRunCheck:
             _seed(
                 conn,
                 "person-zhangwei.md",
-                [FACT_A, FACT_B, "张伟目前全职负责风控模块的后端开发工作"],
+                [
+                    FACT_A,
+                    FACT_B,
+                    "\u5f20\u4f1f\u76ee\u524d\u5168\u804c\u8d1f\u8d23\u98ce\u63a7\u6a21\u5757\u7684\u540e\u7aef\u5f00\u53d1\u5de5\u4f5c",
+                ],
             )
             res = check.run_contradiction_check(cfg, conn, llm_call=judge)
         assert judge.calls == 1 and res.judged == 1

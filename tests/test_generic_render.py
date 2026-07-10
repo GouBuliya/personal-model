@@ -57,7 +57,7 @@ def test_chrome_folded_to_digest_not_dumped():
         )
     )
     assert md is not None
-    assert "外壳已折叠" in md  # chrome digest line present
+    assert "chrome folded" in md
     assert "Bookmark A" not in md  # chrome detail NOT inlined
     assert "Tab 1" not in md
     assert "Real page content the user reads here" in md  # content kept
@@ -127,7 +127,7 @@ def test_content_bare_buttons_folded_to_digest():
     # lines (else the LLM reads nav as to-dos — measured in the eval).
     assert "Submit Order Now Please" not in md
     assert "Cancel" not in md
-    assert "外壳已折叠" in md and "按钮" in md
+    assert "chrome folded" in md and "buttons" in md
 
 
 def test_long_content_node_not_capped_per_line():

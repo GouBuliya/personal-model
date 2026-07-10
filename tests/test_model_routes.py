@@ -113,16 +113,19 @@ class TestNodeReceipts:
         NodeStore().save(
             MemoryNode(
                 node_id="n-zw-1",
-                content="张伟负责后端评审",
+                content="\u5f20\u4f1f\u8d1f\u8d23\u540e\u7aef\u8bc4\u5ba1",
                 layer=MemoryLayer.L4_IDENTITY,
-                file_name="person-张伟.md",
+                file_name="person-\u5f20\u4f1f.md",
                 memory_at=datetime(2026, 7, 1, 10, 0, tzinfo=UTC),
             )
         )
-        detail = routes.model_node(id="张伟")
-        assert detail["source"] == "person-张伟.md"
-        assert detail["raw"] and "张伟负责后端评审" in detail["raw"][0]["text"]
-        assert detail["raw"][0]["receipt"] == "⟨n-zw-1:person-张伟.md⟩"
+        detail = routes.model_node(id="\u5f20\u4f1f")
+        assert detail["source"] == "person-\u5f20\u4f1f.md"
+        assert (
+            detail["raw"]
+            and "\u5f20\u4f1f\u8d1f\u8d23\u540e\u7aef\u8bc4\u5ba1" in detail["raw"][0]["text"]
+        )
+        assert detail["raw"][0]["receipt"] == "⟨n-zw-1:person-\u5f20\u4f1f.md⟩"
 
     def test_legacy_event_node_uses_activity_adapter(self, ac_root):
         import json
@@ -150,17 +153,20 @@ class TestNodeReceipts:
                 "INSERT INTO intents (id, ts, scope, kind, confidence, status, rationale,"
                 " payload, evidence, dedup_key, created_at, resolution_outcome)"
                 " VALUES (77, '2026-07-01T09:00:00+00:00', 'timeline', 'meeting', 0.9,"
-                " 'resolved', '和张伟对齐接口', ?, '[]', 'k77',"
+                " 'resolved', '\u548c\u5f20\u4f1f\u5bf9\u9f50\u63a5\u53e3', ?, '[]', 'k77',"
                 " '2026-07-01T09:00:00+00:00', 'done')",
-                (json.dumps({"with": ["张伟"]}, ensure_ascii=False),),
+                (json.dumps({"with": ["\u5f20\u4f1f"]}, ensure_ascii=False),),
             )
         detail = routes.model_node(id="event:77")
         assert detail["source"] == "⟨77:intents⟩"
-        assert detail["raw"] and "和张伟对齐接口" in detail["raw"][0]["text"]
+        assert (
+            detail["raw"]
+            and "\u548c\u5f20\u4f1f\u5bf9\u9f50\u63a5\u53e3" in detail["raw"][0]["text"]
+        )
         assert detail["raw"][0]["receipt"] == "⟨77:intents⟩"
 
     def test_unknown_id_is_empty_fail_open(self, ac_root):
-        detail = routes.model_node(id="不存在的人")
+        detail = routes.model_node(id="\u4e0d\u5b58\u5728\u7684\u4eba")
         assert detail["raw"] == []
 
 
@@ -169,9 +175,9 @@ class TestNodeTree:
 
     def _seed_chain(self, conn):
         for src, dst, src_kind, dst_kind, observations in (
-            ("self", "张伟", "self", "person", 5),
-            ("张伟", "Bob", "person", "person", 2),
-            ("self", "李四", "self", "person", 1),
+            ("self", "\u5f20\u4f1f", "self", "person", 5),
+            ("\u5f20\u4f1f", "Bob", "person", "person", 2),
+            ("self", "\u674e\u56db", "self", "person", 1),
         ):
             edges_store.add_edge(
                 conn,
@@ -189,15 +195,15 @@ class TestNodeTree:
         with fts.cursor() as conn:
             edges_store.ensure_schema(conn)
             self._seed_chain(conn)
-        tree = routes.model_node(id="张伟")["tree"]
+        tree = routes.model_node(id="\u5f20\u4f1f")["tree"]
         firsts = [
             (edge["dir"], edge["child"]["id"], edge["observations"]) for edge in tree["edges"]
         ]
         assert ("in", "self", 5) in firsts and ("out", "Bob", 2) in firsts
         self_node = next(edge["child"] for edge in tree["edges"] if edge["child"]["id"] == "self")
         second_level = {edge["child"]["id"] for edge in self_node["edges"]}
-        assert "李四" in second_level and "张伟" not in second_level
+        assert "\u674e\u56db" in second_level and "\u5f20\u4f1f" not in second_level
 
     def test_tree_isolated_point_is_bare_root(self, ac_root):
-        detail = routes.model_node(id="孤点")
-        assert detail["tree"] == {"id": "孤点", "edges": []}
+        detail = routes.model_node(id="\u5b64\u70b9")
+        assert detail["tree"] == {"id": "\u5b64\u70b9", "edges": []}

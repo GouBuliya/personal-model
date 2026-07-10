@@ -812,39 +812,6 @@ def cleanup_buffer(
     extended_retention_enabled: bool = False,
     actionable_retention_days: int = 7,
 ) -> dict[str, int]:
-    """Tiered buffer hygiene. Returns {deleted, stripped, thumbnailed, evicted}.
-
-    Passes, all gated on ``processed_before_ts`` so an unprocessed
-    trailing capture is never evicted:
-
-    1. **Delete whole file** when mtime is older than ``retention_hours``.
-    2. **Strip screenshot** when mtime is older than
-       ``screenshot_retention_hours`` (if provided and smaller than
-       ``retention_hours``). The screenshot field is 77% of the payload
-       and nothing downstream consumes it, so stripping keeps AX+text
-       queryable for much longer at ~20% of the original size.
-    2b. **Thumbnail screenshot** (memory-rebuild spec §2.1 pixel-axis graded
-       forgetting, ``screenshot_thumbnail_hours``; 0/None = off, byte-identical
-       legacy) — the tier BETWEEN full-res and strip: a capture older than the
-       thumbnail cutoff but younger than the strip cutoff has its screenshot
-       downscaled in place (≤480px JPEG). 全分辨率 → 缩略 → 仅存文本化（strip；
-       OCR/AX text 长留 ``captures``）→ 删除 — pixels degrade first and
-       hardest, the text projection outlives them, and the evidence chain
-       degrades without breaking. Fail-open per file (encrypted without a key
-       / undecodable image ⇒ untouched).
-    3. **Evict by size** once total buffer size exceeds ``max_mb`` MB.
-       Oldest already-absorbed files go first. ``max_mb=0`` disables this.
-
-    **User-input anchored extended retention.** When
-    ``extended_retention_enabled`` (default off → byte-for-byte the legacy
-    behaviour), the strip pass skips an Enter-anchored input frame until it ages
-    past ``actionable_retention_days`` (then it strips normally). A retained
-    capture keeps its screenshot exactly as stored: if screenshot
-    encryption is on the field is ciphertext and STAYS ciphertext (extended
-    retention never reads or decrypts it). Whole-file delete + size eviction are
-    unchanged — only the (reversible, downstream-unused) screenshot strip is
-    deferred for the actionable subset.
-    """
     buf = paths.capture_buffer_dir()
     if not buf.exists():
         return {"deleted": 0, "stripped": 0, "thumbnailed": 0, "evicted": 0}
@@ -999,17 +966,6 @@ _THUMBNAIL_JPEG_QUALITY = 50
 
 
 def _thumbnail_screenshot_inplace(path: Path) -> bool:
-    """Downscale a capture's screenshot in place (§2.1 pixel tier 2: 缩略).
-
-    Returns True when the file was rewritten (downscaled, or just marked when
-    the image is already small enough). Fail-open everywhere: an encrypted
-    screenshot whose key is unavailable, an undecodable image, or any I/O
-    error leaves the file untouched — graded forgetting must never DESTROY
-    pixels it cannot faithfully re-encode (the strip tier will still reap them
-    later). An encrypted screenshot is decrypted, downscaled, and
-    RE-encrypted, so the encrypted-at-rest invariant survives the tier
-    transition.
-    """
     try:
         data = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):

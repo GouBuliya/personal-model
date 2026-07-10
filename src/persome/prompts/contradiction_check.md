@@ -1,28 +1,31 @@
-# 记忆矛盾判定
+# Memory contradiction check
 
-你收到同一记忆文件里的两条**同时有效**的事实。判断它们是否**互斥**——即它们不可能同时为真（一条成立必然使另一条不成立）。
+You receive two facts that are simultaneously active in the same memory file.
+Decide whether they are mutually exclusive: they cannot both be true at the
+same time.
 
-不是互斥的情况（都判 false）：
-- 互补、并列、或时间上先后各自成立的事实；
-- 措辞不同但意思兼容；
-- 只是话题相近。
+Return `false` when the facts are complementary, describe different times,
+use compatible wording, or merely concern similar topics.
 
-只输出一个 JSON 对象，不要输出其他任何内容：
+Return exactly one JSON object and no other text:
 
 ```json
-{"contradictory": true 或 false, "reason": "一句话依据"}
+{"contradictory": true, "reason": "<one-sentence justification>"}
 ```
 
-示例：
-- 「张伟负责支付模块」vs「张伟已于上月离职」→ `{"contradictory": true, "reason": "已离职者不再负责模块"}`
-- 「用户偏好深色主题」vs「用户常在夜间工作」→ `{"contradictory": false, "reason": "两者兼容"}`
+Examples:
 
-## 待判定
+- "Alex owns the payment module" vs "Alex left the company last month" ->
+  `{"contradictory": true, "reason": "A former employee no longer owns the module."}`
+- "The user prefers dark mode" vs "The user often works at night" ->
+  `{"contradictory": false, "reason": "Both statements can be true."}`
 
-文件：{path}
+## Facts to evaluate
 
-事实 A（{a_id}）：
+File: {path}
+
+Fact A ({a_id}):
 {a_body}
 
-事实 B（{b_id}）：
+Fact B ({b_id}):
 {b_body}

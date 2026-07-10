@@ -1,11 +1,8 @@
-"""schema_faces — the §4.5 unified schema object (memory-rebuild spec).
+"""Persistence for Face, Volume, and Root personal-model structures.
 
-The graph's 「面/体」 and the daemon's ``schema-*.md`` are ONE object with two
-projections:
+The graph geometry and ``schema-*.md`` files are two projections of one object:
 
-    Schema = members(足迹) × signature(签名, md 投影) × provenance(mined |
-             emergent | both) × observations/confidence/validity/bitemporal ×
-             status × level (1=面, 2=体 — same-table recursion, one column up)
+    Schema = members x signature x provenance x evidence x validity x level
 
 Two extractors feed the SAME row:
 - **mined** — the D2 schema miner (signature route: it induces the central
@@ -15,9 +12,9 @@ Two extractors feed the SAME row:
 
 Footprint-Jaccard / normalized-signature matching folds the two contributions
 onto one face; a face both extractors reached escalates provenance to
-``both`` — the TWO-SIGNAL promotion bar (§3.1: 转正 = 常驻资格).
+``both`` is the two-signal requirement for promotion into resident memory.
 
-**Resampling gate (P2 闸, deterministic reading)**: every re-mine/re-cluster
+**Resampling gate:** every re-mine or re-cluster
 is a natural evidence resample (a different day's facts = a different
 subsample). The face keeps its last N footprint snapshots; promotion requires
 the min pairwise Jaccard across snapshots ≥ the stability threshold — a
@@ -58,14 +55,14 @@ FOOTPRINT_HISTORY_KEEP = 3
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_faces (
     face_id      TEXT PRIMARY KEY,
-    level        INTEGER NOT NULL DEFAULT 1,   -- 1=面, 2=体（同表递归，高一层同一操作）
-    parent_face  TEXT,                          -- §1.5 rollup：面归体、体锚 USER
-    signature    TEXT NOT NULL DEFAULT '',      -- 签名（md 投影的中心命题）
-    members      TEXT NOT NULL DEFAULT '[]',    -- 足迹：成员键 JSON（最新快照）
-    footprints   TEXT NOT NULL DEFAULT '[]',    -- 最近 N 次足迹快照（重采样闸的输入）
-    provenance   TEXT NOT NULL,                 -- mined | emergent | both（双信号=转正门槛）
-    observations INTEGER NOT NULL DEFAULT 1,    -- 证据棘轮（每次 record +1）
-    confidence   REAL NOT NULL DEFAULT 0.5,     -- 单调 MAX
+    level        INTEGER NOT NULL DEFAULT 1,   -- 1=Face, 2=Volume, 3=Root
+    parent_face  TEXT,                          -- Face-to-Volume or Volume-to-Root rollup
+    signature    TEXT NOT NULL DEFAULT '',      -- central proposition in Markdown projection
+    members      TEXT NOT NULL DEFAULT '[]',    -- latest member-key snapshot as JSON
+    footprints   TEXT NOT NULL DEFAULT '[]',    -- recent member snapshots for stability gate
+    provenance   TEXT NOT NULL,                 -- mined | emergent | both
+    observations INTEGER NOT NULL DEFAULT 1,    -- monotone evidence count
+    confidence   REAL NOT NULL DEFAULT 0.5,     -- monotone maximum
     status       TEXT NOT NULL,                 -- MemoryStatus: shadow|active|superseded|archived
     valid_from   TEXT NOT NULL,
     valid_to     TEXT,
@@ -78,7 +75,6 @@ CREATE INDEX IF NOT EXISTS ix_faces_status ON schema_faces(status, level);
 # Columns added after first ship — backfilled onto existing tables (the
 # relation_edges _EXTRA_COLUMNS pattern).
 _EXTRA_COLUMNS: tuple[tuple[str, str], ...] = (
-    # entity anchors (§7-6 可视化 / graph projection): the identities a face is
     # ABOUT — the mined source file's entity + roster mentions in the signature.
     # Footprint members are FACT-level hashes; anchors are the honest
     # entity-level projection that lets the face render as a hull over its
@@ -295,26 +291,26 @@ def resident_faces(conn: sqlite3.Connection, *, top_k: int = 5) -> list[sqlite3.
 
 
 def render_residency(faces: list[sqlite3.Row]) -> str:
-    """Render the resident block (§3.1 常驻投影): signatures only — the tower
+    """Render resident Face signatures only; members remain retrievable.
+
+    The tower
     top is a budgeted digest, members stay retrievable, not resident."""
     if not faces:
         return ""
-    lines = ["【行为规律（双信号转正）】"]
+    lines = ["[Resident behavior patterns]"]
     for f in faces:
-        lines.append(f"- {f['signature']}  [证据 {f['observations']}·置信 {f['confidence']:.2f}]")
+        lines.append(
+            f"- {f['signature']}  [evidence {f['observations']} · confidence {f['confidence']:.2f}]"
+        )
     return "\n".join(lines)
 
 
-# ── level 3 = root apex（2026-07-04 spec: 体之上的唯一常驻顶点）──────────────────
-# root 是维度判据的第 4 格（体集→root）：single-instance、token 预算封顶、唯一常驻。
-# 与 face/体 的 fold-or-insert 不同——root 是 SINGLETON，每次合成 chain-supersede 旧 root
-# （关闭旧行的 valid_to + status=superseded，插入新行 born ACTIVE）。provenance='synth'。
 ROOT_LEVEL = 3
 _ROOT_PROVENANCE = "synth"
 
 
 def resident_root(conn: sqlite3.Connection) -> sqlite3.Row | None:
-    """The single live level-3 root (ACTIVE, valid_to IS NULL) — the唯一常驻 apex.
+    """Return the single live level-3 Root, the only always-resident apex.
     None when no root has been synthesized yet (cold start → caller falls back to
     resident_faces). Singleton is an invariant (see upsert_root); LIMIT 1 is defensive."""
     ensure_schema(conn)
@@ -332,7 +328,7 @@ def render_root(row: sqlite3.Row | None) -> str:
     if row is None:
         return ""
     text = (row["signature"] or "").strip()
-    return "【root — 这个人是谁·最要紧的（apex，其余记忆按需 recall）】\n" + text if text else ""
+    return "[Root: identity and durable priorities]\n" + text if text else ""
 
 
 def upsert_root(
@@ -346,8 +342,8 @@ def upsert_root(
     """Write a fresh root as the SINGLETON level-3 apex, chain-superseding any prior
     live root (close its validity + mark superseded; the new row is born ACTIVE per
     the default-ON ruling). ``signature`` = the synthesized apex narrative (the caller
-    has already token-capped it); ``members`` = the level-2 体 face_ids this apex fuses;
-    ``anchors`` = the entity handles the narrative names (progressive-disclosure把手).
+    has already token-capped it); ``members`` are the level-2 Volume IDs this apex fuses;
+    ``anchors`` are entity handles named by the narrative for progressive disclosure.
     Returns the new root's face_id. observations carries forward (+1 = one more nightly
     resample of "this is the apex")."""
     ensure_schema(conn)

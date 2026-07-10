@@ -1,38 +1,4 @@
-"""Text-axis graded forgetting — 细节链 → 粗摘要 → 一行事实.
-
-This is the text half of graded forgetting; the pixel half is cleanup_buffer's
-thumbnail tier. Old durable-memory entries that were NEVER read-reinforced
-(``entry_retrieval_stats.retrieval_count`` — the testing-effect signal: a
-retrieved memory is load-bearing and immune) are nightly distilled into a
-coarser summary — precision degrades in tiers, nothing is ever binary-deleted.
-
-Eligibility is the MECE cell table (spec §2): only **old ∧ weak ∧
-unprotected** entries decay. Protections: conflicted (⚠ pending human
-adjudication — never destroy evidence), non-fact prefixes (event-* / schema-*
-/ intent-* have their own lifecycles), and ``decayed:2`` (the
-one-line floor — coarser than one line is deletion, which §1.5-4 forbids).
-
-The decay op is a COMPOSITION of existing choke-point verbs (spec §4 — zero
-new write verbs, so PR-3 shadow dual-write, PR-6b write-authority inversion,
-FTS projection and rebuild-index are all consistent for free):
-
-1. ``append_entry(summary, tags=[…, "decayed:N", "abstracted-from:{ids}"])``
-   — the existing ABSTRACT provenance vocabulary (parser/backfill/projector
-   already speak it);
-2. ``mark_entry_deleted`` per source — whose own docstring names it "the
-   ABSTRACT source-retire landing": markdown strike (bytes stay on disk =
-   the receipt), FTS retire, evo orphan-shadow.
-
-Anti-hallucination gates (spec §5, all zero-LLM, any failure ⇒ the cluster is
-kept as-is and retried another night — loss is the point, fabrication is not):
-mention-subset (roster mentions in the summary ⊆ union of source mentions,
-via the same ``identity.scan_mentions`` knife), shrink ceiling (a "summary"
-longer than half its sources is not decay), non-empty.
-
-Bounded: ≤ ``max_clusters_per_night`` LLM calls, oldest cluster first.
-Idempotent by construction: decayed sources leave the live scan; a summary
-must age past ``after_days`` again before the L1→L2 pass can touch it.
-"""
+"Tiered precision decay for old memory facts."
 
 from __future__ import annotations
 
@@ -172,7 +138,10 @@ def _distill(call: Callable[[list[dict]], Any], cluster: DecayCluster) -> str:
     template = prompts.load("memory_decay.md")
     numbered = "\n".join(f"{i + 1}. {b}" for i, b in enumerate(cluster.bodies))
     prompt = (
-        template.replace("{mode}", "一行事实（不换行）" if cluster.tier == 2 else "一段粗摘要")
+        template.replace(
+            "{mode}",
+            "one factual line without line breaks" if cluster.tier == 2 else "one coarse summary",
+        )
         .replace("{path}", cluster.path)
         .replace("{facts}", numbered)
     )

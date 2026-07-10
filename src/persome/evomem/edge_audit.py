@@ -1,42 +1,4 @@
-"""Edge hallucination-rate sampler — §7-7 row 5's oracle (the §7-4 promise).
-
-Answers "how many of these edges are WRONG" on a reproducible sample, so
-extraction quality gets a number instead of a vibe. Two tiers:
-
-**Deterministic tier (zero LLM, always on)** — structural hallucination:
-every minted edge is traceable by construction (quote ≤120 chars excerpted
-from its source; ``event:intent|entry|session:*`` identities point at their
-minting source; person/project edges point at their entity files), so the checks
-re-derive what ``add_edge``/the extractor claimed:
-
-- ``src_exists`` / ``dst_exists`` — the endpoint identity still resolves
-  (self · a done-terminal ``intents`` row · an entity file with active
-  nodes). A dangling endpoint (e.g. an entity later shadowed by
-  adjudication) is a structural hallucination.
-- ``matrix_legal`` — predicate × (src_kind, dst_kind) ∈ §4.2
-  ``_LEGAL_ENDPOINTS``. ``add_edge`` validates at mint time, so a failure
-  here is legacy drift / hand-written rows.
-- ``kind_consistent`` — the STORED kinds match what the identity itself
-  derives (event: prefix → event, file prefix → org/project/artifact,
-  else person).
-- ``source_exists`` — the minting source is still there (the intent row is
-  done-terminal; the entity file has ≥1 active node).
-- ``quote_traceable`` — the evidence excerpt is found in its claimed source
-  text (intent rationale / the endpoint files' node contents). The
-  extractor's SYNTHETIC fallback quotes (与 X 的交互记录 / A 与 B 曾在同一
-  场景出现 / …) are honest constructions, not excerpts — they pass with a
-  ``synthetic_quote`` note; the co-occurrence one is instead re-derived
-  from the shared-minute-bucket computation.
-
-**LLM tier (``--llm``, default OFF)** — semantic hallucination: does the
-source text actually ENTAIL the relation? Expensive but catches what
-structure cannot (a traceable quote that doesn't support the predicate).
-
-Verdicts (MECE): ``valid`` · ``structural_hallucination`` ·
-``semantic_hallucination``. Sampling is stratified by ``observations``
-(low-evidence edges hallucinate more): obs==1 gets half the budget, 2–3 gets
-30%, ≥4 the rest; a short stratum donates its slack to the next.
-"""
+"Structural and optional semantic audit of relation edges."
 
 from __future__ import annotations
 
@@ -56,10 +18,10 @@ _ENTITY_PREFIXES = ("person-", "org-", "project-", "tool-")
 
 # the extractor's honest synthetic fallbacks (constructions, not excerpts)
 _SYNTHETIC_PATTERNS = (
-    re.compile(r"^与 .+ 的交互记录$"),
-    re.compile(r"^.+ 与 .+ 曾在同一场景出现$"),
-    re.compile(r"^已完成的 .+ 事项$"),
-    re.compile(r"^.+ 项目记忆 \d+ 条持久事实$"),
+    re.compile(r"^Interaction history with .+$"),
+    re.compile(r"^.+ and .+ appeared in the same context$"),
+    re.compile(r"^Completed .+$"),
+    re.compile(r"^.+ project memory contains \d+ durable facts$"),
 )
 
 
@@ -144,9 +106,6 @@ class EdgeVerdict:
 
 
 def _file_stems(identity: str) -> list[str]:
-    """identity → candidate file stems: exact AND slugged (person_graph mints
-    files via ``_slug``, so special-char canonicals — 「金辰Vincent 天壹资本」 →
-    ``金辰vincent-天壹资本`` — are not exact-invertible)."""
     from .person_graph import _slug
 
     stems = [identity]
@@ -265,7 +224,7 @@ def audit_edge(conn, row: Any, *, llm_call: Any | None = None) -> EdgeVerdict:
             v.notes.append("legacy_source_unavailable")
         if source_ok and quote and not _is_synthetic(quote):
             trace_ok = any(_norm_ws(quote) in _norm_ws(text) for text in source_texts)
-    elif _is_synthetic(quote) and "曾在同一场景出现" in quote:
+    elif _is_synthetic(quote) and "appeared in the same context" in quote:
         # co-occurrence: re-derive the shared minute bucket instead of text trace
         trace_ok = _shared_bucket(conn, src, dst)
         source_ok = trace_ok
@@ -303,10 +262,10 @@ def _llm_entails(conn, row: Any, quote: str, llm_call: Any) -> bool | None:
     failed (fail-open — never counts as hallucination on a broken judge)."""
     try:
         prompt = (
-            f"关系断言：{row['src_identity']} —{row['predicate']}"
+            f"Relation: {row['src_identity']} —{row['predicate']}"
             f"{('(' + str(row['label']) + ')') if row['label'] else ''}→ {row['dst_identity']}\n"
-            f"证据文本：{quote}\n\n"
-            '证据文本是否足以支撑这条关系断言？只输出 JSON：{"entailed": true|false}'
+            f"Evidence: {quote}\n\n"
+            'Does the evidence entail this relation? Return JSON only: {"entailed": true|false}'
         )
         resp = llm_call([{"role": "user", "content": prompt}])
         data = json.loads(resp.choices[0].message.content or "{}")

@@ -1,22 +1,4 @@
-"""bug_009 + merged_bug_002 — body strike must be anchored to the entry id.
-
-``supersede_entry`` / ``mark_entry_deleted`` retire an entry by wrapping its body
-in ``~~...~~`` in the markdown. The old implementation did a **content-blind**
-``text.replace(target.body, striked, 1)`` over the WHOLE file, which strikes the
-*first* byte-identical match — so retiring a later entry whose body equals an
-earlier one's struck the EARLIER (still-live) entry instead. The next
-``rebuild_index`` then re-derives that wrong entry as superseded, breaking the
-``增量判定 ≡ rebuild`` invariant.
-
-The fix anchors the strike to the unique ``{id: <entry_id>}`` heading marker and
-only replaces inside that entry's own body region.
-
-merged_bug_002 hardens ``mark_entry_deleted`` further:
-  (a) an empty body still leaves a durable strike sentinel (``~~~~``) so a rebuild
-      keeps it superseded (no #superseded-by successor tag exists to fall back on);
-  (b) the frontmatter ``updated`` is bumped and the files-table row refreshed, so
-      ``list_files`` ordering and the FileRow don't drift.
-"""
+"Tests for test entry body strike anchored."
 
 from __future__ import annotations
 

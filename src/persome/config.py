@@ -51,8 +51,7 @@ class CaptureConfig:
     screenshot_retention_hours: int = 24
     #   * pixel-axis graded forgetting (memory-rebuild spec §2.1): screenshots in
     #     JSONs older than `screenshot_thumbnail_hours` (but younger than the
-    #     strip cutoff) are downscaled in place to a ≤480px JPEG — the 缩略 tier
-    #     between full-res and strip (全分辨率→缩略→仅存文本化→删除). 0 disables
+
     #     (default — byte-identical legacy). Encrypted screenshots are
     #     decrypted/downscaled/re-encrypted; key-unavailable ⇒ untouched.
     screenshot_thumbnail_hours: int = 0
@@ -186,7 +185,7 @@ class MemoryDeltaConfig:
     enabled: bool = True
     # Upper bound on session timeline blocks fed to the model.
     max_blocks: int = 120
-    # Known-identity roster entries injected into the prompt (§4.1 选择题:
+
     # entities are references into this roster or an explicit new_entity — the
     # LLM never emits bare strings that probe the store).
     roster_max: int = 60
@@ -194,32 +193,20 @@ class MemoryDeltaConfig:
     # deterministic parse gate (§4.1: judgment belongs to the LLM, gating and
     # identity to code).
     min_confidence: float = 0.5
-    # §4.2 确定性 apply：把 gated delta 铸成真实点/边（writer/delta_apply.py）。
-    # ON 时 memory_delta 成为写侧点/边的生产者（attention 式多头提取取代 classifier
-    # 保守摘要分类——修「点层稀」），且 classifier 的铸点在 tick 里短路退役。
-    # 2026-07-04 parity-cleared → ON（生产铸点者；classifier 铸点退役）。
+
     apply_enabled: bool = True
-    # ②事实层：assertions 头 → 实体文件事实条目（喂 schema 的料，spec 2026-07-04）。四头
-    # 此前只接三头（entities/relations/events），assertions 抽出即弃 → 实体文件只 1 条点、
-    # 够不到 schema min_facts=4。随 apply_enabled 翻 ON（parity-cleared 2026-07-04）。
+
     apply_assertions: bool = True
-    # ② 确定性共现 knows：同一 session 每对 person 互相 knows（subsume legacy relation_extractor
-    # 的确定性腿）。live LLM 抽共现关系不稳 → delta relations < legacy;补进 payload 保证
-    # delta ⊇ legacy、退役无召回损失。默认 ON（这是安全退役的正确行为，非过度生产）。
+
     cooccurrence_knows: bool = True
 
 
 @dataclass
 class OrphanReaperConfig:
-    # §1.5-2 图侧孤儿收敛：长不出实质 6 谓词边的 entity 点（person/org/project/artifact），
-    # gmt_created 龄 > ttl_days 即按噪声遗忘（mark_entry_deleted，收据留、可回放）。这是
-    # delta apply「过度生产读全场多铸」的收敛腿——敢多铸一次性工作项，因为孤儿会在此被忘。
-    # 默认 OFF（随 apply_enabled 一起翻 ON；无 delta 过度生产时也无害）。
     enabled: bool = False
     ttl_days: int = 30
     max_per_night: int = 200
-    # 注意力驱逐阈：只有弱地板边（engaged_with max observations < 此值）且无②层结构边、
-    # 且到龄的点才驱逐。反复参与（obs≥此值）或长出结构边 = 高注意力 → 留。
+
     engaged_keep: int = 2
 
 
@@ -228,7 +215,7 @@ class MemoryDecayConfig:
     # Text-axis graded forgetting.
     # Nightly (23:55 tail) bounded pass: old ∧ never-retrieved ∧ unprotected
     # durable fact entries are distilled per file into a coarser summary
-    # (细节链→粗摘要→一行事实) via the existing choke-point verbs (append with
+
     # decayed:N + abstracted-from provenance, sources strike-retired — receipts
     # stay in markdown). Retrieved memories are IMMUNE (read = reinforcement);
     # conflicted entries wait for human adjudication; decayed:2 is the floor.
@@ -270,7 +257,7 @@ class SchemaConfig:
     # One bounded LLM compresses active Volume/Face/profile evidence into the
     # single level-3 Root. Default ON:
     # born active, chain-supersedes the prior root, 3 deterministic gates + fail-open
-    # (无 root → residency falls back to resident_faces, so default-ON is safe).
+
     root_synthesis_enabled: bool = True
     root_token_budget: int = 1500  # the always-resident apex hard budget
 
@@ -303,7 +290,7 @@ class EvomemConfig:
     # recoverable condition. Consider flipping on under write_authority=evomem
     # (evo_nodes is the truth there) or to rehearse the freeze path.
     freeze_writes_on_failure: bool = False
-    # Shadow dual-write (§4.2 双写影子期, PR-3): after every markdown main write
+
     # (append/supersede/delete in store/entries.py — the choke point all nine
     # write stations converge on), incrementally mirror the affected entries
     # into evo_nodes via the SAME mapping the PR-2 backfill uses, keeping the
@@ -322,8 +309,7 @@ class EvomemConfig:
     #     existed: every write station lands on the markdown main write paths
     #     in store/entries.py, the PR-3 shadow hook mirrors into evo_nodes, and
     #     markdown stays the SSOT. P0 discipline: the code default NEVER flips
-    #     — a human flips the config only after PR-5 (主读) has been stable
-    #     ≥1 week (§4.4 顺序纪律).
+
     #   "evomem" — the inversion: the same write stations are routed (at the
     #     choke-point write verbs they already converge on) through the evomem
     #     engine — evo_nodes is the truth (single-transaction atomic write),
@@ -344,7 +330,7 @@ class EvomemConfig:
     # writer/contradiction_check.py): at the 23:55 harvest, pair same-file live
     # facts deterministically (char-bigram band similarity — same subject,
     # different claim), LLM-judge ≤ contradiction_max_pairs of them, and MARK a
-    # contradiction (entry_metadata.conflicted → recall's ⚠(冲突未裁决)
+
     # down-weight + a memory_contradictions adjudication row for `persome
     # contradictions`) — never auto-supersede: deleting one side of a
     # disagreement is a human verb. Every judged pair is remembered, so cost
@@ -372,9 +358,7 @@ class SearchConfig:
     # 0.3 reaches exact parity (mean Δ 0.000) while keeping the slot heads a real
     # voice for genuine 5W1H queries (deterministic golden slot buckets stay 1.0).
     slot_pool_weight: float = 0.3
-    relation_pool_weight: float = (
-        1.0  # SS7-8 判决：关系探针 7/12 vs 4/12；auto-golden rel 0.0-1.0 逐字节等值
-    )
+    relation_pool_weight: float = 1.0
     # §5 production read cutover (memory-rebuild §3.2): query-time consumers (MCP
     # search / chat memory tool / writer tool-loop) route through
     # retrieval.associative.associative_read — zero-LLM Q distillation feeding the
@@ -382,19 +366,16 @@ class SearchConfig:
     # default per the 2026-07-03 sweep verdict (exact parity at the 0.3 weights);
     # flipping off restores search_hybrid verbatim at every switched site.
     associative_read_enabled: bool = True
-    # §7-3 gain unlock（A 步）：结构审计干净的 shadow 边参与关系头遍历（shadow-only
-    # 可达名单独成池，×0.5 降权投票——未证明永不盖过已转正）。§7-8 判决后默认开：
-    # 关系探针 +25pp 依赖 shadow 通路，auto-golden 回归逐字节等值（零扰动）。
+
     relation_include_shadow: bool = True
-    # §7-10 池内查询感知重排：contains 池候选按与 Q 的 dense 余弦重排（替换
-    # per-needle recency 序）；关=回 recency（降级路径）。
+
     contains_pool_rerank: bool = True
-    # 轴A 匹配面 (issue #557): the FTS5 entries table indexes the tags column, so a bare
+
     # MATCH can also hit classification labels rather than entry text. False =
     # match the content column only
     # ({content}: filter, read-side, zero migration); True = legacy label-matchable.
     tags_matchable: bool = False
-    # 轴B 时间衰减 (issue #557): the RRF fusion is rank-only / time-blind — a 3-week-old
+
     # "0.3.9" fact outranks yesterday's when it matches slightly better. After fusion each
     # candidate's rank score is multiplied by max(floor, 0.5^(age_days/half_life)) and the
     # list re-sorts (membership never changes; anchored at the caller's `until` else the
@@ -416,9 +397,9 @@ class MCPConfig:
     host: str = "127.0.0.1"
     port: int = 8742
     # MCP full-power entrance E1/E2 (spec 2026-07-06-mcp-full-power-memory-entrance):
-    # per-tool kill-switches (从宽读 — read-only tools default ON, fail-open).
-    read_receipt_enabled: bool = True  # ⟨entry_id:path⟩ 收据把手解引用（渐进披露一跳下钻）
-    entity_graph_enabled: bool = True  # 图层直读：谓词边 + as-of + 到 USER 链
+
+    read_receipt_enabled: bool = True
+    entity_graph_enabled: bool = True
 
 
 @dataclass
@@ -502,8 +483,7 @@ class Config:
     # Graph-memory P0-2 (#428): deterministic + LLM relation-edge extraction → SHADOW.
     # Default OFF (shadow-first: prove extraction quality before edges can reach retrieval).
     relation_extraction_enabled: bool = False
-    # §7-3 转正扇出上限（promotion volume IS dilution volume）；edge-audit 全量 0%
-    # 幻觉后默认 10→20（B 步），sweep 复跑护带。
+
     edge_promote_fanout: int = 20
 
     def model_for(self, stage: str) -> ModelConfig:
@@ -721,7 +701,7 @@ dedup_interval_seconds = 1.0  # per-event-type dedup window
 same_window_dedup_seconds = 5.0  # don't re-capture the same bundle+window unless 5s have passed (or it's a focus change)
 buffer_retention_hours = 168           # 7 days; stale absorbed captures past this are deleted
 screenshot_retention_hours = 24        # after 24h, strip screenshot (77% of bytes) but keep AX+text
-screenshot_thumbnail_hours = 0         # 像素轴分级遗忘 (memory-rebuild §2.1): >N 小时的截图原位降采样为 ≤480px 缩略图（全分辨率→缩略→仅存文本化→删除的中间档）；0=关（默认，字节等价旧行为）；须 < screenshot_retention_hours 才有意义
+screenshot_thumbnail_hours = 0         # Downsample older screenshots to <=480px thumbnails; 0 disables
 buffer_max_mb = 2000                   # hard ceiling; oldest absorbed files evicted first (0 to disable)
 include_screenshot = true
 screenshot_max_width = 1920
@@ -795,26 +775,26 @@ snapshot_keep_daily = 7            # keep every daily snapshot from the last N d
 snapshot_keep_weekly = 4           # additionally keep Monday snapshots from the last N weeks
 integrity_check_enabled = true     # chain-invariant self-check at daemon startup + after each snapshot; failures are structured error logs
 freeze_writes_on_failure = false   # when a STRUCTURAL check fails, freeze memory write paths (reads stay available) until a human decides; off = alert-only by default
-shadow_write_enabled = true        # PR-3 双写影子期: every markdown main write also shadow-writes the affected entries into evo_nodes (backfill 单条版); failures/skips warn + count only, NEVER touch the main write — run `persome evomem-backfill` once before the shadow phase starts for real
-write_authority = "markdown"       # PR-6b 写权反转开关 (§4.4): "markdown" (default) = status quo, markdown is the SSOT + shadow dual-write into evo_nodes; "evomem" = the inversion — engine writes evo_nodes as truth, FTS tables become the retrieval projection, memory/*.md becomes a best-effort human-readable projection (manual edits are overwritten — use `persome evomem-import-markdown <file>`), the shadow hook auto-deactivates, event-*.md stays legacy (Q2). KEEP "markdown" until PR-5 主读 has been stable ≥1 week; a human flips this — never the code default. Rollback = flip back (legacy paths + shadow resume; project --live --force + rebuild-index first to flush)
-contradiction_check_enabled = false # 夜间语义矛盾自检 (§4.4): 23:55 收割时对同文件 live 事实做确定性配对 + LLM 判互斥；命中只「标记」——entry_metadata.conflicted（recall 渲染 ⚠(冲突未裁决) 降权）+ memory_contradictions 人裁队列（`persome contradictions`），绝不自动 SUPERSEDE。每晚 ≤ contradiction_max_pairs 次 LLM 调用，已判对永不重判
-contradiction_max_pairs = 10       # 每晚判定的候选对上限（按相似度最强优先）
+shadow_write_enabled = true        # Mirror Markdown writes into evo_nodes; failures never block the primary write
+write_authority = "markdown"       # "markdown" is the default truth; "evomem" makes Markdown a projection
+contradiction_check_enabled = false # Nightly LLM-assisted contradiction marking; never auto-supersedes
+contradiction_max_pairs = 10       # Maximum candidate pairs judged per night
 
 [search]
 default_top_k = 5
-slot_pool_weight = 0.3             # 联想入口槽池（实体/场景/时窗）RRF 投票权重；文本骨干恒 1.0；1.0=旧版平权（生产扫描判决：1.0 系统性回退 −6.9pp，0.3 精确过带）
-relation_include_shadow = true     # §7-3 关系头喂食：审计干净的 shadow 边 ×0.5 降权参与遍历（§7-8 判决默认开：探针 +25pp 依赖它，回归零扰动）
-contains_pool_rerank = true        # §7-10 池内 dense 重排（残余探针杠杆）；关=回 recency 序
-relation_pool_weight = 1.0         # 关系图扩展池权重（SS7-8 调优判决：真库关系探针 7/12 vs 文本基线 4/12；auto-golden 回归 rel 0.0-1.0 逐字节等值=对普通查询免费）
-associative_read_enabled = true    # §5 读路 cutover：查询期消费方（MCP/chat/writer 工具）走联想入口（无槽退化 hybrid）；false=全部回 search_hybrid（kill-switch）
-tags_matchable = false             # 轴A (#557)：BM25 只匹配 content 列——分类标签词表（#intent/#kind:meeting/schema/fact…）不再被当正文命中；true=旧行为（kill-switch）
-recency_half_life_days = 14.0      # 轴B (#557)：融合后按条目年龄做半衰期衰减重排（rank 分 × max(floor, 0.5^(age/半衰期))）；锚= until 或候选集内最新时间戳（非墙钟，纯确定性）；0 = 关（字节等价旧版）
-recency_decay_floor = 0.2          # 衰减下限：老而最相关的持久事实不至于被新噪声淹没；全老候选集因子一致=顺序不变
+slot_pool_weight = 0.3             # RRF weight for entity, scene, and time-window pools
+relation_include_shadow = true     # Include audited shadow relations at reduced weight
+contains_pool_rerank = true        # Dense rerank within graph-expanded pools
+relation_pool_weight = 1.0         # Weight for graph-expanded relation candidates
+associative_read_enabled = true    # Use associative retrieval; false falls back to hybrid search
+tags_matchable = false             # Match BM25 against content only; true restores tag matching
+recency_half_life_days = 14.0      # Deterministic post-fusion age decay; 0 disables
+recency_decay_floor = 0.2          # Minimum age-decay factor for durable old facts
 
 [mcp]
 auto_start = true                 # run an always-on MCP server inside the daemon
-read_receipt_enabled = true       # E1.3 收据把手：⟨entry_id⟩ → 条目全文 + capture breadcrumbs（关=不注册该工具）
-entity_graph_enabled = true       # E2 图层直读：entity_graph(name, depth, as_of, include_shadow)（关=不注册该工具）
+read_receipt_enabled = true       # Register receipt dereference with capture breadcrumbs
+entity_graph_enabled = true       # Register direct entity-graph reads
 transport = "streamable-http"     # "streamable-http" | "sse" (deprecated 2026-04-01) | "stdio"
 host = "127.0.0.1"                # bind address; keep localhost-only by default
 port = 8742

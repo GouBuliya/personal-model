@@ -98,7 +98,7 @@ def test_editing_with_same_target_no_peripheral() -> None:
 
 
 def test_cmux_narrows_to_terminal_pane() -> None:
-    chrome = "## cmux [active] workspace 1/7 有可用更新 切换侧边栏 "
+    chrome = "## cmux [active] workspace 1/7 \u6709\u53ef\u7528\u66f4\u65b0 \u5207\u6362\u4fa7\u8fb9\u680f "
     pane = "❯ pytest -k attention\n12 passed real work"
     vt = chrome + "### [cmux terminal]\n" + pane
     cap = _cap(bundle="com.cmuxterm.app", visible_text=vt)
@@ -136,9 +136,6 @@ def test_resolution_never_raises(monkeypatch) -> None:
     loc = resolve_locus(cap, visible_text="survive")
     assert loc.rung == "fallback"
     assert loc.content == "survive"  # fell open, never raised
-
-
-# --- structural content-subtree narrowing (路2) ----------------------------
 
 
 def _el(role: str, *, value: str = "", title: str = "", children: list | None = None) -> dict:

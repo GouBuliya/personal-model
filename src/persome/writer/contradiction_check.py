@@ -1,13 +1,13 @@
 """Nightly semantic-contradiction self-check — memory-rebuild spec §4.4.
 
-Two LIVE facts in the same memory file that are mutually exclusive (「张伟负责
-支付」vs「张伟已离职」) poison every downstream consumer that treats memory as
-equally true. This check runs at the 23:55 harvest (夜间"睡眠", zero new
+Two live facts in the same memory file that are mutually exclusive ("Alex owns
+payments" vs "Alex left the company") poison every downstream consumer that treats memory as
+equally true. This check runs at the 23:55 harvest (nightly maintenance, zero new
 timers): it pairs candidate facts deterministically, asks one bounded LLM judge
 per pair, and — on a contradiction verdict — **marks, never resolves**:
 
 - both entries get ``entry_metadata.conflicted = 1`` → recall's existing
-  meta-cognition layer renders ``⚠(冲突未裁决)`` and model consumers
+  metacognition layer renders an unresolved-conflict warning and model consumers
   down-weights them (the production consumer already in place);
 - the pair lands in ``memory_contradictions`` (``store/contradictions.py``) —
   the human adjudication queue (``persome contradictions`` /
@@ -221,7 +221,7 @@ def run_contradiction_check(
             path=pair.path,
             a_body=pair.a_body,
             b_body=pair.b_body,
-            reason=reason or ("互斥" if verdict else "判定不互斥"),
+            reason=reason or ("mutually exclusive" if verdict else "not mutually exclusive"),
         )
         if verdict:
             result.flagged += 1

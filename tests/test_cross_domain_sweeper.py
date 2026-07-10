@@ -1,9 +1,4 @@
-"""Cross-domain sweeper (Hy-Memory batch 2): collide topic-far/behavior-near schemas.
-
-Pins: deterministic behavior distance (no embedding), topic pre-filter, end-to-end
-fuse → write schema-xdomain-*.md → read back through the existing schema消费链,
-idempotent re-sweep, and the no-collision / too-few-schemas no-ops.
-"""
+"Tests for test cross domain sweeper."
 
 from __future__ import annotations
 
@@ -72,21 +67,21 @@ def test_topic_distinct_requires_different_source():
     a = sweeper._StableSchema(
         name="schema-project-a.md",
         source_path="project-a.md",
-        central="在 A 项目反复手动重试",
+        central="\u5728 A \u9879\u76ee\u53cd\u590d\u624b\u52a8\u91cd\u8bd5",
         inferences=[],
         confidence=0.8,
     )
     b = sweeper._StableSchema(
         name="schema-topic-b.md",
         source_path="topic-b.md",
-        central="排查网络抖动时频繁刷新",
+        central="\u6392\u67e5\u7f51\u7edc\u6296\u52a8\u65f6\u9891\u7e41\u5237\u65b0",
         inferences=[],
         confidence=0.8,
     )
     same_src = sweeper._StableSchema(
         name="schema-project-a.md",
         source_path="project-a.md",
-        central="完全一样的命题",
+        central="\u5b8c\u5168\u4e00\u6837\u7684\u547d\u9898",
         inferences=[],
         confidence=0.8,
     )
@@ -132,15 +127,26 @@ def test_sweep_fuses_and_is_consumed(ac_root):
 
     with fts.cursor() as conn:
         _seed_schema(
-            conn, "schema-project-a.md", "在 A 项目遇阻就反复手动重试", ["遇阻不先找自动化"]
+            conn,
+            "schema-project-a.md",
+            "\u5728 A \u9879\u76ee\u9047\u963b\u5c31\u53cd\u590d\u624b\u52a8\u91cd\u8bd5",
+            ["\u9047\u963b\u4e0d\u5148\u627e\u81ea\u52a8\u5316"],
         )
-        _seed_schema(conn, "schema-tool-b.md", "用 B 工具卡住时反复手动点", ["不读文档先硬试"])
+        _seed_schema(
+            conn,
+            "schema-tool-b.md",
+            "\u7528 B \u5de5\u5177\u5361\u4f4f\u65f6\u53cd\u590d\u624b\u52a8\u70b9",
+            ["\u4e0d\u8bfb\u6587\u6863\u5148\u786c\u8bd5"],
+        )
         fake = _fake_llm(
             {
                 "detected": True,
-                "central_proposition": "遇阻时倾向硬刚而非寻找自动化方案",
-                "supporting_summary": "两个 topic 是同一驱动力的两次显现",
-                "expected_inferences": ["会拒绝引入自动化工具", "偏好手动逐步控制"],
+                "central_proposition": "\u9047\u963b\u65f6\u503e\u5411\u786c\u521a\u800c\u975e\u5bfb\u627e\u81ea\u52a8\u5316\u65b9\u6848",
+                "supporting_summary": "\u4e24\u4e2a topic \u662f\u540c\u4e00\u9a71\u52a8\u529b\u7684\u4e24\u6b21\u663e\u73b0",
+                "expected_inferences": [
+                    "\u4f1a\u62d2\u7edd\u5f15\u5165\u81ea\u52a8\u5316\u5de5\u5177",
+                    "\u504f\u597d\u624b\u52a8\u9010\u6b65\u63a7\u5236",
+                ],
                 "confidence": 0.82,
             }
         )
@@ -149,9 +155,9 @@ def test_sweep_fuses_and_is_consumed(ac_root):
         assert res.collisions == 1
         name = res.written[0].path
         assert name.startswith("schema-xdomain-")
-        # fused schema flows through the existing schema消费链 (zero consumer change)
+
         infs = schema_reader.active_schema_inferences(conn)
-        assert any("自动化" in x for x in infs)
+        assert any("\u81ea\u52a8\u5316" in x for x in infs)
 
 
 def test_resweep_is_idempotent(ac_root):
@@ -159,15 +165,23 @@ def test_resweep_is_idempotent(ac_root):
 
     with fts.cursor() as conn:
         _seed_schema(
-            conn, "schema-project-a.md", "在 A 项目遇阻就反复手动重试", ["遇阻不先找自动化"]
+            conn,
+            "schema-project-a.md",
+            "\u5728 A \u9879\u76ee\u9047\u963b\u5c31\u53cd\u590d\u624b\u52a8\u91cd\u8bd5",
+            ["\u9047\u963b\u4e0d\u5148\u627e\u81ea\u52a8\u5316"],
         )
-        _seed_schema(conn, "schema-tool-b.md", "用 B 工具卡住时反复手动点", ["不读文档先硬试"])
+        _seed_schema(
+            conn,
+            "schema-tool-b.md",
+            "\u7528 B \u5de5\u5177\u5361\u4f4f\u65f6\u53cd\u590d\u624b\u52a8\u70b9",
+            ["\u4e0d\u8bfb\u6587\u6863\u5148\u786c\u8bd5"],
+        )
         fake = _fake_llm(
             {
                 "detected": True,
-                "central_proposition": "遇阻时倾向硬刚",
-                "supporting_summary": "同构",
-                "expected_inferences": ["会拒绝自动化"],
+                "central_proposition": "\u9047\u963b\u65f6\u503e\u5411\u786c\u521a",
+                "supporting_summary": "\u540c\u6784",
+                "expected_inferences": ["\u4f1a\u62d2\u7edd\u81ea\u52a8\u5316"],
                 "confidence": 0.82,
             }
         )
@@ -187,8 +201,18 @@ def test_no_collision_writes_nothing(ac_root):
     from persome.store import fts
 
     with fts.cursor() as conn:
-        _seed_schema(conn, "schema-project-a.md", "话题一的命题", ["推论一"])
-        _seed_schema(conn, "schema-tool-b.md", "话题二完全不同", ["推论二"])
+        _seed_schema(
+            conn,
+            "schema-project-a.md",
+            "\u8bdd\u9898\u4e00\u7684\u547d\u9898",
+            ["\u63a8\u8bba\u4e00"],
+        )
+        _seed_schema(
+            conn,
+            "schema-tool-b.md",
+            "\u8bdd\u9898\u4e8c\u5b8c\u5168\u4e0d\u540c",
+            ["\u63a8\u8bba\u4e8c"],
+        )
         fake = _fake_llm({"detected": False})
         res = sweeper.sweep_cross_domain(Config(), conn, llm_call=fake)
         assert res.written_count == 0
@@ -200,7 +224,7 @@ def test_fewer_than_two_schemas_is_noop(ac_root):
     from persome.store import fts
 
     with fts.cursor() as conn:
-        _seed_schema(conn, "schema-project-a.md", "唯一一个", ["推论"])
+        _seed_schema(conn, "schema-project-a.md", "\u552f\u4e00\u4e00\u4e2a", ["\u63a8\u8bba"])
 
         def _boom(_messages):  # must never be called
             raise AssertionError("LLM should not run with <2 schemas")
@@ -216,8 +240,13 @@ def test_xdomain_schemas_are_not_re_fused(ac_root):
 
     with fts.cursor() as conn:
         # one normal schema + one already-fused xdomain schema
-        _seed_schema(conn, "schema-project-a.md", "普通 schema", ["推论"])
-        _seed_schema(conn, "schema-xdomain-x__y.md", "已融合的高层 schema", ["高层推论"])
+        _seed_schema(conn, "schema-project-a.md", "\u666e\u901a schema", ["\u63a8\u8bba"])
+        _seed_schema(
+            conn,
+            "schema-xdomain-x__y.md",
+            "\u5df2\u878d\u5408\u7684\u9ad8\u5c42 schema",
+            ["\u9ad8\u5c42\u63a8\u8bba"],
+        )
         bases = sweeper._load_stable_schemas(conn)
         names = {s.name for s in bases}
         assert "schema-project-a.md" in names

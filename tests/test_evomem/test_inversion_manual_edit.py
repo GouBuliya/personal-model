@@ -1,4 +1,4 @@
-"""手改检测 + import 回灌 + 全量 live 投影（PR-6b，Q1 裁定 (b)）。"""
+"""Tests for manual-edit detection, import, and live projection."""
 
 from __future__ import annotations
 
@@ -26,18 +26,15 @@ def _seed(conn, name: str = "project-e.md") -> str:
     return entries.append_entry(conn, name=name, content="truth fact", tags=["a"])
 
 
-# ── 手改检测 ─────────────────────────────────────────────────────────────────
-
-
 def test_manual_edit_detected_and_alerted(ac_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _evomem(ac_root)
     alerts: list[tuple] = []
     monkeypatch.setattr(evo_integrity, "emit_alert", lambda *a, **k: alerts.append(a))
     with fts.cursor() as conn:
         _seed(conn)
-        assert evo_inversion.check_manual_edits(conn) == []  # 干净态零误报
+        assert evo_inversion.check_manual_edits(conn) == []
         path = files_mod.memory_path("project-e.md")
-        path.write_text(path.read_text() + "\n手写的一行\n")
+        path.write_text(path.read_text() + "\n\u624b\u5199\u7684\u4e00\u884c\n")
         findings = evo_inversion.check_manual_edits(conn)
     assert findings == [{"file": "project-e.md", "kind": "modified"}]
     assert alerts and alerts[0][0] == "manual_edit_detected"
@@ -62,7 +59,7 @@ def test_projection_lag_is_not_a_manual_edit(
     _evomem(ac_root)
     with fts.cursor() as conn:
         _seed(conn)
-        # 下一次写投影失败（滞后）：state 不更新，文件保持上次成功投影态 → 不算手改
+
         with monkeypatch.context() as mp:
             mp.setattr(
                 files_mod,
@@ -73,9 +70,6 @@ def test_projection_lag_is_not_a_manual_edit(
         assert evo_inversion.check_manual_edits(conn) == []
 
 
-# ── import 回灌 ──────────────────────────────────────────────────────────────
-
-
 def test_import_markdown_plain_addition(ac_root: Path) -> None:
     _evomem(ac_root)
     with fts.cursor() as conn:
@@ -83,7 +77,7 @@ def test_import_markdown_plain_addition(ac_root: Path) -> None:
         path = files_mod.memory_path("project-e.md")
         path.write_text(
             path.read_text().rstrip()
-            + "\n\n## [2026-06-11T11:00] {id: 20260611-1100-abcdef} #hand\n手写的新事实\n"
+            + "\n\n## [2026-06-11T11:00] {id: 20260611-1100-abcdef} #hand\n\u624b\u5199\u7684\u65b0\u4e8b\u5b9e\n"
         )
         report = evo_inversion.import_markdown_file(conn, "project-e.md")
         assert report.imported == ["20260611-1100-abcdef"]
@@ -94,7 +88,7 @@ def test_import_markdown_plain_addition(ac_root: Path) -> None:
         row = conn.execute("SELECT * FROM entries WHERE id='20260611-1100-abcdef'").fetchone()
         assert node is not None and node["tags"] == "hand"
         assert row is not None and row["superseded"] == 0
-        # 回灌后文件回到 canonical 投影态 → 手改检测复归干净
+
         assert evo_inversion.check_manual_edits(conn) == []
 
 
@@ -103,16 +97,18 @@ def test_import_markdown_modified_existing_entry_reports_conflict(ac_root: Path)
     with fts.cursor() as conn:
         eid = _seed(conn)
         path = files_mod.memory_path("project-e.md")
-        path.write_text(path.read_text().replace("truth fact", "用户改写了真相"))
+        path.write_text(
+            path.read_text().replace("truth fact", "\u7528\u6237\u6539\u5199\u4e86\u771f\u76f8")
+        )
         before = path.read_text()
         report = evo_inversion.import_markdown_file(conn, "project-e.md")
         assert report.imported == []
         assert report.conflicts and not report.reprojected
-        assert path.read_text() == before  # 用户的字没被覆盖
-        # 真相侧不动
+        assert path.read_text() == before
+
         node = conn.execute("SELECT content FROM evo_nodes WHERE node_id=?", (eid,)).fetchone()
         assert node["content"] == "truth fact"
-        # 警报持续（state 未刷新）
+
         assert evo_inversion.check_manual_edits(conn)
 
 
@@ -123,16 +119,13 @@ def test_import_markdown_refuses_under_markdown_authority(ac_root: Path) -> None
             evo_inversion.import_markdown_file(conn, "project-e.md")
 
 
-# ── 全量 live 投影 ───────────────────────────────────────────────────────────
-
-
 def test_project_live_all_repairs_lag_and_skips_event(ac_root: Path) -> None:
     _evomem(ac_root)
     with fts.cursor() as conn:
         _seed(conn)
         entries.create_file(conn, name="event-2026-06-11.md", description="day", tags=[])
         entries.append_entry(conn, name="event-2026-06-11.md", content="[10:00] x", tags=[])
-        # 人为制造滞后：手抹投影
+
         files_mod.memory_path("project-e.md").write_text("damaged")
         event_before = files_mod.memory_path("event-2026-06-11.md").read_text()
         names = evo_inversion.project_live_all(conn)

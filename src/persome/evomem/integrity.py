@@ -1,38 +1,4 @@
-"""evomem 链完整性自检 + 写口冻结 seam（SSOT 切换设计稿 §3.3，PR-1 生存性设施）。
-
-The integrity contract is summarized in ``docs/config.md``.
-
-与顶层 ``persome/integrity.py`` 的关系（刻意分开，不是重复）：顶层模块是
-**物理层**启动自检——``PRAGMA integrity_check`` 失败 → 隔离坏文件 → 让正常路径从
-markdown（现行 SSOT）自动重建，处置哲学是「隔离 + 自愈」。本模块是**链不变式层**
-自检，服务于 evo_nodes 升格为 SSOT 之后的世界：真相层坏了没有 markdown 重放可以
-兜底（§3.1——这套设施是对冲，不是等价替代，这句话不许粉饰），所以失败处置反过来
-是「冻结写口 + 报警 + 等人裁决」，绝不自动恢复（纲领：不可知的核交还用户）。
-
-七条检查（§3.3）：
-
-1. ``PRAGMA quick_check``（物理层）。
-2. 双向指针对称：``A.superseded_by ∋ B ⇔ B.supersedes ∋ A``，无悬空 id（evo_nodes，
-   按 scope 隔离判定）。
-3. 反分叉：每节点 ``superseded_by`` 长度 ≤ 1（链模型）。
-4. 头一致性：``is_latest=1 ⇒ superseded_by=[] AND status='active'``；每条链 ≤1 个头。
-5. 无环：沿 supersedes 边 DFS 不回到自身。
-6. 投影对账（廉价抽查，**alert-only**）：evo_nodes 活跃头数 == ``entries.superseded=0``
-   行数（排除 ``event-`` 前缀——Q2 裁定 event 条目豁免不进 evo_nodes；
-   evo_nodes 为空 = backfill 前，跳过）。投影坏 = 可自愈路径（rebuild_index 从
-   真相重放检索投影），只报警 + 记录，不自动重建。
-   （entry_chain 版检查已随该表在 PR-7 退役。）
-7. 失败处置：1–5 类（结构性）任一失败 → 报警 + （仅当
-   ``[evomem] freeze_writes_on_failure`` 开启时）冻结写口；6 类只报警。
-
-冻结是进程内全局标志（``freeze_writes`` / ``write_frozen`` / ``ensure_writes_allowed``），
-由 markdown 写口（``store/entries.py``）与 evomem 写口（``evomem/store.py`` NodeStore）
-共同检查——这是后续 PR（backfill / 双写 / 写口反转）复用的 seam。默认配置下该标志
-永远不会置位，写路径行为与现状等价。注意标志是 per-process 的：daemon 内自检冻结的
-是 daemon 进程自身的全部写路径（MCP/HTTP 写口同进程），独立 CLI 进程不受影响。
-
-报警通路是结构化 ``logger.error``；daemon 日志是发布版的告警面。
-"""
+"Integrity checks and alert persistence for canonical memory state."
 
 from __future__ import annotations
 
@@ -67,11 +33,8 @@ class WriteFrozenError(RuntimeError):
     """Raised by memory write paths while the integrity freeze flag is set."""
 
 
-# ─── self-check audit ledger（原 §4.3 判据 2 数据源，PR-7 起为纯审计账） ──────
 #
-# ``integrity_check_runs``：每次 ``check_and_handle`` 落一行真实发现数。切主读
-# 判据仪表盘（evomem-cutover-status）随双读对账在 PR-7 退役后，本账保留为
-# daemon 健康审计 trail（自检历史可追溯），不再喂任何判据聚合。
+
 
 _CHECK_RUNS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS integrity_check_runs (
@@ -171,9 +134,6 @@ def ensure_writes_allowed() -> None:
     reason = write_frozen()
     if reason is not None:
         raise WriteFrozenError(f"memory writes are frozen by integrity check: {reason}")
-
-
-# ─── alert channel (§4.3 判据 4: must be verifiable) ─────────────────────────
 
 
 def emit_alert(
@@ -400,13 +360,6 @@ def _check_evo_chain(conn: sqlite3.Connection) -> list[Violation]:
 
 
 def _check_evo_projection(conn: sqlite3.Connection) -> list[Violation]:
-    """§3.3 check 6 (evo edition, alert-only): active-head count vs the FTS
-    retrieval projection's live-row count. Skipped while evo_nodes is empty —
-    before the PR-2 backfill the comparison is meaningless by construction.
-
-    Q2 裁定（PR-2）：``event-*`` 条目豁免不进 evo_nodes（量大、append-only、
-    永不入链——backfill 跳过），所以对账侧的 live-entries 计数同样排除
-    ``prefix='event'``，否则 backfill 后此检查必然恒红。"""
     if not _table_exists(conn, "evo_nodes") or not _table_exists(conn, "entries"):
         return []
     total = conn.execute("SELECT COUNT(*) FROM evo_nodes").fetchone()[0]
@@ -471,27 +424,12 @@ def check_and_handle(
     db_path: Path | None = None,
     inject_violation: Violation | None = None,
 ) -> list[Violation]:
-    """Run the self-check on the live index, alert every violation, optionally freeze.
-
-    Failure handling per §3.3 #7: STRUCTURAL violations (checks 1–5) freeze the
-    write paths — but only when ``freeze_on_failure`` (config
-    ``[evomem] freeze_writes_on_failure``, default off) is set; otherwise they
-    alert only. Projection-reconciliation findings (check 6) never freeze:
-    they are the self-healable side and PR-1 only alerts + records (projection
-    rebuild is redefined in PR-7). No automatic recovery in any case.
-
-    ``inject_violation`` is the test seam required by §4.3 判据 4: it lets a
-    test (or a manual drill) push one fake violation through the FULL alert
-    pipeline to verify the channel end-to-end. Never set in production calls.
-
-    Never raises — a self-check that itself errors degrades to an alert.
-    """
     try:
         from ..store import fts  # local import keeps module import light
 
         with fts.cursor(db_path) as conn:
             violations = run_checks(conn)
-            # 自检审计账（原 §4.3 判据 2 数据源，PR-7 起为纯审计 trail）: persist
+
             # the REAL finding count per pass. Recorded BEFORE any injected drill
             # violation — an alert-channel drill must not pollute the ledger.
             # Best-effort: a recording failure degrades to a warning and never
@@ -527,7 +465,6 @@ def check_and_handle(
 
 
 def startup_check(cfg: Config) -> list[Violation] | None:
-    """Daemon-startup hook (§3.3 「daemon 启动时」). No-op when disabled."""
     if not cfg.evomem.integrity_check_enabled:
         return None
     return check_and_handle(

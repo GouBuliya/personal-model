@@ -163,7 +163,7 @@ class TestSyncOcrBackfill:
             sched_mod.ocr_local,
             "recognize_detailed",
             lambda *a, **k: (
-                ["罗", "14:48"],
+                ["\u7f57", "14:48"],
                 [[80, 60, 130, 76], [280, 62, 332, 74]],
                 [0.97, 0.92],
             ),
@@ -182,7 +182,7 @@ class TestSyncOcrBackfill:
 
         with fts_store.cursor() as conn:
             text = fts_store.get_capture_visible_text(conn, "cap-struct")
-        assert "会话列表" in text and "罗" in text  # structured, not raw "罗\n14:48"
+        assert "Conversation list" in text and "\u7f57" in text
 
 
 # ─── capture/scheduler.py: _write_capture defers OCR until AFTER the row lands ──
@@ -237,7 +237,7 @@ class TestWriteCaptureDefersOcr:
             "timestamp": ts,
             "window_meta": {
                 "app_name": "WeChat",
-                "title": "微信",
+                "title": "\u5fae\u4fe1",
                 "bundle_id": "com.tencent.xinWeChat",
             },
             "focused_element": {},
@@ -270,9 +270,9 @@ class TestWriteCaptureDefersOcr:
         ts = "2026-05-21T11:00:00+08:00"
         out = {
             "timestamp": ts,
-            "window_meta": {"app_name": "WeChat", "title": "微信", "bundle_id": "com.x"},
+            "window_meta": {"app_name": "WeChat", "title": "\u5fae\u4fe1", "bundle_id": "com.x"},
             "focused_element": {},
-            "visible_text": "## 微信",
+            "visible_text": "## \u5fae\u4fe1",
             "url": "",
             "_ocr_pending_jpeg": b"jpeg",
             "_ocr_tier": "tiny",
@@ -374,7 +374,7 @@ def _write_rich_capture_json(
         "timestamp": "2026-05-21T10:00:00+08:00",
         "schema_version": 2,
         "trigger": {"event_type": "AXApplicationActivated", "bundle_id": bundle_id},
-        "window_meta": {"app_name": app_name, "title": "微信", "bundle_id": bundle_id},
+        "window_meta": {"app_name": app_name, "title": "\u5fae\u4fe1", "bundle_id": bundle_id},
         "ax_metadata": {"mode": "frontmost", "depth": 100, "platform": "macos", "raw": False},
         "focused_element": {},
         "visible_text": visible_text,
@@ -419,14 +419,20 @@ class TestCaptureTextSourceAndStatus:
             paths.capture_buffer_dir(), self._STEM, visible_text="", ocr_submitted=True
         )
         with fts_store.cursor() as conn:
-            _backfill_ocr(conn, capture_id=self._STEM, text="微信 OCR 识别到的会话内容")
+            _backfill_ocr(
+                conn,
+                capture_id=self._STEM,
+                text="\u5fae\u4fe1 OCR \u8bc6\u522b\u5230\u7684\u4f1a\u8bdd\u5185\u5bb9",
+            )
 
         r = read_recent_capture()
         assert r is not None
         assert r["text_source"] == "ocr"
         assert r["ax_text"] == ""
-        assert r["ocr_text"] == "微信 OCR 识别到的会话内容"
-        assert r["visible_text"] == "微信 OCR 识别到的会话内容"  # resolved, back-compat
+        assert r["ocr_text"] == "\u5fae\u4fe1 OCR \u8bc6\u522b\u5230\u7684\u4f1a\u8bdd\u5185\u5bb9"
+        assert (
+            r["visible_text"] == "\u5fae\u4fe1 OCR \u8bc6\u522b\u5230\u7684\u4f1a\u8bdd\u5185\u5bb9"
+        )  # resolved, back-compat
         assert r["ocr"]["status"] == "recognized"
         assert r["ocr"]["submitted"] is True
 

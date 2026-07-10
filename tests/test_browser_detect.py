@@ -50,7 +50,7 @@ _WEBAREA = {
 _ADDRBAR = {
     "role": "AXTextField",
     "value": "https://www.bilibili.com/video/BV1x",
-    "description": "地址和搜索栏",
+    "description": "\u5730\u5740\u548c\u641c\u7d22\u680f",
 }
 
 TABBIT = _app(

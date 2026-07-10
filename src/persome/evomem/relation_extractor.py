@@ -1,39 +1,4 @@
-"""Relation-edge extraction — deterministic + LLM, writes SHADOW edges (P0-2 / #428).
-
-Extracts auditable user-centric relations from durable activities.
-
-**Working object = the PAST layer.** The memory graph is the user's *weights*
-(过去式), so relation extraction reads durable event entries, ended sessions,
-and an optional read-only legacy-intent adapter:
-
-- ``person_graph`` entities + interaction timelines (evo_nodes) — consolidated past → read.
-- durable event entries and ended sessions become Activity points with sourced
-  ``participates_in`` edges;
-- old completed intent rows remain readable through ``ActivitySource`` but new
-  installs do not create or produce them;
-- transient runtime state is never read here.
-
-Edge **strength = observations = count of distinct supporting evidence** (event 蒸馏计数),
-computed FROM the evidence each run and ratcheted monotonically (``reinforce_edge`` MAX
-semantics) — so re-running over the same data is a no-op, while new evidence strengthens.
-
-Hangs beside :mod:`persome.evomem.person_graph` in the daily evomem enrichment tick. Writes edges
-through :mod:`persome.store.relation_edges` with ``status='shadow'`` so nothing reaches retrieval or
-the digest until proven (§4.3). Gated on ``cfg.relation_extraction_enabled`` (default False) and
-**fully fail-open**: any read/LLM/write error is swallowed, never bubbling into the tick.
-
-Two passes, both confined to the **person subgraph** (P0 has PERSON/SELF identities only;
-PROJECT/EVENT minimal, ARTIFACT Phase 2 — relations needing those are dropped by the endpoint
-validator):
-
-- **Deterministic (no LLM)** — from the consolidated person entities: SELF ↔ each known person
-  ``knows`` (strength from sightings); person ↔ person ``knows`` where their interaction events
-  co-occur (same time bucket). Identities ARE person_graph canonical names (single resolver).
-- **LLM (mockable seam, fail-open)** — one bounded call over the persons' consolidated interaction
-  context (`build_person_context`) upgrades the flat ``knows`` set with the directed relations
-  co-occurrence cannot infer (``reports_to``), over the SAME roster, each requiring a grounding
-  ``quote`` copied from that past context. Off-roster / unquoted / low-confidence → dropped.
-"""
+"Evidence-gated extraction and persistence of relation edges."
 
 from __future__ import annotations
 
@@ -387,7 +352,7 @@ def _deterministic_pass(
             continue
         sightings = max(1, int(getattr(p, "sightings", 1) or 1))
         conf = min(1.0, 0.55 + 0.1 * min(sightings, 5))
-        quote = people.summaries.get(canonical) or f"与 {canonical} 的交互记录"
+        quote = people.summaries.get(canonical) or f"Interaction history with {canonical}"
         try:
             _upsert_shadow(
                 conn,
@@ -416,7 +381,7 @@ def _deterministic_pass(
                 dst=b,
                 predicate=Predicate.KNOWS,
                 confidence=0.6,
-                quote=f"{a} 与 {b} 曾在同一场景出现",
+                quote=f"{a} and {b} appeared in the same context",
                 label=None,
                 observations=shared,
                 valid_from=people.cooccur_first.get((a, b)),
@@ -459,7 +424,10 @@ def _project_pass(conn, seen: dict[tuple[str, str, str], str], tally: _Tally) ->
                 dst=ident,
                 predicate=Predicate.PARTICIPATES_IN,
                 confidence=0.9,
-                quote=(str(sample or "").strip() or f"{ident} 项目记忆 {count} 条持久事实"),
+                quote=(
+                    str(sample or "").strip()
+                    or f"{ident} project memory contains {count} durable facts"
+                ),
                 label="works_on",
                 observations=int(count),
                 provenance="inferred",
@@ -550,24 +518,25 @@ def _activity_pass(
 
 
 _LLM_SYSTEM = (
-    "你从某人已沉淀的人际交互记录里，只抽取【人与人】之间**明确有据**的关系。"
-    "宁缺毋滥：拿不准、或没有原文能佐证的，一律不要输出。"
+    "Extract only clearly evidenced person-to-person relations from the supplied "
+    "interaction records. Omit anything uncertain or unsupported by a direct quote."
 )
 
 
 def _llm_prompt(evidence: str, identities: list[str]) -> list[dict[str, Any]]:
-    roster = ", ".join(["self=用户本人", *identities])
+    roster = ", ".join(["self=the memory owner", *identities])
     instruction = (
-        f"实体（只能在这些之间建立关系，src/dst 必须原样取自此列表）：{roster}\n\n"
-        "从下面这些人的交互记录中，抽取实体之间的关系，输出一个 JSON 数组，每条形如：\n"
+        f"Entities (src and dst must be copied exactly from this list): {roster}\n\n"
+        "Extract relations from the interaction records below. Return a JSON array; "
+        "each item is:\n"
         '{"src": "...", "dst": "...", "predicate": "...", "label": "...", '
         '"quote": "...", "confidence": 0.0}\n'
-        "- predicate 只能是：reports_to（src 向 dst 汇报 / dst 是 src 的上级），"
-        "knows（一般认识 / 同事 / 客户 / 朋友，方向不敏感）。\n"
-        "- quote：从记录里**原文摘录**一句 ≤120 字的支撑证据；摘不出就不要输出这条。\n"
-        "- label：一句话自由描述（如「老板」「客户」），可空。\n"
-        "- 关系不属于上面两种、或证据不足 → 不输出该条。只输出 JSON 数组，无其他文字。\n\n"
-        f"交互记录：\n{evidence}"
+        "- predicate must be reports_to (src reports to dst) or knows "
+        "(colleague, client, friend, or general acquaintance; direction is not meaningful).\n"
+        "- quote must copy at most 120 characters of direct supporting evidence.\n"
+        "- label is an optional one-sentence description such as manager or client.\n"
+        "- Omit unsupported or differently typed relations. Return only the JSON array.\n\n"
+        f"Interaction records:\n{evidence}"
     )
     return [{"role": "system", "content": _LLM_SYSTEM}, {"role": "user", "content": instruction}]
 

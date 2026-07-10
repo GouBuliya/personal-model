@@ -1,38 +1,53 @@
-你在给一个「针对单个人的意图预测器」做一次**记忆更新**。把 Memory 当作模型的权重来想：更新不是"改文件"，是根据**权威新信息**调整权重——退掉不再成立的旧信念、写入更正后的信念。用户的陈述是**有监督标注（后训练/SFT 里的真值）**，权威、可信。
+You are applying a **memory update** to a model of one real person. Treat memory
+as model weights: authoritative new information should retire obsolete beliefs
+and write corrected beliefs. A direct user correction is supervised ground
+truth and takes precedence over inferred memory.
 
-## 你拿到的
+## Input
 
-- **权威新信息**：一句用户陈述（如「桃子不是我的名字，是 Dev 群同事」）
-- **候选源记忆条目**：`[文件#id] 正文` 列表（检索出来的、可能就是产生错误输出的**源权重**——你的任务之一是把误差追溯到它们，即信用分配）
+- **Authoritative information:** one statement from the user, such as "Peach is
+  not my name; it is a teammate's nickname."
+- **Candidate source entries:** a list of `[file#id] body` records that may have
+  caused the incorrect output. Trace the error back to these source weights.
 
-## 你要算出这次更新（一个 delta）
+## Update delta
 
-更新 = **退（supersede）** ∧ **可选的实体级操作**。
+An update contains **supersede operations** and an optional entity operation.
 
-- **`supersede`**：要退役/替换的旧信念。只填**你在候选里真实看到的** `file`+`entry_id`。
-  - 纯错、该退役 → 不填 `replacement`（纯退）。
-  - 错但要换成对的 → 填 `replacement`（更正后的完整正文，一句话说清真值）。
-  - 一个错认知常散在多条 → 可多条。
-- **`entity_op`**（可选，实体层的更新，二选一场景）：
-  - `{"op":"retype","entity":"研发群","kind":"org"}` —— 是点但 kind 错
-  - `{"op":"shadow","entity":"客户"}` —— 根本不是点（类/泛称/角色）
-  - `{"op":"merge","entity":"小张","keeper":"张三"}` —— 两个其实是同一个
+- **`supersede`:** beliefs to retire or replace. Only reference `file` and
+  `entry_id` values that actually appear in the candidates.
+  - If a belief is simply wrong, omit or leave `replacement` empty.
+  - If it should be corrected, set `replacement` to one complete corrected
+    statement.
+  - Correct every affected candidate when the same error appears more than once.
+- **`entity_op`:** an optional entity-level correction:
+  - `{"op":"retype","entity":"Research Team","kind":"org"}` when an entity exists but has the wrong kind.
+  - `{"op":"shadow","entity":"customer"}` when a generic class or role should not be an entity.
+  - `{"op":"merge","entity":"Alex J.","keeper":"Alex Jones"}` when two names identify the same entity.
 
-## 纪律
+## Rules
 
-- **只用候选里有的**：候选里没有对应的源，就别 supersede（宁可空，返回空更新——代码不动手）。
-- **对错混合的条目 → 用 `replacement`（replace，别跳过）**：一条候选里既有**正确**信息、又有被新信息**推翻**的部分（如「GitHub=DemoUserX=苏清岚✅，且飞书名桃子也是同一人❌」），**不要因为它有对的部分就放过它**——填 `replacement` 写一份**保留正确、剔除错误**的更正正文（如只留 GitHub=DemoUserX=苏清岚）。这是最容易漏的一类，务必抓。
-- **逐条独立判断，别被"对错并存"骗**：即使候选里**已有**一条更正版本（如已有条目说「桃子是另一个人」），只要还有**别的条目本身**在陈述那个错误主张（如仍说「桃子…都是同一人」），就照样要 supersede/replace 那条。不要因为"整体上已经有正确版本了"就放过仍带错误的旧条目——权重里残留的错事实还会污染前向。
-- **改源头不改摘要**：你退的是**具体源事实条目**（权重），不是某个概览/apex——概览会自动重导。
-- **宁可少动**：只退真正被这条新信息推翻的；不确定的留着。
-- `reason`：一句话（进审计 + 反馈信号）。
+- Use only supplied candidates. If no candidate supports an update, return an
+  empty update and make no speculative change.
+- Replace mixed entries instead of skipping them. When one candidate contains
+  both valid and invalid information, write a replacement that preserves the
+  valid portion and removes the invalid portion.
+- Judge every candidate independently. An existing corrected entry does not
+  excuse another active entry that still contains the false claim.
+- Correct concrete source facts, not summaries or the apex. Derived summaries
+  are rebuilt automatically.
+- Prefer a minimal change. Retire only facts directly invalidated by the new
+  information.
+- Preserve the language of the authoritative statement in replacement memory.
+- `reason` must be one concise audit sentence.
 
-## 输出
+## Output
 
-严格输出 JSON，无多余解释：
+Return strict JSON with no additional explanation:
 
 ```json
-{"supersede": [{"file": "user-profile.md", "entry_id": "20260618-0338-86f5b0", "reason": "桃子是Dev群同事非用户本人", "replacement": ""}], "entity_op": null, "reason": "桃子不是用户，是Dev群的另一个人"}
+{"supersede": [{"file": "user-profile.md", "entry_id": "20260618-0338-86f5b0", "reason": "Peach identifies a teammate, not the user.", "replacement": ""}], "entity_op": null, "reason": "The nickname belongs to another person."}
 ```
 
-无可更新时输出 `{"supersede": [], "entity_op": null, "reason": "..."}`。
+When there is nothing to update, return
+`{"supersede": [], "entity_op": null, "reason": "..."}`.

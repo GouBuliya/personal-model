@@ -1,52 +1,14 @@
-"""写权反转（SSOT 切换设计稿 §4.4「切主写」，PR-6b）。
+"""Route write authority between Markdown and the evomem canonical store.
 
-Inverts evomem state back into the selected public write authority.
+When ``[evomem] write_authority = "evomem"``, this module handles the entry
+write verbs from ``store/entries.py``. Each write atomically updates canonical
+nodes and their FTS projection, then best-effort regenerates the human-readable
+Markdown projection. Projection failures are observable but never roll back a
+successful canonical write.
 
-``[evomem] write_authority = "evomem"`` 时，本模块接管 ``store/entries.py`` 的
-全部写口动词（create/append/supersede/delete/set_file_status）。对每个写口
-（§1.1「一个真相，两个投影，一个写口」）：
-
-1. **真相写**：按 ``backfill.map_entry_to_node`` 的共享映射备好 ``MemoryNode``
-   （写口先把本次写渲染成与 markdown 主写逐字相同的 heading+body 块、再用同一
-   解析器解析、再过同一映射——节点形态与 backfill/影子写不可能漂移），经
-   ``engine.commit_node``/``commit_supersede``/``commit_retire``（写口栅栏 +
-   单事务原子）落 evo_nodes。
-2. **FTS 检索投影**（§1.4/Q7，同步维护）：复用 ``store/entries.py`` 的
-   ``derived_*_rows`` 同一组 helper 维护 entries/entry_temporal/entry_metadata
-   ——派生行的取值与顺序只存在一份，``superseded`` 列的派生规则
-   ``0 iff (is_latest=1 AND status='active')`` 由写形态 by construction 满足
-   （新节点必为活跃链头 → 0；被退役节点必 shadow → 1）。entry_chain 与双读
-   对账机器已在 PR-7 退役。
-3. **markdown 人读投影**（§1.5，best-effort）：按 file_name 重投影整个文件到
-   live ``memory/``（frontmatter 带 ``projected:`` 注记，Q1 (b)），并记录
-   ``projection_state`` 内容 hash（手改检测的对照基准）。**失败只记 warning +
-   计数，每满 ``_ALERT_EVERY`` 次发 ``integrity_alert``
-   （check=``markdown_projection_lag``，alert-only），绝不回滚真相写**——投影
-   滞后是设计本意（与「FTS 落后于 markdown」同构，方向反了）。
-
-挂点收口：与 PR-3 影子写同一选择——**挂在 choke point**（九个写站点全部收敛到
-的 ``store/entries.py`` 写口动词），而非逐站点改 import。任何现有/未来 caller
-（含 ``write_preset_files``、timeline skill echo、测试）自动被覆盖，是设计稿
-风险 1「绕过主写+投影机制的写路径静默分裂」的最强对冲。
-
-豁免口（dispatch 判定 ``routes_to_engine``）：
-
-- **event-***（Q2 裁定）：行为日志量大、append-only、永不入链，留旧 markdown
-  直写口；engine 落库入口另有硬拒兜底。
-- **skills/ 子目录文件**：``evo_nodes.file_name`` 无子目录信息（与影子写的
-  ``path.name`` 口径一致），投影无法路由回子目录，留旧直写口。
-- 非法前缀：返回 False，让 legacy 路径抛它原有的 ``ValueError``（错误面不变）。
-
-``write_authority = "markdown"``（默认）时本模块完全旁路：dispatch 是纯 flag
-检查，三条主写路 + 影子写行为与现状字节等价（P0）；回滚（§6）= 翻回 flag，
-影子双写自动恢复工作。
-
-op 决策与 reconcile 调和的关系（§1.3 的实现取舍）：到达写口动词时，各站点的
-写决策已经做完（chat 抽取 / classifier / schema miner 各自的 LLM 或确定性
-逻辑）——本模块把它们一一映射为确定性的真相写，不调 reconciler 重新决策，
-这是「同输入 → 新旧路径 markdown 投影 byte-identical」迁移纪律的前提；
-reconcile 调和（``engine.add``）作为语义升级与写权反转解耦，留待后续按站点
-显式启用。
+Event logs and files below ``skills/`` remain on the direct Markdown path.
+With the default ``write_authority = "markdown"``, routing bypasses this module
+and preserves the established Markdown-first behavior.
 """
 
 from __future__ import annotations
@@ -72,22 +34,22 @@ if TYPE_CHECKING:
 
 _log = get("persome.evomem")
 
-# Q4：反转写口 scope 全取 default，与 backfill / 影子写一致。
+# Use the same default scope as backfill and shadow writes.
 _USER_ID = "default"
 _AGENT_ID = "default"
 
-# 投影失败可见性（§1.5/§3.4）：累计 miss 每满 N 次发一条 integrity_alert。
+# Emit an integrity alert after every N projection misses.
 _ALERT_EVERY = 5
 
 _miss_lock = threading.Lock()
 _miss_count = 0
 
 
-# ── 写权判定（choke-point dispatch 的谓词）──────────────────────────────────
+# Write-authority routing
 
 
 def authority() -> str:
-    """归一化的写权值；未知值告警并回退 ``markdown``（fail-safe 到现状）。"""
+    """Normalize write authority and fail safely to ``markdown``."""
     raw = (config_mod.load().evomem.write_authority or "markdown").strip().lower()
     if raw not in ("markdown", "evomem"):
         _log.warning("unknown [evomem] write_authority %r — falling back to 'markdown'", raw)
@@ -100,38 +62,35 @@ def evomem_active() -> bool:
 
 
 def routes_to_engine(name: str) -> bool:
-    """choke-point dispatch 判定：evomem 主写 **且** 目标文件属 evo_nodes 范围。
-
-    见模块 docstring「豁免口」。必须不抛错：非法名交还 legacy 路径抛原有错误。
-    """
+    """Return whether an evomem-authoritative write owns this target file."""
     try:
         if "/" in name:
-            return False  # skills/ 子目录：投影无法路由回子目录，留旧直写口
+            return False  # Projections cannot route into skills/ subdirectories.
         if files_mod.validate_prefix(name) == "event":
-            return False  # Q2：event-* append-only 日志永不进 evo_nodes
+            return False  # Append-only event logs never enter evo_nodes.
     except ValueError:
         return False
     return evomem_active()
 
 
-# ── 投影失败计数（镜像 shadow.py 的 miss 模式）──────────────────────────────
+# Projection failure counters
 
 
 def miss_count() -> int:
-    """累计 markdown 投影 miss 次数，进程内计数。"""
+    """Return the process-local Markdown projection miss count."""
     with _miss_lock:
         return _miss_count
 
 
 def reset_misses() -> None:
-    """清零 miss 计数（测试 seam / 人工全量重投影补齐后的复位按钮）。"""
+    """Reset misses after tests or a successful full reprojection."""
     global _miss_count
     with _miss_lock:
         _miss_count = 0
 
 
 def _record_miss(detail: str) -> None:
-    """一次 markdown 投影没有落盘：warning + 计数 + 阈值报警，真相写不受影响。"""
+    """Record a projection miss without affecting the canonical write."""
     global _miss_count
     with _miss_lock:
         _miss_count += 1
@@ -142,20 +101,20 @@ def _record_miss(detail: str) -> None:
             integrity.emit_alert(
                 "markdown_projection_lag",
                 f"{n} cumulative markdown-projection misses; latest: {detail}"
-                " — 人读投影已落后，跑 `persome evomem-project-markdown --live` 补齐",
+                "; the readable projection is behind. Run "
+                "`persome evomem-project-markdown --live` to catch up",
                 source="write_inversion",
                 structural=False,
             )
-        except Exception:  # noqa: BLE001 — 报警失败不能再伤害写路径
+        except Exception:  # noqa: BLE001 - alert failure must not affect writes
             _log.warning("markdown_projection_lag alert emission failed", exc_info=True)
 
 
-# ── 内部构件 ────────────────────────────────────────────────────────────────
+# Internal helpers
 
 
 def _engine() -> EvoMemory:
-    """每次写构造（NodeStore 不持连接，建表 DDL 幂等）——避免跨 PERSOME_ROOT
-    （测试逐用例换 root）缓存到失效的库。"""
+    """Create a store per write so changing ``PERSOME_ROOT`` cannot stale it."""
     from .engine import EvoMemory
 
     return EvoMemory(user_id=_USER_ID, agent_id=_AGENT_ID)
@@ -192,13 +151,7 @@ def _node_from_write(
     occurred_at: str | None,
     valid_from: str,
 ) -> MemoryNode:
-    """把一次写口调用变成 MemoryNode——走「渲染 → 解析 → 共享映射」三段。
-
-    先用 ``render_heading`` 渲染出与 markdown 主写**逐字相同**的 entry 块，再用
-    同一解析器（``_parse_entries``）解析，再过 ``backfill.map_entry_to_node``
-    同一映射。节点形态与「legacy 直写该块后跑 backfill/影子写」的产物 by
-    construction 一致——这是逐站「投影 byte-identical」断言的根基。
-    """
+    """Build a MemoryNode through the shared render, parse, and mapping path."""
     from . import backfill
 
     heading = files_mod.render_heading(timestamp=ts, entry_id=entry_id, tags=tags)
@@ -236,7 +189,7 @@ def _row_mapping(row: sqlite3.Row | fts.FileRow | Mapping[str, Any]) -> Mapping[
 
 
 def record_projection_state(conn: sqlite3.Connection, file_name: str, text: str) -> None:
-    """记录一次成功投影的内容 hash（手改检测的对照基准，PR-6b Q1 (b)）。"""
+    """Record the content hash of a successful projection."""
     conn.execute(
         "INSERT INTO projection_state(file_name, content_hash, projected_at)"
         " VALUES (?, ?, ?)"
@@ -257,7 +210,7 @@ def _project(
     nodes: list,
     file_row: sqlite3.Row | fts.FileRow | Mapping[str, Any],
 ) -> None:
-    """best-effort markdown 投影：失败 warning + 计数 + 阈值报警，绝不抛出。"""
+    """Project Markdown best-effort, recording failures without raising."""
     from ..store import projector
 
     try:
@@ -266,7 +219,7 @@ def _project(
         )
         files_mod.atomic_write_text(path, text)
         record_projection_state(conn, path.name, text)
-    except Exception as exc:  # noqa: BLE001 — 投影是可弃派生，真相写已落定
+    except Exception as exc:  # noqa: BLE001 - projection is disposable derived state
         _record_miss(f"{path.name}: {exc!r}")
 
 
@@ -277,12 +230,7 @@ def _finish_file_write(
     prefix: str,
     soft_limit_tokens: int | None = None,
 ) -> None:
-    """一次写后的文件级收尾：files 行（entry_count/updated/needs_compact）+ 投影。
-
-    ``entry_count`` 以真相侧节点数为准（§1.5——frontmatter 的 files 表元数据由
-    投影器维护，files 行是它的数据源）；soft-limit 估算用投影正文
-    （``render_content``），与 markdown 主写的 ``post.content`` 同口径、同字节。
-    """
+    """Update file metadata and project the file after a canonical write."""
     from ..store import projector
 
     name = path.name
@@ -312,7 +260,7 @@ def _finish_file_write(
     _project(conn, path=path, nodes=nodes, file_row=file_row)
 
 
-# ── 写口动词（evomem 主写形态；签名镜像 store/entries.py）───────────────────
+# Evomem-authoritative write verbs; signatures mirror store/entries.py.
 
 
 def create_file(
@@ -323,8 +271,7 @@ def create_file(
     tags: list[str],
     status: str = "active",
 ) -> Path:
-    """evomem 主写的 create：files 行是文件级元数据的真相（无节点可写），投影出
-    与 legacy ``write_file`` 逐字相同（仅多 ``projected:`` 注记键）的空文件。"""
+    """Create file metadata and an empty readable projection."""
     if not description.strip():
         raise ValueError("description is required")
     prefix = files_mod.validate_prefix(name)
@@ -361,7 +308,7 @@ def append_entry(
     conflicted: bool = False,
     occurred_at: str | None = None,
 ) -> str:
-    """evomem 主写的 append：ADD 真相写 + FTS 投影 + 增量 markdown 投影。"""
+    """Append through a canonical ADD, FTS update, and Markdown projection."""
     from ..store import entries as entries_mod
 
     path = files_mod.memory_path(name)
@@ -370,17 +317,14 @@ def append_entry(
     if row is None:
         if not path.exists():
             raise FileNotFoundError(f"{path.name} does not exist; call create_file first")
-        # 过渡宽容：盘上有文件但 files 行缺失（手建/历史遗留）——从 frontmatter
-        # 补行，镜像 legacy「能 append 任何存在的文件」的契约。
+        # Backfill metadata for a manually created or legacy file.
         parsed = files_mod.read_file(path)
-        # 但若盘上文件已有条目、而 evo_nodes 里没有它的任何节点（未 backfill），直接
-        # append 会让 _finish_file_write 的整文件重投影把盘上历史条目全部抹掉（#575）。
-        # 拒绝写入并指向 backfill，而不是静默丢数据（CLAUDE.md 也要求反转前先 backfill）。
+        # Refuse to overwrite legacy entries before canonical nodes are backfilled.
         if parsed.entries and not _load_file_nodes(conn, path.name):
             raise RuntimeError(
-                f"{path.name} 有 {len(parsed.entries)} 条盘上条目但 evo_nodes 无其节点（未"
-                f" backfill）；先跑 `persome evomem-backfill` 再 append，"
-                f"否则整文件重投影会覆盖历史条目"
+                f"{path.name} has {len(parsed.entries)} on-disk entries but no canonical "
+                "nodes. Run `persome evomem-backfill` before appending to avoid "
+                "overwriting historical entries."
             )
         fts.upsert_file(
             conn,
@@ -416,7 +360,7 @@ def append_entry(
         valid_from=ts,
     )
     with files_mod.file_lock(path):
-        _engine().commit_node(node)  # 真相写（单事务原子）
+        _engine().commit_node(node)  # Canonical atomic write.
         entries_mod.derived_append_rows(
             conn,
             entry_id=entry_id,
@@ -446,25 +390,12 @@ def supersede_entry(
     conflicted: bool = False,
     occurred_at: str | None = None,
 ) -> str:
-    """evomem 主写的 supersede：原子「落新链头 + 退役旧节点（双向指针 +
-    valid_until）」+ FTS 投影 + markdown 投影。
+    """Atomically write a new chain head, retire the old node, and project both.
 
-    语义映射说明（设计稿 §1.3 的实现取舍）：legacy ``refined_from`` 形态
-    （EVO-02 双标签法——精炼**入链**退役旧版本）原样保留为「带 ``refined_from``
-    出处的 SUPERSEDE 节点」，与 backfill 对既有 markdown 同形态的映射逐字一致；
-    engine 的离链 UPDATE op 是 reconcile 决策的 op 级语义，与本写口动词正交。
-    新节点 content 携带 legacy 的 ``<!-- supersedes: ...; reason: ... -->``
-    机器注释（markdown 投影逐字兼容的一部分）；entries FTS 行的 content 与
-    legacy 增量路径一致**不含**注释。
-
-    ``tags=None`` 回退的元认知承继（与 legacy 的一处**有意收敛**）：legacy 把旧
-    heading 的原始 tag 集（含 ``confidence:``/``conflicted``/``occurred:``
-    colon-tag）原样抄上新 heading，但 ``entry_metadata`` 行不写——文件与派生表
-    分裂，直到下次 rebuild 才补上。节点模型没有「heading 有 tag 但列没值」的
-    表达，所以反转写口把承继落在 canonical 家（节点列 + ``entry_metadata`` 行），
-    heading 由列再渲染：**文件字节与 legacy 一致**（生产站点无 refined_from +
-    回退并用的形态），派生表则直接落在 rebuild 后的稳定态——这是修复分裂，
-    不是漂移。
+    ``refined_from`` remains represented as a SUPERSEDE node for compatibility
+    with existing Markdown and backfill. Metadata inherited when ``tags`` is
+    omitted is written to canonical columns and the derived metadata table so
+    the projection and rebuilt index converge immediately.
     """
     from ..store import entries as entries_mod
 
@@ -481,8 +412,7 @@ def supersede_entry(
     ts = entries_mod._now_iso_minute()
     new_id = entries_mod.make_id(ts)
     if tags is None:
-        # legacy 回退 = 继承旧条目的 tag 集；语义 tag 走 node.tags，元认知走列
-        # （见 docstring「元认知承继」）。
+        # Inherit semantic tags and metacognitive columns from the old entry.
         new_tags = old_node.tags.split()
         if confidence is None and not conflicted and occurred_at is None:
             confidence = old_node.confidence
@@ -529,8 +459,7 @@ def supersede_entry(
 
 
 def mark_entry_deleted(conn: sqlite3.Connection, *, name: str, entry_id: str) -> None:
-    """evomem 主写的孤儿退役（DELETE / ABSTRACT 源）：shadow + valid_until +
-    FTS 退役行 + markdown 投影（已退役条目的重复退役与 legacy 一样不动文件）。"""
+    """Retire an orphan node and update its FTS and Markdown projections."""
     from ..store import entries as entries_mod
     from .models import MemoryStatus
 
@@ -549,16 +478,15 @@ def mark_entry_deleted(conn: sqlite3.Connection, *, name: str, entry_id: str) ->
         engine.commit_retire(entry_id, valid_until=ts)
         entries_mod.derived_retire_rows(conn, entry_id=entry_id, ts=ts)
         if was_active:
-            # legacy 仅在条目尚未退役时改文件 + 刷 files 行（幂等重退役不产生
-            # 文件写）；投影同口径。
+            # Repeated retirement is idempotent and does not rewrite the file.
             _finish_file_write(conn, path=path, prefix=prefix)
 
 
 def set_file_status(conn: sqlite3.Connection, *, name: str, status: str) -> None:
-    """evomem 主写的文件状态翻转：files 行是真相，投影把它带回 frontmatter。"""
+    """Update canonical file status and reflect it in frontmatter."""
     path = files_mod.memory_path(name)
     if _file_row(conn, path.name) is None:
-        return  # 镜像 legacy：文件不存在 = no-op
+        return  # Missing files are a no-op.
     conn.execute("UPDATE files SET status = ? WHERE path = ?", (status, path.name))
     with files_mod.file_lock(path):
         reproject_file(conn, path.name)
@@ -566,8 +494,7 @@ def set_file_status(conn: sqlite3.Connection, *, name: str, status: str) -> None
 
 
 def flag_needs_compact(conn: sqlite3.Connection, *, name: str, value: bool) -> None:
-    """evomem 主写的 needs_compact 翻转（``writer/tools.py:tool_flag_compact``
-    在反转模式下的形态）：files 行是真相，重投影替代 ``update_frontmatter``。"""
+    """Update canonical ``needs_compact`` state and reproject frontmatter."""
     path = files_mod.memory_path(name)
     fts.set_needs_compact(conn, path.name, value)
     with files_mod.file_lock(path):
@@ -575,7 +502,7 @@ def flag_needs_compact(conn: sqlite3.Connection, *, name: str, value: bool) -> N
 
 
 def reproject_file(conn: sqlite3.Connection, path_name: str) -> None:
-    """按当前真相态（evo_nodes + files 行）重投影单个文件。best-effort。"""
+    """Best-effort reprojection of one file from canonical nodes and metadata."""
     path = files_mod.memory_path(path_name)
     row = _file_row(conn, path.name)
     if row is None:
@@ -584,12 +511,12 @@ def reproject_file(conn: sqlite3.Connection, path_name: str) -> None:
     _project(conn, path=path, nodes=nodes, file_row=row)
 
 
-# ── 手改检测 + 回灌（Q1 裁定 (b)，PR-6b）────────────────────────────────────
+# Manual-edit detection and import
 
 
 @dataclasses.dataclass
 class ImportReport:
-    """一次 ``import_markdown_file`` 的结果。"""
+    """Result of one ``import_markdown_file`` operation."""
 
     file_name: str
     imported: list[str] = dataclasses.field(default_factory=list)
@@ -598,13 +525,10 @@ class ImportReport:
 
 
 def check_manual_edits(conn: sqlite3.Connection) -> list[dict[str, str]]:
-    """对照 ``projection_state``，找出被手改/手删的投影文件（Q1 (b)）。
+    """Return projected files whose content differs from the recorded hash.
 
-    判定 = 「当前文件内容 hash ≠ 上次成功投影的 hash」。投影失败不更新 state，
-    所以投影滞后不会被误判成手改（lag 走 ``markdown_projection_lag`` 计数器）。
-    发现手改只报警（一条 ``integrity_alert`` check=``manual_edit_detected``，
-    alert-only）+ 返回清单——**不做自动回灌**（Q1c 被否：mtime 自动回灌等于
-    保留第二写口），回灌由人跑 ``persome evomem-import-markdown <file>``。
+    Detection emits an alert but never imports automatically. An owner must run
+    ``persome evomem-import-markdown <file>`` explicitly.
     """
     findings: list[dict[str, str]] = []
     rows = conn.execute("SELECT file_name, content_hash FROM projection_state").fetchall()
@@ -621,8 +545,8 @@ def check_manual_edits(conn: sqlite3.Connection) -> list[dict[str, str]]:
             integrity.emit_alert(
                 "manual_edit_detected",
                 f"{len(findings)} projection file(s) differ from last projected state: {detail}"
-                " — markdown 现在是投影，手改会被下次投影覆盖；"
-                "回灌用 `persome evomem-import-markdown <file>`",
+                "; Markdown is a projection and the next projection will overwrite edits. "
+                "Use `persome evomem-import-markdown <file>` to import them",
                 source="write_inversion",
                 structural=False,
             )
@@ -632,7 +556,7 @@ def check_manual_edits(conn: sqlite3.Connection) -> list[dict[str, str]]:
 
 
 def run_daily_manual_edit_check() -> list[dict[str, str]]:
-    """daily-safety-net 尾部的挂载形态：仅 evomem 主写时有意义；绝不抛出。"""
+    """Run manual-edit detection from the daily safety net without raising."""
     try:
         if not evomem_active():
             return []
@@ -649,14 +573,11 @@ def run_daily_manual_edit_check() -> list[dict[str, str]]:
 
 
 def import_markdown_file(conn: sqlite3.Connection, name: str) -> ImportReport:
-    """把投影文件里的手改回灌成 engine 写（Q1 (b) 的 import CLI 实现）。
+    """Import safe manual additions from a projected Markdown file.
 
-    最小实现（设计任务书裁定）：**只回灌纯新增条目**（无链指针/出处 tag、未退役
-    的 ADD 形态，经 ``rebuild_nodes_from_projection`` 同一映射 → ``commit_node``
-    + 共享派生行）；带链语义的新增、对既有条目的改动/删除等复杂 diff 一律列入
-    ``conflicts`` 报告人裁决，文件**不被重投影覆盖**（保住用户的字，状态 hash 也
-    不刷新——手改警报会持续，直到人处理）。全部干净回灌时按 canonical 形态重投影
-    并刷新 ``projection_state``。
+    Only plain active ADD entries are imported automatically. Chain-bearing
+    additions and changes or deletions of existing entries are returned as
+    conflicts for human review, and the edited file is not overwritten.
     """
     from ..store import entries as entries_mod
     from ..store import projector
@@ -664,12 +585,12 @@ def import_markdown_file(conn: sqlite3.Connection, name: str) -> ImportReport:
 
     if not evomem_active():
         raise RuntimeError(
-            'evomem-import-markdown 仅在 write_authority="evomem" 下有意义；'
-            "markdown 主写模式直接编辑文件 + `persome rebuild-index` 即可"
+            'evomem-import-markdown requires write_authority="evomem"; '
+            "in Markdown-authoritative mode, edit the file and run `persome rebuild-index`"
         )
     path = files_mod.memory_path(name)
     if "/" in name or files_mod.validate_prefix(path.name) == "event":
-        raise ValueError(f"{path.name} 属豁免口（event-*/子目录），不在投影/回灌范围")
+        raise ValueError(f"{path.name} is exempt from projection and import")
     if not path.exists():
         raise FileNotFoundError(path.name)
 
@@ -694,7 +615,9 @@ def import_markdown_file(conn: sqlite3.Connection, name: str) -> ImportReport:
                 or node.supersedes
                 or node.status is not MemoryStatus.ACTIVE
             ):
-                report.conflicts.append(f"{e.id}: 新增条目带链指针/退役形态，需人工裁决")
+                report.conflicts.append(
+                    f"{e.id}: the new entry carries chain or retirement state; review required"
+                )
                 continue
             node.file_name = path.name
             engine.commit_node(node)
@@ -712,8 +635,7 @@ def import_markdown_file(conn: sqlite3.Connection, name: str) -> ImportReport:
             )
             report.imported.append(e.id)
 
-        # 收尾：files 行以真相侧节点数为准；canonical 重投影只在没有残留人裁决
-        # 项、且文件内容与 canonical 完全对账时执行（防止覆盖用户改动）。
+        # Reproject only after canonical state fully reconciles with the edited file.
         nodes = _load_file_nodes(conn, path.name)
         row = _file_row(conn, path.name)
         if row is not None and report.imported:
@@ -735,7 +657,9 @@ def import_markdown_file(conn: sqlite3.Connection, name: str) -> ImportReport:
         )
         leftover = {e.id for e in parsed.entries} - {n.node_id for n in nodes}
         if leftover:
-            report.conflicts.append(f"未入真相表的条目残留: {', '.join(sorted(leftover))}")
+            report.conflicts.append(
+                f"entries remain outside canonical state: {', '.join(sorted(leftover))}"
+            )
         if not report.conflicts:
             current = path.read_text()
             if _entries_only(current) == _entries_only(canonical):
@@ -744,30 +668,27 @@ def import_markdown_file(conn: sqlite3.Connection, name: str) -> ImportReport:
                 report.reprojected = True
             else:
                 report.conflicts.append(
-                    "回灌后文件与 canonical 投影仍有差异（改动了既有条目/无法解析"
-                    "的文本？），文件未被覆盖——需人工裁决"
+                    "the imported file still differs from its canonical projection; "
+                    "the file was preserved for manual review"
                 )
     return report
 
 
 def _entries_only(text: str) -> list[tuple[str, list[str], str]]:
-    """按 entry 粒度归一比较（heading tag 集合序 + body），忽略 frontmatter 与
-    块间空行的格式差——手写 append 的格式噪音不应该挡住干净回灌。"""
+    """Compare normalized entry tags and bodies while ignoring formatting noise."""
     try:
         post_body = text.split("---", 2)[2] if text.startswith("---") else text
     except IndexError:
         post_body = text
-    # 按 id 排序：canonical 投影按 (heading_ts, id) 重排，手写 append 常落在文件
-    # 尾部——条目集合相同而顺序不同不算残留差异。
+    # Sort by ID so harmless ordering differences do not block a clean import.
     return sorted((e.id, e.tags, e.body.strip()) for e in files_mod._parse_entries(post_body))
 
 
 def project_live_all(conn: sqlite3.Connection) -> list[str]:
-    """全量 live 投影：把每个非豁免文件按真相态重投影进 memory/（幂等）。
+    """Idempotently reproject every non-exempt file into live memory.
 
-    服务两个场景：投影滞后修复（``markdown_projection_lag`` 报警后补齐）与 §6
-    回滚前置（翻回 markdown 前先把反转期写入投影齐，再 ``rebuild-index``）。
-    逐文件 best-effort（坏一个不挡其余），失败走同一 miss 计数。
+    Used to repair projection lag and before returning authority to Markdown.
+    Each file is best-effort so one failure does not block the rest.
     """
     done: list[str] = []
     for r in conn.execute("SELECT path FROM files ORDER BY path").fetchall():

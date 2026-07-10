@@ -36,7 +36,11 @@ MEMBERS = ["a1", "b2", "c3", "d4"]
 class TestRecordFace:
     def test_new_face_born_shadow_with_source_provenance(self, conn):
         fid = faces.record_face(
-            conn, source="mined", signature="每天早上先看邮件", members=MEMBERS, confidence=0.7
+            conn,
+            source="mined",
+            signature="\u6bcf\u5929\u65e9\u4e0a\u5148\u770b\u90ae\u4ef6",
+            members=MEMBERS,
+            confidence=0.7,
         )
         row = _row(conn, fid)
         assert row["status"] == "shadow"
@@ -47,11 +51,17 @@ class TestRecordFace:
 
     def test_signature_match_folds_and_same_source_stays(self, conn):
         fid1 = faces.record_face(
-            conn, source="mined", signature="每天早上先看邮件", members=MEMBERS
+            conn,
+            source="mined",
+            signature="\u6bcf\u5929\u65e9\u4e0a\u5148\u770b\u90ae\u4ef6",
+            members=MEMBERS,
         )
         # NFKC/case/whitespace-normalized signature equality folds
         fid2 = faces.record_face(
-            conn, source="mined", signature="  每天早上先看邮件 ", members=MEMBERS
+            conn,
+            source="mined",
+            signature="  \u6bcf\u5929\u65e9\u4e0a\u5148\u770b\u90ae\u4ef6 ",
+            members=MEMBERS,
         )
         assert fid1 == fid2
         row = _row(conn, fid1)
@@ -59,38 +69,43 @@ class TestRecordFace:
         assert row["provenance"] == "mined"  # same source — no escalation
 
     def test_footprint_jaccard_folds_despite_different_signature(self, conn):
-        fid1 = faces.record_face(conn, source="mined", signature="规律 A", members=MEMBERS)
+        fid1 = faces.record_face(conn, source="mined", signature="\u89c4\u5f8b A", members=MEMBERS)
         # 3/5 overlap = 0.6 ≥ MATCH_JACCARD → same face even with a new wording
         fid2 = faces.record_face(
-            conn, source="emergent", signature="规律 A（改写）", members=["a1", "b2", "c3", "e5"]
+            conn,
+            source="emergent",
+            signature="\u89c4\u5f8b A\uff08\u6539\u5199\uff09",
+            members=["a1", "b2", "c3", "e5"],
         )
         assert fid1 == fid2
 
     def test_other_source_escalates_to_both(self, conn):
-        fid = faces.record_face(conn, source="mined", signature="规律 A", members=MEMBERS)
-        faces.record_face(conn, source="emergent", signature="规律 A", members=MEMBERS)
+        fid = faces.record_face(conn, source="mined", signature="\u89c4\u5f8b A", members=MEMBERS)
+        faces.record_face(conn, source="emergent", signature="\u89c4\u5f8b A", members=MEMBERS)
         assert _row(conn, fid)["provenance"] == "both"
         # further contributions never de-escalate
-        faces.record_face(conn, source="mined", signature="规律 A", members=MEMBERS)
+        faces.record_face(conn, source="mined", signature="\u89c4\u5f8b A", members=MEMBERS)
         assert _row(conn, fid)["provenance"] == "both"
 
     def test_disjoint_footprint_new_wording_births_new_face(self, conn):
-        fid1 = faces.record_face(conn, source="mined", signature="规律 A", members=MEMBERS)
+        fid1 = faces.record_face(conn, source="mined", signature="\u89c4\u5f8b A", members=MEMBERS)
         fid2 = faces.record_face(
-            conn, source="mined", signature="规律 B", members=["x1", "y2", "z3"]
+            conn, source="mined", signature="\u89c4\u5f8b B", members=["x1", "y2", "z3"]
         )
         assert fid1 != fid2
 
     def test_confidence_is_max_ratchet(self, conn):
         fid = faces.record_face(
-            conn, source="mined", signature="规律 A", members=MEMBERS, confidence=0.8
+            conn, source="mined", signature="\u89c4\u5f8b A", members=MEMBERS, confidence=0.8
         )
-        faces.record_face(conn, source="mined", signature="规律 A", members=MEMBERS, confidence=0.3)
+        faces.record_face(
+            conn, source="mined", signature="\u89c4\u5f8b A", members=MEMBERS, confidence=0.3
+        )
         assert _row(conn, fid)["confidence"] == pytest.approx(0.8)
 
     def test_signal_only_contribution_never_touches_footprints(self, conn):
-        fid = faces.record_face(conn, source="mined", signature="规律 A", members=MEMBERS)
-        faces.record_face(conn, source="emergent", signature="规律 A", members=[])
+        fid = faces.record_face(conn, source="mined", signature="\u89c4\u5f8b A", members=MEMBERS)
+        faces.record_face(conn, source="emergent", signature="\u89c4\u5f8b A", members=[])
         row = _row(conn, fid)
         assert row["provenance"] == "both"  # it IS evidence
         assert row["observations"] == 2
@@ -100,19 +115,19 @@ class TestRecordFace:
         assert json.loads(row["members"]) == sorted(MEMBERS)
 
     def test_footprint_history_capped(self, conn):
-        fid = faces.record_face(conn, source="mined", signature="规律 A", members=MEMBERS)
+        fid = faces.record_face(conn, source="mined", signature="\u89c4\u5f8b A", members=MEMBERS)
         for i in range(5):
             faces.record_face(
-                conn, source="mined", signature="规律 A", members=[*MEMBERS[:3], f"n{i}"]
+                conn, source="mined", signature="\u89c4\u5f8b A", members=[*MEMBERS[:3], f"n{i}"]
             )
         assert len(json.loads(_row(conn, fid)["footprints"])) == faces.FOOTPRINT_HISTORY_KEEP
 
     def test_levels_do_not_cross_fold(self, conn):
-        fid1 = faces.record_face(conn, source="mined", signature="规律 A", members=MEMBERS)
+        fid1 = faces.record_face(conn, source="mined", signature="\u89c4\u5f8b A", members=MEMBERS)
         fid2 = faces.record_face(
-            conn, source="emergent", signature="规律 A", members=MEMBERS, level=2
+            conn, source="emergent", signature="\u89c4\u5f8b A", members=MEMBERS, level=2
         )
-        assert fid1 != fid2  # 面 and 体 with the same wording are distinct rows
+        assert fid1 != fid2
 
 
 class TestStabilityGateAndPromotion:
@@ -123,29 +138,33 @@ class TestStabilityGateAndPromotion:
         assert faces.stability([["a"]]) == 1.0  # <2 snapshots: vacuous, caller guards
 
     def test_single_signal_never_promotes(self, conn):
-        fid = faces.record_face(conn, source="mined", signature="规律 A", members=MEMBERS)
-        faces.record_face(conn, source="mined", signature="规律 A", members=MEMBERS)
+        fid = faces.record_face(conn, source="mined", signature="\u89c4\u5f8b A", members=MEMBERS)
+        faces.record_face(conn, source="mined", signature="\u89c4\u5f8b A", members=MEMBERS)
         assert faces.maybe_promote(conn, fid) is False
         assert _row(conn, fid)["status"] == "shadow"
 
     def test_both_but_single_snapshot_never_promotes(self, conn):
-        fid = faces.record_face(conn, source="mined", signature="规律 A", members=MEMBERS)
-        faces.record_face(conn, source="emergent", signature="规律 A", members=[])  # signal-only
+        fid = faces.record_face(conn, source="mined", signature="\u89c4\u5f8b A", members=MEMBERS)
+        faces.record_face(
+            conn, source="emergent", signature="\u89c4\u5f8b A", members=[]
+        )  # signal-only
         # both-provenance, obs=2, but only ONE footprint snapshot — one sighting
         # can't self-certify stability
         assert faces.maybe_promote(conn, fid) is False
 
     def test_churning_footprint_stays_shadow(self, conn):
-        fid = faces.record_face(conn, source="mined", signature="规律 A", members=["a", "b"])
-        faces.record_face(conn, source="emergent", signature="规律 A", members=["c", "d"])
+        fid = faces.record_face(
+            conn, source="mined", signature="\u89c4\u5f8b A", members=["a", "b"]
+        )
+        faces.record_face(conn, source="emergent", signature="\u89c4\u5f8b A", members=["c", "d"])
         # both + 2 snapshots, but the membership churned completely between
         # resamples — not a regularity yet
         assert faces.maybe_promote(conn, fid) is False
         assert _row(conn, fid)["status"] == "shadow"
 
     def test_stable_both_face_promotes_and_is_idempotent(self, conn):
-        fid = faces.record_face(conn, source="mined", signature="规律 A", members=MEMBERS)
-        faces.record_face(conn, source="emergent", signature="规律 A", members=MEMBERS)
+        fid = faces.record_face(conn, source="mined", signature="\u89c4\u5f8b A", members=MEMBERS)
+        faces.record_face(conn, source="emergent", signature="\u89c4\u5f8b A", members=MEMBERS)
         assert faces.maybe_promote(conn, fid) is True
         assert _row(conn, fid)["status"] == "active"
         assert faces.maybe_promote(conn, fid) is True  # idempotent
@@ -154,7 +173,7 @@ class TestStabilityGateAndPromotion:
         fid = faces.record_face(
             conn,
             source="emergent",
-            signature="跨域规律",
+            signature="\u8de8\u57df\u89c4\u5f8b",
             members=["schema-a", "schema-b"],
             level=2,
         )
@@ -162,7 +181,7 @@ class TestStabilityGateAndPromotion:
         faces.record_face(
             conn,
             source="emergent",
-            signature="跨域规律",
+            signature="\u8de8\u57df\u89c4\u5f8b",
             members=["schema-a", "schema-b"],
             level=2,
         )
@@ -183,24 +202,26 @@ class TestResidency:
         return fid
 
     def test_resident_faces_are_active_only_strongest_first(self, conn):
-        weak = self._promoted(conn, "规律弱", ["w1", "w2"])
-        strong = self._promoted(conn, "规律强", ["s1", "s2"], obs_extra=3)
-        faces.record_face(conn, source="mined", signature="影子", members=["x1"])  # stays shadow
+        weak = self._promoted(conn, "\u89c4\u5f8b\u5f31", ["w1", "w2"])
+        strong = self._promoted(conn, "\u89c4\u5f8b\u5f3a", ["s1", "s2"], obs_extra=3)
+        faces.record_face(
+            conn, source="mined", signature="\u5f71\u5b50", members=["x1"]
+        )  # stays shadow
         rows = faces.resident_faces(conn, top_k=5)
         assert [r["face_id"] for r in rows] == [strong, weak]
 
     def test_render_residency(self, conn):
-        self._promoted(conn, "每天早上先看邮件", MEMBERS)
+        self._promoted(conn, "\u6bcf\u5929\u65e9\u4e0a\u5148\u770b\u90ae\u4ef6", MEMBERS)
         block = faces.render_residency(faces.resident_faces(conn))
-        assert "每天早上先看邮件" in block
-        assert "行为规律" in block
+        assert "\u6bcf\u5929\u65e9\u4e0a\u5148\u770b\u90ae\u4ef6" in block
+        assert "Resident behavior patterns" in block
         assert faces.render_residency([]) == ""
 
 
 class TestMemberKey:
     def test_stable_across_whitespace_and_case(self):
         assert faces.member_key(" Fact A ") == faces.member_key("fact a")
-        assert faces.member_key("事实甲") != faces.member_key("事实乙")
+        assert faces.member_key("\u4e8b\u5b9e\u7532") != faces.member_key("\u4e8b\u5b9e\u4e59")
 
 
 # ── production hooks (miner + sweeper land faces without perturbing outputs) ──
@@ -217,9 +238,9 @@ class TestProductionHooks:
         from persome.writer import schema_miner_stage as stage
 
         payload = {
-            "central_proposition": "用户在工具选型上偏好极简方案",
-            "supporting_summary": "多次选择轻量工具",
-            "expected_inferences": ["会拒绝重型框架"],
+            "central_proposition": "\u7528\u6237\u5728\u5de5\u5177\u9009\u578b\u4e0a\u504f\u597d\u6781\u7b80\u65b9\u6848",
+            "supporting_summary": "\u591a\u6b21\u9009\u62e9\u8f7b\u91cf\u5de5\u5177",
+            "expected_inferences": ["\u4f1a\u62d2\u7edd\u91cd\u578b\u6846\u67b6"],
             "confidence": 0.85,
         }
 
@@ -234,10 +255,13 @@ class TestProductionHooks:
             )
 
         cfg = config_mod.load(ac_root / "config.toml")
-        cfg.memory_delta.apply_enabled = (
-            False  # 测 entries 源挖掘；apply_enabled=True 下 mine 读 evo_nodes
-        )
-        facts = ["用 uv 而非 pip", "用 ruff 取代 black", "拒绝 litellm", "偏好 CLI 工具"]
+        cfg.memory_delta.apply_enabled = False
+        facts = [
+            "\u7528 uv \u800c\u975e pip",
+            "\u7528 ruff \u53d6\u4ee3 black",
+            "\u62d2\u7edd litellm",
+            "\u504f\u597d CLI \u5de5\u5177",
+        ]
         with fts.cursor() as c:
             entries_mod.create_file(c, name="project-tooling.md", description="d", tags=["t"])
             for f in facts:
@@ -259,20 +283,20 @@ class TestProductionHooks:
         a = sweeper._StableSchema(
             name="schema-project-a.md",
             source_path="project-a.md",
-            central="规律 A",
+            central="\u89c4\u5f8b A",
             inferences=[],
             confidence=0.8,
         )
         b = sweeper._StableSchema(
             name="schema-project-b.md",
             source_path="project-b.md",
-            central="规律 B",
+            central="\u89c4\u5f8b B",
             inferences=[],
             confidence=0.8,
         )
         collision = sweeper._Collision(
             detected=True,
-            central_proposition="跨域融合规律",
+            central_proposition="\u8de8\u57df\u878d\u5408\u89c4\u5f8b",
             supporting_summary="s",
             expected_inferences=["i"],
             confidence=0.75,
@@ -280,16 +304,16 @@ class TestProductionHooks:
         with fts.cursor() as c:
             # pre-existing mined parent faces (as the miner would have left them)
             fa = faces.record_face(
-                c, source="mined", signature="规律 A", members=["a1", "a2", "a3"]
+                c, source="mined", signature="\u89c4\u5f8b A", members=["a1", "a2", "a3"]
             )
             fb = faces.record_face(
-                c, source="mined", signature="规律 B", members=["b1", "b2", "b3"]
+                c, source="mined", signature="\u89c4\u5f8b B", members=["b1", "b2", "b3"]
             )
             written = sweeper._persist_cross_schema(c, a, b, collision, stable_threshold=0.6)
             assert written is not None  # the fusion write is unperturbed
             c.row_factory = sqlite3.Row
             rows = {r["face_id"]: r for r in c.execute("SELECT * FROM schema_faces")}
-        # level-2 体 born emergent, members = the two parent schema names
+
         bodies = [r for r in rows.values() if r["level"] == 2]
         assert len(bodies) == 1
         assert bodies[0]["provenance"] == "emergent"
@@ -305,25 +329,37 @@ class TestAnchors:
 
     def test_new_face_stores_sorted_anchors(self, conn):
         fid = faces.record_face(
-            conn, source="mined", signature="规律 A", members=MEMBERS, anchors=["张伟", "Bob"]
+            conn,
+            source="mined",
+            signature="\u89c4\u5f8b A",
+            members=MEMBERS,
+            anchors=["\u5f20\u4f1f", "Bob"],
         )
-        assert json.loads(_row(conn, fid)["anchors"]) == ["Bob", "张伟"]
+        assert json.loads(_row(conn, fid)["anchors"]) == ["Bob", "\u5f20\u4f1f"]
 
     def test_fold_unions_anchors(self, conn):
         fid = faces.record_face(
-            conn, source="mined", signature="规律 A", members=MEMBERS, anchors=["张伟"]
+            conn,
+            source="mined",
+            signature="\u89c4\u5f8b A",
+            members=MEMBERS,
+            anchors=["\u5f20\u4f1f"],
         )
         faces.record_face(
-            conn, source="emergent", signature="规律 A", members=MEMBERS, anchors=["Bob"]
+            conn, source="emergent", signature="\u89c4\u5f8b A", members=MEMBERS, anchors=["Bob"]
         )
-        assert json.loads(_row(conn, fid)["anchors"]) == ["Bob", "张伟"]
+        assert json.loads(_row(conn, fid)["anchors"]) == ["Bob", "\u5f20\u4f1f"]
 
     def test_anchorless_contribution_keeps_existing_anchors(self, conn):
         fid = faces.record_face(
-            conn, source="mined", signature="规律 A", members=MEMBERS, anchors=["张伟"]
+            conn,
+            source="mined",
+            signature="\u89c4\u5f8b A",
+            members=MEMBERS,
+            anchors=["\u5f20\u4f1f"],
         )
-        faces.record_face(conn, source="mined", signature="规律 A", members=MEMBERS)
-        assert json.loads(_row(conn, fid)["anchors"]) == ["张伟"]
+        faces.record_face(conn, source="mined", signature="\u89c4\u5f8b A", members=MEMBERS)
+        assert json.loads(_row(conn, fid)["anchors"]) == ["\u5f20\u4f1f"]
 
     def test_ensure_schema_backfills_anchors_on_old_db(self):
         # a pre-anchors DB (base SCHEMA only) gains the column with a '[]' default
@@ -343,14 +379,21 @@ class TestAnchors:
         from persome.writer import schema_miner_stage as stage
 
         cfg = config_mod.load(ac_root / "config.toml")
-        # a face mined from person-张伟.md is ABOUT 张伟 even with an empty roster
-        assert stage._face_anchors(cfg, "person-张伟.md", "他每周五整理周报") == ["张伟"]
-        # project-/tool-/topic- 源也锚到源实体（spec 2026-07-04 §face-anchor：修 project 挖的
-        # 行为 schema 0 锚飘空）——project-tooling.md 的 schema 锚 tooling 节点
-        assert stage._face_anchors(cfg, "project-tooling.md", "偏好轻量工具") == ["tooling"]
-        # user-* 源，或「用户…」行为 schema → 锚 self（§1.5-3 rollup vertex）
-        assert stage._face_anchors(cfg, "user-preferences.md", "偏好中文交互") == ["self"]
-        assert stage._face_anchors(cfg, "project-x.md", "用户偏好轻量工具") == ["self", "x"]
+
+        assert stage._face_anchors(
+            cfg, "person-\u5f20\u4f1f.md", "\u4ed6\u6bcf\u5468\u4e94\u6574\u7406\u5468\u62a5"
+        ) == ["\u5f20\u4f1f"]
+
+        assert stage._face_anchors(
+            cfg, "project-tooling.md", "\u504f\u597d\u8f7b\u91cf\u5de5\u5177"
+        ) == ["tooling"]
+
+        assert stage._face_anchors(
+            cfg, "user-preferences.md", "\u504f\u597d\u4e2d\u6587\u4ea4\u4e92"
+        ) == ["self"]
+        assert stage._face_anchors(
+            cfg, "project-x.md", "\u7528\u6237\u504f\u597d\u8f7b\u91cf\u5de5\u5177"
+        ) == ["self", "x"]
 
     def test_miner_anchors_scan_fact_bodies(self, ac_root, monkeypatch):
 
@@ -359,15 +402,18 @@ class TestAnchors:
         from persome.writer import schema_miner_stage as stage
 
         cfg = config_mod.load(ac_root / "config.toml")
-        roster = identity_mod.Roster.build([("张伟", []), ("Bob", [])])
+        roster = identity_mod.Roster.build([("\u5f20\u4f1f", []), ("Bob", [])])
         monkeypatch.setattr(identity_mod, "load_roster", lambda _cfg: roster)
-        # the cluster emerged from facts naming 张伟/Bob — those ARE the hull
+
         # vertices, even though the signature names neither
         got = stage._face_anchors(
             cfg,
             "project-x.md",
-            "协作节律稳定",
-            ["和张伟对齐了接口", "Bob 提交了评审"],
+            "\u534f\u4f5c\u8282\u5f8b\u7a33\u5b9a",
+            [
+                "\u548c\u5f20\u4f1f\u5bf9\u9f50\u4e86\u63a5\u53e3",
+                "Bob \u63d0\u4ea4\u4e86\u8bc4\u5ba1",
+            ],
         )
-        # 事实里的 张伟/Bob 是凸包顶点，且 project-x 源本身也锚（spec 2026-07-04 §face-anchor）
-        assert got == ["Bob", "x", "张伟"]
+
+        assert got == ["Bob", "x", "\u5f20\u4f1f"]

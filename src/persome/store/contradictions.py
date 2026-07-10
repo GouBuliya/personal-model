@@ -1,20 +1,4 @@
-"""memory_contradictions — the §4.4 semantic-contradiction adjudication queue.
-
-The nightly self-check (``writer/contradiction_check.py``) flags PAIRS of live
-fact entries an LLM judged mutually exclusive. This DAO is the record: one row
-per unordered pair, born ``open``, closed only by a HUMAN verdict (`resolve` /
-`dismiss`) — the check marks and hands over, it never auto-supersedes (合并宁缺
-毋滥 applies to deletion doubly).
-
-The row is also the DEDUP ledger: a pair that was ever recorded — whatever its
-status — is never re-judged, so a human's "not a contradiction" verdict
-permanently silences that pair (no nightly re-nag), and an open row doesn't
-burn a second LLM call.
-
-Read-side effect lives in ``entry_metadata.conflicted`` (recall renders
-``⚠(冲突未裁决)``, the meta-cognition down-weight lever) — set when flagged,
-cleared on any human verdict.
-"""
+"Persistence for human-adjudicated memory contradictions."
 
 from __future__ import annotations
 

@@ -10,7 +10,6 @@ from persome.writer.tools_schema import TOOL_INPUT_MODELS, AppendInput, DrillCap
 
 
 def test_append_rejects_missing_path():
-    """args 不含 path，model_validate 应抛 ValidationError。"""
     from pydantic import ValidationError
 
     try:
@@ -21,7 +20,6 @@ def test_append_rejects_missing_path():
 
 
 def test_append_rejects_missing_content():
-    """args 不含 content，model_validate 应抛 ValidationError。"""
     from pydantic import ValidationError
 
     try:
@@ -37,7 +35,6 @@ def test_append_rejects_missing_content():
 
 
 def test_drill_capture_rejects_bad_text_limit():
-    """text_limit=-1 应触发 ValidationError，不崩溃。"""
     from pydantic import ValidationError
 
     try:
@@ -48,7 +45,6 @@ def test_drill_capture_rejects_bad_text_limit():
 
 
 def test_drill_capture_rejects_missing_capture_id():
-    """capture_id 缺失应触发 ValidationError。"""
     from pydantic import ValidationError
 
     try:
@@ -64,7 +60,6 @@ def test_drill_capture_rejects_missing_capture_id():
 
 
 def test_valid_append_passes():
-    """正常 args 不受影响，model_validate 成功。"""
     validated = AppendInput.model_validate(
         {
             "path": "user-test.md",
@@ -77,7 +72,6 @@ def test_valid_append_passes():
 
 
 def test_valid_drill_capture_passes():
-    """正常 drill_capture args 通过验证。"""
     validated = DrillCaptureInput.model_validate(
         {
             "capture_id": "20260519T120000",
@@ -93,7 +87,6 @@ def test_valid_drill_capture_passes():
 
 
 def test_tool_input_models_registry():
-    """确认主要工具都在注册表中。"""
     required = {
         "append",
         "create",

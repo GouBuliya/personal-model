@@ -47,6 +47,7 @@ PERSOME_LLM_MOCK=1 uv run pytest -m "not macos and not integration"
 uv run ruff check .
 uv run ruff format --check .
 uv run python scripts/pii_scan.py
+uv run python scripts/language_scan.py
 ```
 
 `macos` tests need Accessibility permission or compiled Swift helpers.

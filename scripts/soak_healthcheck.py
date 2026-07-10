@@ -117,8 +117,8 @@ def main() -> int:
             # Pull a clean alphanumeric/CJK token for the hint — markdown markers
             # (**, ##, ~~) trip the FTS special-query parser (which degrades
             # gracefully, but we don't need the noise in a smoke test).
-            words = re.findall(r"[\w一-鿿]{2,}", hint_row[0]) if hint_row else []
-            hint = words[0] if words else "用户"
+            words = re.findall(r"[\w\u4e00-\u9fff]{2,}", hint_row[0]) if hint_row else []
+            hint = words[0] if words else "user"
             recall = mcp_server._search(conn, query=hint, top_k=5)
             print(
                 f"✓ production associative retrieval ran "

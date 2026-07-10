@@ -76,7 +76,6 @@ VALID_PREFIXES = (
     "event-",
     "skill-",
     "intent-",
-    # D2 predictive-schema layer: ``schema-*.md`` holds induced "用户惯性" priors
     # (central_proposition + expected_inferences). Added so the schema miner can
     # write through the same markdown-SSOT path (create_file/append_entry →
     # validate_prefix → files table). See migration-D2-cognition §3.3 / MCP-05.
@@ -142,12 +141,12 @@ class ParsedEntry:
     heading_line: str
     body: str
     superseded_by: str | None = None
-    # EVO-02 (双标签法): ``#refined-from:{id}`` marks THIS entry as the refined
+
     # successor of an earlier entry — a same-direction sharpening rather than a
     # contradiction. It is orthogonal to ``superseded-by``: an UPDATE retires the
     # OLD version (the predecessor carries ``#superseded-by:{this}``, folded out)
     # while THIS new head carries ``refined-from`` so the trail can render
-    # ``← [精炼自]`` vs a contradiction's ``← [曾]``. At parse/rebuild level the
+
     # tag only forces ``superseded=0`` for the entry CARRYING it (the live head),
     # since a refined head never also carries its own ``superseded-by``.
     refined_from: str | None = None
