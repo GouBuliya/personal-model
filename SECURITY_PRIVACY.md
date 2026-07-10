@@ -34,8 +34,11 @@ use an ephemeral screenshot when persistent screenshot storage is off.
 There is no telemetry or update phone-home. Runtime egress occurs only through
 configured capabilities:
 
-1. `ANTHROPIC_BASE_URL` receives prompts for enabled LLM stages and Chat. Those
-   prompts can contain derived personal context.
+1. `ANTHROPIC_BASE_URL` receives prompts for enabled LLM stages and Chat. Stage
+   prompts can contain derived personal context. When Chat invokes a memory or
+   capture tool, the next model request also contains that tool result, which
+   can include raw memory text, screen text, window titles, URLs, focused-field
+   values, and timeline blocks.
 2. `OPENAI_BASE_URL` receives embedding inputs when hybrid dense retrieval is
    enabled and a provider is configured.
 3. Chat Web search/page fetch and arbitrary local tools are excluded from the
@@ -56,6 +59,9 @@ model stages report degradation rather than silently claiming success.
   connect to the port should be treated as able to read `~/.persome`.
 - `/captures/ingest` is a trusted local producer interface, not a public upload
   endpoint.
+- MCP tool execution itself has no provider egress, but a connected agent may
+  send returned personal data to its own model provider. Persome Chat sends
+  tool results to the configured `ANTHROPIC_BASE_URL` as described above.
 - `/model/graph` is a raw owner-local inspection surface. Default CLI/MCP model
   export is redacted; the browser viewer is not a safe publication artifact.
 - Exposing the server through a tunnel changes the privacy boundary and is not

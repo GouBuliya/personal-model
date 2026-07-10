@@ -173,7 +173,11 @@ Swift watcher / trusted ingest
 ## Privacy
 
 - Persistent model data stays under `~/.persome`.
-- Enabled LLM stages send derived context to the endpoint you configure; optional dense retrieval sends embedding inputs to its configured endpoint.
+- Enabled LLM stages send derived context to the endpoint you configure. When
+  Chat invokes memory or capture tools, their results can include raw screen
+  text, window titles, URLs, and focused-field values; those results are sent to
+  the configured Chat model endpoint. Optional dense retrieval sends embedding
+  inputs to its configured endpoint.
 - There is no telemetry.
 - OCR is optional, subprocess-isolated, and fully local.
 - Secrets live in a 0600 env file at `~/.persome/env`.
