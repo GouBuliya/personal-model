@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu-latest: the Paddle OCR deps are gated to Apple Silicon macOS,
+        # so they are skipped
+        # and the OCR-less code path is exercised.
+        # macos-latest (arm64): full dependency set incl. local OCR runtime.
+        # Tests marked "macos" stay deselected on BOTH runners: CI has no
+        # Accessibility (AX) permission, so AX-capture tests cannot run there.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: true
+          # Python version is pinned by .python-version (3.11).
+
+      - name: Sync dependencies
+        run: uv sync --all-extras
+
+      - name: Lint (ruff check)
+        run: uv run ruff check .
+
+      - name: Format (ruff check)
+        run: uv run ruff format --check .
+
+      - name: Tests (offline, mocked LLM)
+        # The default offline gate: no network, no API key. Markers deselected:
+        #   macos       — needs real AX permission / Swift capture helpers
+        #   integration — talks to real LLM providers
+        env:
+          PERSOME_LLM_MOCK: "1"
+        run: uv run pytest -m "not macos and not integration" -q
+
+      - name: PII scan
+        # Hard privacy gate: the whole tree (source + test fixtures) must be
+        # free of real names / emails / tokens. Must exit 0.
+        run: uv run python scripts/pii_scan.py
+
+      - name: English-language source gate
+        run: uv run python scripts/language_scan.py
+
+  package:
+    name: package smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8
+
+      - name: Verify lock and build artifacts
+        run: |
+          uv lock --check
+          uv build
+
+      - name: Install wheel outside the checkout
+        run: |
+          uv venv /tmp/persome-wheel --python 3.11
+          uv pip install --python /tmp/persome-wheel/bin/python dist/persome_core-*.whl
+          cd /tmp
+          PERSOME_ROOT=/tmp/persome-smoke-root /tmp/persome-wheel/bin/persome --help >/dev/null
+          /tmp/persome-wheel/bin/python - <<'PY'
+          from importlib.resources import files
+
+          bundled = files("persome") / "_bundled"
+          required = (
+              "mac-ax-helper.swift",
+              "mac-ax-watcher.swift",
+              "model_assets/three.module.js",
+              "ocr_models/PP-OCRv6_tiny_det/inference.pdiparams",
+              "ocr_models/PP-OCRv6_tiny_rec/inference.pdiparams",
+          )
+          for relative in required:
+              assert (bundled / relative).is_file(), relative
+          PY

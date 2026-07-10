@@ -1,0 +1,110 @@
+name: Release
+
+# Publishes to PyPI + creates a GitHub Release when a version tag is pushed.
+#
+# One-time setup (no secret needed in this repo): register this repo as a
+# PyPI "trusted publisher" for the `persome-core` project —
+# https://pypi.org/manage/project/persome-core/settings/publishing/
+# (owner: Persome-ai, repo: persome-core, workflow: release.yml, environment: pypi).
+#
+# Cut a release:
+#   1. bump `version` in pyproject.toml + `__version__` in src/persome/__init__.py
+#   2. git tag vX.Y.Z && git push origin vX.Y.Z
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8
+
+      - name: Check tag matches package version
+        run: |
+          pkg_version="$(uv run --no-project python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [ "$pkg_version" != "$tag_version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME != pyproject version $pkg_version"
+            exit 1
+          fi
+
+      - name: Verify source tree
+        env:
+          PERSOME_LLM_MOCK: "1"
+        run: |
+          uv lock --check
+          uv sync --all-extras
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run pytest -m "not macos and not integration" -q
+          uv run python scripts/pii_scan.py
+          uv run python scripts/language_scan.py
+
+      - name: Build sdist + wheel
+        run: uv build
+
+      - name: Smoke-test built wheel
+        run: |
+          uv venv /tmp/persome-wheel --python 3.11
+          uv pip install --python /tmp/persome-wheel/bin/python dist/persome_core-*.whl
+          cd /tmp
+          PERSOME_ROOT=/tmp/persome-smoke-root /tmp/persome-wheel/bin/persome --help >/dev/null
+          /tmp/persome-wheel/bin/python - <<'PY'
+          from importlib.resources import files
+
+          bundled = files("persome") / "_bundled"
+          for relative in (
+              "mac-ax-helper.swift",
+              "mac-ax-watcher.swift",
+              "model_assets/three.module.js",
+              "ocr_models/PP-OCRv6_tiny_det/inference.pdiparams",
+              "ocr_models/PP-OCRv6_tiny_rec/inference.pdiparams",
+          ):
+              assert (bundled / relative).is_file(), relative
+          PY
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  publish-pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # OIDC for PyPI trusted publishing
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
