@@ -264,13 +264,11 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     # ``.db-wal`` and ``.db-shm`` sidecars don't drift unbounded.
     conn.execute("PRAGMA wal_autocheckpoint=1000")
     conn.executescript(SCHEMA)
-    from ..intent import store as intent_store_mod
     from ..session import store as session_store
     from ..timeline import store as timeline_store
 
     timeline_store.ensure_schema(conn)
     session_store.ensure_schema(conn)
-    intent_store_mod.ensure_schema(conn)
     _ensure_entry_temporal(conn)
     _ensure_entry_metadata(conn)
     from . import vectors as vectors_mod

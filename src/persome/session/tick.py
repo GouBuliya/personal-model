@@ -23,13 +23,9 @@ from ..config import Config
 from ..evomem import backup as evo_backup
 from ..evomem import integrity as evo_integrity
 from ..evomem import inversion as evo_inversion
-from ..intent import store as intent_store
 from ..logger import get
-from ..store import cooldown_suppressions as cooldown_suppressions_store
 from ..store import fts
-from ..store import intent_fold_ticks as intent_fold_ticks_store
 from ..store import parser_ticks as parser_ticks_store
-from ..store import recall_budget_ticks as recall_budget_ticks_store
 from ..writer import classifier as classifier_mod
 from ..writer import (
     contradiction_check,
@@ -48,28 +44,9 @@ logger = get("persome.session")
 
 
 def _prune_telemetry_tables() -> dict[str, int]:
-    """Bound the per-call audit tables (``recall_budget_ticks`` /
-    ``recognition_ticks`` / ``parser_ticks`` / ``cooldown_suppressions`` /
-    ``fast_path_ticks`` / ``intent_fold_ticks``).
-
-    Each records a row on *every* recall / recognition / parser tick (or every
-    cooldown drop, or every fast-path capture, or every finished execution) and
-    ships a ``prune(keep=...)`` advertised as "bounded telemetry", but nothing
-    ever called it — so on a long-running daemon the tables grew unbounded (the
-    "bounded" only ever lived in the docstring; #508). ``cooldown_suppressions``
-    (#533) is a sibling table that fell into the exact same trap, and
-    ``fast_path_ticks`` (#622) records a row per fast-path capture — the
-    highest-frequency table of the lot — so it is wired in here from birth to
-    avoid repeating #508. The daily safety-net tick is the natural retention hook.
-    Each ``prune`` commits on its own connection.
-    """
-    deleted: dict[str, int] = {}
+    """Bound the parser audit table from the daily safety-net tick."""
     with fts.cursor() as conn:
-        deleted["recall_budget_ticks"] = recall_budget_ticks_store.prune(conn)
-        deleted["parser_ticks"] = parser_ticks_store.prune(conn)
-        deleted["cooldown_suppressions"] = cooldown_suppressions_store.prune(conn)
-        deleted["intent_fold_ticks"] = intent_fold_ticks_store.prune(conn)
-    return deleted
+        return {"parser_ticks": parser_ticks_store.prune(conn)}
 
 
 def build_manager(cfg: Config) -> SessionManager:
@@ -416,53 +393,6 @@ def _seconds_until_next_local(hour: int, minute: int) -> float:
     return (target - now).total_seconds()
 
 
-def expire_overdue_intents() -> tuple[int, int, int]:
-    """Blocking helper for the intent expiry harvest.
-
-    Returns ``(expired_open, expired_armed, stale_open)``:
-
-    - ``expired_open`` — the #546 面2 ``open``/``armed`` ``→expired`` harvest of
-      overdue GROUNDED intents by ``valid_until`` (#629 covers the armed leg);
-    - ``expired_armed`` — the #532 ``armed``→``expired`` TTL reap of dormant
-      event-based intents that never fired within their max age (a system/staleness
-      close, not a user rejection — the dormant row was never surfaced; §9 audit);
-    - ``stale_open`` — the #612 ``open``→``expired`` TTL reap of UNGROUNDED ``open``
-      rows (``valid_until`` NULL) older than their max age, the open-side twin of
-      the #532 armed reaper. These rows carry no deadline, so ``expire_overdue``
-      can never harvest them and ``is_expired`` reads them live forever — without
-      an age TTL they accumulate unbounded (66/70 ``open`` in the field).
-
-    Runs at two points: the 23:55 ``daily-safety-net`` tick, and once at daemon
-    startup as a catch-up (#628). All three legs are inherently idempotent — they
-    only touch rows still in ``open``/``armed`` whose ``valid_until``/age cutoff
-    has passed, so a row already harvested by a prior run is excluded by the
-    ``WHERE status = ... (IS NULL)`` guard; re-running never double-harvests.
-    """
-    now = datetime.now().isoformat(timespec="seconds")
-    with fts.cursor() as conn:
-        expired = intent_store.expire_overdue(conn, now=now)
-        expired_armed = intent_store.expire_stale_armed(conn, now=now)
-        stale_open = intent_store.expire_stale_open(conn, now=now)
-    # 识别即更新状态 (#intent-evidence-autoclose follow-up): make the daily/boot
-    # harvest flips LIVE on the SSE bus so the app drops a now-stale suggestion card
-    # the instant it's reaped, instead of waiting for the next reconcile poll. Best-
-    # effort per row (publish swallows its own errors); only the terminal new_status
-    # matters to the app's handleStatusChange (previous_status is informational).
-    for iid in expired:
-        intent_store.publish_intent_status_change(
-            iid, new_status="expired", previous_status=None, reason="harvest_overdue"
-        )
-    for iid in expired_armed:
-        intent_store.publish_intent_status_change(
-            iid, new_status="expired", previous_status="armed", reason="harvest_armed_ttl"
-        )
-    for iid in stale_open:
-        intent_store.publish_intent_status_change(
-            iid, new_status="expired", previous_status="open", reason="harvest_ungrounded_ttl"
-        )
-    return (len(expired), len(expired_armed), len(stale_open))
-
-
 def _reproject_entries_from_evomem() -> tuple[int, int]:
     """从 evo_nodes 重投影 entries/entry_metadata 检索层（reader↔重建保鲜，spec 2026-07-04）。
     直接调 ``entries._rebuild_from_evo_nodes``（rebuild-index 的 evomem 混合重建腿），不依赖
@@ -501,25 +431,6 @@ async def run_daily_safety_net(cfg: Config, manager: SessionManager) -> None:
                     logger.info("daily 检索投影 evo_nodes→entries: %d 文件 / %d 条目", files, ents)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("daily 检索投影重建失败: %s", exc)
-            # Intent expiry harvest (#546 面2): flip stale open intents
-            # (valid_until passed) to ``expired`` so they stop polluting recall
-            # and the active layer. Side channel — never kills the tick.
-            try:
-                expired, dismissed_armed, stale_open = await asyncio.to_thread(
-                    expire_overdue_intents
-                )
-                if expired:
-                    logger.info("daily intent expiry harvest: %d open → expired", expired)
-                if dismissed_armed:
-                    logger.info(
-                        "daily armed TTL harvest: %d armed → dismissed (#532)", dismissed_armed
-                    )
-                if stale_open:
-                    logger.info(
-                        "daily ungrounded open TTL harvest: %d open → expired (#612)", stale_open
-                    )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("daily intent expiry harvest failed: %s", exc)
             # Semantic-contradiction self-check (memory-rebuild spec §4.4,
             # gated OFF by default — nightly LLM cost): pair same-file live
             # facts, LLM-judge a bounded batch, MARK contradictions
@@ -650,10 +561,10 @@ async def run_schema_tick(cfg: Config) -> None:
     """Once per local day at HH:MM, run the D2 schema miner.
 
     Clusters durable fact entries per file and induces predictive ``schema-*.md``
-    priors the intent recognizer reads back (``intent.schema_prior``). Scheduled
-    after the daily safety-net so it sees the latest closed sessions. The miner is
-    sync (LLM + DB), so it runs on a worker thread; the loop
-    catches per-tick exceptions so a bad run never kills the daemon task.
+    faces consumed by the personal-model snapshot. Scheduled after the daily
+    safety-net so it sees the latest closed sessions. The miner is sync (LLM + DB),
+    so it runs on a worker thread; the loop catches per-tick exceptions so a bad
+    run never kills the daemon task.
     """
     if not cfg.schema.enabled:
         logger.info("schema tick loop not started (disabled)")

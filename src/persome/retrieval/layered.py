@@ -1,24 +1,9 @@
-"""The single background-assembly contract for online recognition.
+"""Deterministic layered retrieval over the durable personal model.
 
-Every online consumer used to assemble its memory background by hand-rolling a
-flat FTS query (the meeting analyzer's ``_prefetch_memory``, the active layer's
-preference load, chat's tool calls). ``assemble_background`` is the one contract
-they converge on: "given the current scene + some hint terms, return the relevant
-memory bundle."
-
-Phase 4 upgrades the *implementation* behind that seam from a flat keyword BM25
-dump into a **layered background pack**, assembled in priority order so the most
-decision-relevant context comes first within a fixed character budget:
-
-    ① 场景意图   — recent intents recognized in THIS scope (the unified stream)
-    ② 行为先验   — skill/workflow memory learned from repeated behavior
-    ③ 相关记忆   — durable entity/topic facts (person/org/project/topic/user/tool)
-    ④ 其他命中   — any remaining keyword hits, so nothing relevant is dropped
-
-This is structural/scene-aware recall, not vector search — it stays deterministic
-and dependency-free (no embedding model), while giving every pack scene context
-and behavioural priors that flat BM25 never surfaced. Swapping in semantic recall
-later is again a change behind this one seam.
+The assembler prioritizes schema priors, behavior memory, durable facts,
+semantic matches, keyword fallback, and recent events within one character
+budget. It is independent of product intent state and keeps provenance handles
+for every structured result.
 """
 
 from __future__ import annotations
@@ -31,10 +16,11 @@ from datetime import datetime, timedelta
 
 from ..logger import get
 from ..store import fts as fts_store
-from ..store import recall_budget_ticks
-from . import store as intent_store
 
-logger = get("persome.intent.recall")
+logger = get("persome.retrieval.layered")
+
+_LAYERS = ("schema_prior", "behavior", "fact", "keyword", "semantic", "trail", "events")
+_COUNTERS = ("admitted", "admitted_chars", "rejected", "rejected_chars")
 
 
 @dataclass
@@ -43,13 +29,10 @@ class RecallItem:
     :func:`assemble_background`, emitted by :func:`assemble_background_structured`.
 
     ``content`` is the clean snippet (no ``[path]`` prefix); ``cite`` is a stable
-    provenance handle (``mem:<path>`` / ``schema:<file>`` / ``intent:<id>`` /
-    ``block:<id>``). ``capture_stem`` / ``timeline_block_id`` are RAW-capture
-    handles for scene/timeline items (the stem keys ONE buffer JSON holding both
-    the screenshot and the axtree — we emit only the handle string, never bytes).
+    provenance handle (``mem:<path>`` / ``schema:<file>`` / ``block:<id>``).
     """
 
-    layer: str  # schema | behavior | fact | semantic | scene_intent | event | timeline
+    layer: str  # schema | behavior | fact | semantic | event | timeline
     content: str
     cite: str
     score: float | None = None
@@ -90,10 +73,9 @@ def _seen_key(path: str, content: str) -> str:
     return f"{path}\x00{content}"
 
 
-# Memory-file prefixes grouped by recall layer. ``intent-`` is a durable fact
-# (the FTS projection of the unified stream); skill/workflow are behavioural.
+# Memory-file prefixes grouped by retrieval layer.
 _BEHAVIOR_PREFIXES = ("skill-", "workflow-")
-_FACT_PREFIXES = ("user-", "project-", "person-", "org-", "topic-", "tool-", "intent-")
+_FACT_PREFIXES = ("user-", "project-", "person-", "org-", "topic-", "tool-")
 
 # Minimum cosine for the semantic layer to surface a dense hit. The layer is unfused
 # (no BM25 anchor), so without a floor a scene that relates to nothing would still pull
@@ -113,7 +95,6 @@ _DURABLE_GLOBS = [
     "topic-*",
     "person-*",
     "tool-*",
-    "intent-*",
     "schema-*",
 ]
 
@@ -174,21 +155,15 @@ def _fts5_match_expr(hint: str) -> str:
 class _Budget:
     """Shared character budget so all layers together stay within ``max_chars``.
 
-    Besides the admission decision itself, the budget keeps a **telemetry
-    side-channel**: per-layer counters of how many texts (and chars) were
-    admitted vs rejected. The counters are pure observation — they never feed
-    back into the admission decision, so the assembled output stays
-    byte-identical to the counter-less budget (P0 invariant). They exist to
-    answer the ablation report's open question ("how often does the budget
-    actually squeeze a layer out in production?") via ``recall_budget_ticks``.
+    Per-layer counters remain available to callers for inspection, but they are
+    not persisted as product telemetry.
     """
 
     def __init__(self, max_chars: int) -> None:
         self.max = max_chars
         self.used = 0
         self.layers: dict[str, dict[str, int]] = {
-            layer: {c: 0 for c in recall_budget_ticks.COUNTERS}
-            for layer in recall_budget_ticks.LAYERS
+            layer: {counter: 0 for counter in _COUNTERS} for layer in _LAYERS
         }
 
     def full(self) -> bool:
@@ -227,13 +202,14 @@ def assemble_background(
     dense_query: str | None = None,
     dense_top_k: int = 0,
 ) -> str:
-    """Return a compact, layered memory background for the current scene/hints.
+    """Return a compact, layered memory background for the supplied hints.
 
-    Layers are assembled in priority order (schema-inference prior → scene intents
-    → behavioural priors → durable facts → keyword fallback) and share one
+    Layers are assembled in priority order (schema-inference prior → behavioral
+    priors → durable facts → semantic recall → keyword fallback → recent events) and share one
     ``max_chars`` budget, so the most decision-relevant context wins the limited
-    space. ``scope`` drives the scene layer; ``hints`` (keyword terms) drive the
-    rest, excluding raw ``event-*`` activity unless ``include_events`` is set.
+    space. ``scope`` is retained as a compatibility label but no longer loads
+    product state. ``hints`` drive the retrieval layers, excluding raw
+    ``event-*`` activity unless ``include_events`` is set.
 
     ``schema_prior`` (D2 seam): inferred user-inertia lines injected as the *first*
     (highest-priority) section. ``None``/empty → output byte-identical to before.
@@ -271,15 +247,8 @@ def assemble_background(
     append a lowest-priority "近期活动" section carrying the most recent
     event-daily entries within the window — the reducer's session summaries with
     their "continued…" narration, i.e. the descriptive "最近在干什么" perception.
-    Shares the main budget LAST (it must never squeeze facts out; the squeeze
-    telemetry below is the acceptance gauge). 0 disables the layer.
-
-    Telemetry (ablation 2026-06-10 §4): every call records one best-effort row in
-    ``recall_budget_ticks`` — scope, max_chars, used, per-layer admitted/rejected
-    counts+chars, ``squeezed`` (any rejection), and the hint terms. Pure
-    side-channel: the counters never influence the admission decisions, the
-    output stays byte-identical, and a failed write degrades to a warning
-    without touching recall.
+    Shares the main budget LAST so it never squeezes facts out. 0 disables the
+    layer.
     """
     # 冷启动守卫（一次/调用）：evo_nodes 未就绪 → 折叠退化到 superseded 派生列
     # （等价折叠），trail 跳过（无链数据可渲染）。
@@ -298,10 +267,6 @@ def assemble_background(
         # Highest priority: it claims budget first, ahead of every other layer.
         if budget.add(prior_text, layer="schema_prior"):
             sections.append(prior_text)
-
-    scene = _scene_layer(conn, scope, budget)
-    if scene:
-        sections.append("# 场景意图\n" + "\n".join(scene))
 
     priors = _hint_layer(
         conn,
@@ -378,24 +343,6 @@ def assemble_background(
         if recent:
             sections.append("# 近期活动（event-daily 摘要）\n" + "\n".join(recent))
 
-    # Budget telemetry (ablation report 2026-06-10 §4 建议): record how this
-    # call spent its budget — per-layer admitted/rejected counts+chars and the
-    # derived ``squeezed`` flag — so the real-world squeeze rate is measurable.
-    # ``hints`` ride the tick as debugging telemetry (what drove this recall).
-    # Best-effort side-channel: a failed write must never affect recall.
-    try:
-        recall_budget_ticks.record_tick(
-            conn,
-            ts=datetime.now().isoformat(timespec="seconds"),
-            scope=scope,
-            max_chars=max_chars,
-            used=budget.used,
-            layers=budget.layers,
-            hints=hints,
-        )
-    except Exception as exc:  # noqa: BLE001 — telemetry must never break recall
-        logger.warning("recall budget telemetry write failed (ignored): %s", exc)
-
     return "\n\n".join(sections)
 
 
@@ -421,8 +368,8 @@ def assemble_background_structured(
 
     Runs the SAME per-layer helpers in the SAME priority order with a structured sink,
     so the returned items mirror what the string assembler would surface — but each hit
-    carries a citation handle (``cite``) and, for scene items, a RAW capture handle.
-    Schema items are emitted directly from ``schema_pairs`` (line, source-file) so each
+    carries a citation handle. Schema items are emitted directly from
+    ``schema_pairs`` (line, source-file) so each
     carries ``schema:<file>``.
 
     This is read-only telemetry-free (no ``record_tick``): it is an API/inspection path,
@@ -435,14 +382,13 @@ def assemble_background_structured(
     budget = _Budget(max_chars)
     seen: set[str] = set()
     sink: list[RecallItem] = []
+    _ = (scope, include_raw_handles)
 
     for line, source in schema_pairs or []:
         if not line.strip():
             continue
         if budget.add(line, layer="schema_prior"):
             sink.append(RecallItem(layer="schema", content=line.strip(), cite=f"schema:{source}"))
-
-    _scene_layer(conn, scope, budget, sink=sink, include_raw_handles=include_raw_handles)
 
     for prefixes, telem in ((_BEHAVIOR_PREFIXES, "behavior"), (_FACT_PREFIXES, "fact")):
         _hint_layer(
@@ -544,86 +490,6 @@ def _recent_events_layer(
     if sink is not None:
         items.reverse()  # mirror the string layer's chronological order
         sink.extend(items)
-    return out
-
-
-# Statuses that mean "no longer a live scene intent" — excluded from the recall
-# scene layer. ``resolved`` is the evidence-auto-close terminal (识别即更新状态):
-# a done/rejected commitment must not re-enter the recognition prompt as positive
-# scene material (is_expired also filters it, but exclude it explicitly here too).
-_SCENE_RESOLVED_STATUSES = frozenset({"dismissed", "consumed", "resolved"})
-
-
-def _scene_layer(
-    conn: sqlite3.Connection,
-    scope: str,
-    budget: _Budget,
-    sink: list[RecallItem] | None = None,
-    include_raw_handles: bool = True,
-) -> list[str]:
-    """Recent intents recognized in this scope — the scene-aware ① context.
-
-    ``sink`` (side-channel, default None): when set, each admitted intent appends a
-    ``scene_intent`` :class:`RecallItem` carrying ``cite=intent:<id>`` plus the RAW
-    capture handle (``capture_stem`` for a fast-path intent, else ``timeline_block_id``
-    from a ``timeline_block`` evidence ref). ``include_raw_handles=False`` suppresses the
-    stem/id (the external-prompt privacy path)."""
-    if not scope:
-        return []
-    try:
-        intents = intent_store.intents_for_scope(conn, scope)
-    except sqlite3.OperationalError:
-        return []
-    # Status filter (#533): the scene layer rendered EVERY intent in the scope
-    # regardless of status, so a ``dismissed`` (or ``consumed``) intent re-entered
-    # the recognition prompt as a POSITIVE "场景意图" — directly contradicting the
-    # negative-prior section of the SAME prompt (the recognizer is told "勿重复
-    # surface 同类" while this layer re-surfaces the exact thing the user swatted
-    # away). Final user feedback must not be re-injected as live context: drop
-    # dismissed/consumed here. (open/armed stay; expired is handled just below.)
-    intents = [it for it in intents if it.status not in _SCENE_RESOLVED_STATUSES]
-    # Lifecycle filter (#546): expired commitments (harvested OR valid_until
-    # already passed) are stale context — injecting them re-pollutes exactly
-    # the layer the expiry harvest exists to keep clean.
-    now_iso = datetime.now().isoformat(timespec="seconds")
-    intents = [it for it in intents if not intent_store.is_expired(it, now=now_iso)]
-    out: list[str] = []
-    for it in intents[-8:]:  # most recent, chronological
-        # assignment events carry their substance in ``task_text``
-        # ("Kevin 让我做 X" 的 X)；带逐字引文+人名地浮出正是 S0 的交付。
-        text = str(
-            it.payload.get("text") or it.payload.get("task_text") or it.rationale or ""
-        ).strip()[:120]
-        if not text:
-            continue
-        actor = str(it.payload.get("assigned_by") or "").strip()
-        line = f"[{it.kind}] {text}" + (f"（{actor} 交办）" if actor else "")
-        if not budget.add(line, layer="scene"):
-            break
-        out.append(line)
-        if sink is not None:
-            stem: str | None = None
-            block_id: int | None = None
-            if include_raw_handles:
-                stem = intent_store.source_capture_stem(it)
-                if stem is None:
-                    for ev in it.evidence:
-                        if getattr(ev, "source", "") == "timeline_block":
-                            try:
-                                block_id = int(ev.ref_id)
-                            except (TypeError, ValueError):
-                                block_id = None
-                            break
-            sink.append(
-                RecallItem(
-                    layer="scene_intent",
-                    content=line,
-                    cite=f"intent:{it.id}" if it.id is not None else "intent:?",
-                    score=(it.confidence or None),
-                    capture_stem=stem,
-                    timeline_block_id=block_id,
-                )
-            )
     return out
 
 

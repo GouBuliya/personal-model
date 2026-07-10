@@ -27,53 +27,6 @@ def _quiet_alerts(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("persome.events.publish", lambda *a, **k: None)
 
 
-# ── 站点 1：intent/sink（add_direct 形态——append-only 投影，永不入链）────────
-
-
-def test_station_intent_sink(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    from persome.intent import sink
-    from persome.intent.ontology import Intent
-
-    def _script() -> None:
-        with fts.cursor() as conn:
-            sink.persist_intent(
-                conn,
-                Intent(
-                    kind="calendar",
-                    scope="session-1",
-                    confidence=0.8,
-                    rationale="r",
-                    ts="2026-06-11T10:00",
-                    payload={"when_text": "周五15:00"},
-                ),
-            )
-            sink.persist_intent(
-                conn,
-                Intent(
-                    kind="reminder",
-                    scope="session-1",
-                    confidence=0.7,
-                    ts="2026-06-11T10:01",
-                    payload={"when_text": "明天"},
-                ),
-            )
-            # dedup：重复 intent 不再追加投影（两种写权同样跳过）
-            sink.persist_intent(
-                conn,
-                Intent(
-                    kind="calendar",
-                    scope="session-1",
-                    confidence=0.9,
-                    ts="2026-06-11T10:02",
-                    payload={"when_text": "周五15:00"},
-                ),
-            )
-
-    snap_md, snap_evo = run_in_both_modes(monkeypatch, tmp_path, _script)
-    assert any(n.startswith("intent-") for n in snap_md.memory)
-    assert_equivalent(snap_md, snap_evo)
-
-
 # ── 站点 2：chat/memory_extractor（create+append + dedup 守卫读投影）─────────
 
 
@@ -270,35 +223,4 @@ def test_station_cross_domain_sweeper(monkeypatch: pytest.MonkeyPatch, tmp_path:
 
     snap_md, snap_evo = run_in_both_modes(monkeypatch, tmp_path, _script)
     assert any(n.startswith("schema-xdomain-") for n in snap_md.memory)
-    assert_equivalent(snap_md, snap_evo)
-
-
-# ── 站点 8：intent/schema_feedback（确定性原地 supersede 调 confidence）──────
-
-
-def test_station_schema_feedback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    from persome.evomem.schema_miner import SchemaResult
-    from persome.intent import schema_feedback
-    from persome.writer import schema_miner_stage as stage
-
-    seed = SchemaResult(
-        success=True,
-        central_proposition="偏好夜间工作",
-        supporting_summary="多次深夜提交",
-        expected_inferences=["早会容易迟到"],
-        confidence=0.75,
-    )
-
-    def _script() -> None:
-        with fts.cursor() as conn:
-            stage._persist_schema(conn, "project-night.md", seed, stable_threshold=0.7)
-            # dismiss 反馈：确定性拖低 confidence（原地 supersede，正文不变）
-            adj = schema_feedback._adjust_schema(
-                conn, "schema-project-night.md", delta=-0.1, feedback="dismissed"
-            )
-            assert adj is not None and adj.new_confidence < adj.old_confidence
-
-    snap_md, snap_evo = run_in_both_modes(monkeypatch, tmp_path, _script)
-    assert "schema-project-night.md" in snap_md.memory
-    assert "confidence:0.65" in snap_md.memory["schema-project-night.md"]
     assert_equivalent(snap_md, snap_evo)

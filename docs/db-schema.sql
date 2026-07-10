@@ -82,32 +82,6 @@ CREATE TABLE files (
     needs_compact INTEGER DEFAULT 0
 );
 
-CREATE TABLE intents (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts TEXT NOT NULL,                 -- ISO8601 recognition time
-    scope TEXT NOT NULL,              -- scene id: 'timeline' | <meeting-id> | ...
-    kind TEXT NOT NULL,               -- open string; seed: meeting|calendar|reminder
-    confidence REAL NOT NULL DEFAULT 0.0,
-    status TEXT NOT NULL DEFAULT 'open',  -- open | armed | consumed | dismissed | expired | resolved | completed | failed
-    rationale TEXT NOT NULL DEFAULT '',
-    payload TEXT NOT NULL DEFAULT '{}',   -- JSON: kind-specific fields
-    evidence TEXT NOT NULL DEFAULT '[]',  -- JSON: provenance list
-    dedup_key TEXT NOT NULL DEFAULT '',   -- scope|kind|when_text|with — for idempotent persist
-    created_at TEXT NOT NULL,
-    dismissed_at TEXT,                    -- ISO8601 when the row transitioned to status='dismissed' (NULL otherwise); the kind-cooldown clock (#533) anchors on this, NOT ts (recognition time)
-    completed_at TEXT,                    -- ISO8601 when the row transitioned to status IN (completed,failed) (NULL otherwise); reverse-loop: the accept→completed positive prior (_completed_prior) anchors on this, NOT ts
-
-    fire_on TEXT NOT NULL DEFAULT '',     -- event-based intent: trigger event key ('' == immediate)
-    fire_config TEXT NOT NULL DEFAULT '{}',  -- JSON: trigger params (bundle_id/app/...)
-    fired_at TEXT,                        -- ISO8601 when the trigger fired (NULL until then)
-    schema_sources TEXT NOT NULL DEFAULT '[]',  -- JSON: schema-*.md files injected when recognized (R4 provenance)
-    resolved_at TEXT,                     -- ISO8601 deterministic parse of payload.when_text anchored at ts (NULL = unparsed)
-    valid_until TEXT,                     -- ISO8601 expiry: resolved_at(+end) + kind grace (NULL = never expires)
-    source_capture TEXT,                  -- capture-buffer file stem this intent was recognized FROM (#7 provenance; NULL = none/legacy → time-window join fallback)
-    resolution_outcome TEXT,              -- evidence-driven auto-close outcome (done|rejected|superseded; NULL unless status='resolved')
-    resolution_quote TEXT                 -- ≤120-char supporting quote for the evidence-driven close (NULL unless status='resolved')
-);
-
 CREATE TABLE projection_state (
     file_name    TEXT PRIMARY KEY,
     content_hash TEXT NOT NULL,
@@ -169,14 +143,6 @@ CREATE INDEX idx_captures_ts  ON captures(timestamp);
 CREATE INDEX idx_files_prefix ON files(prefix);
 
 CREATE INDEX idx_files_status ON files(status);
-
-CREATE INDEX idx_intents_dedup ON intents(dedup_key);
-
-CREATE INDEX idx_intents_scope_ts ON intents(scope, ts DESC);
-
-CREATE INDEX idx_intents_source_capture ON intents(source_capture);
-
-CREATE INDEX idx_intents_status_ts ON intents(status, ts DESC);
 
 CREATE INDEX idx_sessions_retry ON sessions(next_retry_at)
     WHERE status = 'failed';
@@ -273,52 +239,6 @@ CREATE TABLE parser_ticks (
 );
 
 CREATE INDEX idx_parser_ticks_ts ON parser_ticks(ts DESC);
-
--- ---- store/recall_budget_ticks.py ----
-
-CREATE TABLE recall_budget_ticks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts TEXT NOT NULL,              -- ISO8601 assembly time
-    scope TEXT NOT NULL,           -- recall scope (session-*, meeting-*, ...)
-    max_chars INTEGER NOT NULL,    -- shared assembly ceiling
-    used INTEGER NOT NULL,         -- chars admitted across all layers
-    layers TEXT NOT NULL DEFAULT '{}',  -- JSON {layer: {admitted, admitted_chars, rejected, rejected_chars}}
-    squeezed INTEGER NOT NULL DEFAULT 0, -- 1 when ANY layer rejected at least one text
-    hints TEXT NOT NULL DEFAULT '[]',   -- JSON list of the call's hint terms (debugging telemetry)
-    created_at TEXT NOT NULL
-);
-
-CREATE INDEX idx_recall_budget_ticks_ts ON recall_budget_ticks(ts DESC);
-
--- ---- store/cooldown_suppressions.py ----
-
-CREATE TABLE cooldown_suppressions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts TEXT NOT NULL,                 -- ISO8601 of the suppressed intent's recognition (intent.ts)
-    kind TEXT NOT NULL,
-    scope TEXT NOT NULL,
-    confidence REAL NOT NULL DEFAULT 0.0,
-    cooldown_until TEXT,              -- ISO8601 when the cooldown that dropped it expires (NULL if unknown)
-    created_at TEXT NOT NULL          -- ISO8601 when the suppression was recorded
-);
-
-CREATE INDEX idx_cooldown_suppressions_ts ON cooldown_suppressions(ts DESC);
-
--- ---- store/intent_fold_ticks.py ----
-
-CREATE TABLE intent_fold_ticks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts TEXT NOT NULL,                 -- ISO8601 fold time
-    scope TEXT NOT NULL,              -- the folding intent's scope (session-* / fast-K1 / …)
-    kind TEXT NOT NULL,               -- the intent kind that folded (meeting/reminder/…)
-    target_id INTEGER,                -- the existing intents row it folded ONTO (NULL if a bare dedup hit)
-    outcome TEXT NOT NULL,            -- fold | updated (material re-recognition) | skipped (pure dup)
-    created_at TEXT NOT NULL
-);
-
-CREATE INDEX idx_intent_fold_ticks_kind ON intent_fold_ticks(kind);
-
-CREATE INDEX idx_intent_fold_ticks_ts ON intent_fold_ticks(ts DESC);
 
 -- ---- store/schema_faces.py ----
 

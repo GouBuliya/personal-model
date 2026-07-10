@@ -567,35 +567,6 @@ def _ocr_worker() -> None:
     raise typer.Exit(code=ocr_worker.serve())
 
 
-@app.command("intent-audit")
-def intent_audit(
-    db: str = typer.Option("", help="index.db path (default: <root>/index.db)."),
-    json_out: str = typer.Option("", help="Also write the structured audit JSON here."),
-) -> None:
-    """Audit the recognizer's precision · lifecycle from the intents table.
-
-    Read-only, deterministic, zero-LLM. Prints status distribution, stale-open
-    age + ungrounded rate, duplicate-cluster heat, the handled-then-reopened
-    re-mention count, the fold-gap, and accept:dismiss (splitting real user
-    rejections from engine-TTL harvests) — the measurable oracle that turns
-    precision tuning data-driven. PII-free: only counts/rates leave the tool.
-    """
-    from pathlib import Path
-
-    from . import paths
-    from .intent import audit as intent_audit_mod
-
-    db_path = db or str(paths.index_db())
-    typer.echo(intent_audit_mod.render_text(db_path))
-    if json_out:
-        import json as _json
-
-        Path(json_out).write_text(
-            _json.dumps(intent_audit_mod.build_report(db_path), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
-
 @app.command("delta-report")
 def delta_report(
     limit: int = typer.Option(10, help="Show the N most recent shadow deltas."),
@@ -1109,38 +1080,6 @@ def memory_viz(
     typer.echo(
         f"sem_facts: {stats['facts']} fact(s), {stats['edges']} edge(s) "
         f"({stats['edge_source']}), {stats['faces']} face(s) -> {stats['out']}"
-    )
-
-
-@app.command("intent-restamp")
-def intent_restamp() -> None:
-    """存量意图补章 + 过期收割（stale-daemon 修复工具，幂等）.
-
-    旧 daemon 进程写下的 open/armed 行可能缺 temporal grounding（resolved_at/
-    valid_until 全 NULL → 永不语义折叠、永不过期）。本命令对它们重跑
-    stamp_temporal（含 meeting_hint 的 7 天 TTL）落库，随后立即跑一次
-    expire_overdue 把已过期者收割掉，并对超龄的 armed 行（永不触发的死意图，
-    #532）做一次 14 天 TTL 收割（armed → expired，系统/陈旧关，非用户拒；§9 审计），
-    最后对仍无 grounding 的超龄 open 行（#612 无界堆积，实测 66/70）做 30 天 TTL
-    收割（open → expired）。
-    """
-    _init()
-    from datetime import datetime as _dt
-
-    from .intent import store as intent_store_mod
-    from .store import fts as fts_mod
-
-    now = _dt.now().isoformat(timespec="seconds")
-    with fts_mod.cursor() as conn:
-        rescanned, restamped = intent_store_mod.restamp_overdue_grounding(conn)
-        expired = len(intent_store_mod.expire_overdue(conn, now=now))
-        expired_armed = len(intent_store_mod.expire_stale_armed(conn, now=now))
-        # #612: after restamp, rows that STILL can't be grounded are reaped by age
-        # so the existing ungrounded backlog drains instead of sitting open forever.
-        stale_open = len(intent_store_mod.expire_stale_open(conn, now=now))
-    typer.echo(
-        f"rescanned={rescanned} restamped={restamped} expired={expired} "
-        f"expired_armed={expired_armed} stale_open={stale_open}"
     )
 
 
@@ -2326,102 +2265,6 @@ def clean_all(
 
 debug_app = typer.Typer(help="Diagnostics for in-flight pipeline stages.")
 app.add_typer(debug_app, name="debug")
-
-
-def _parse_duration(spec: str) -> datetime:
-    """Parse ``1h`` / ``30m`` / ``2d`` into an absolute timestamp ``now - delta``.
-
-    Accepts a trailing unit of ``s`` / ``m`` / ``h`` / ``d``. Defaults to
-    minutes when the unit is missing. Raises ``typer.BadParameter`` on
-    malformed input so the CLI surface shows a clean error instead of a
-    Python traceback.
-    """
-    from datetime import timedelta
-
-    raw = spec.strip().lower()
-    if not raw:
-        raise typer.BadParameter("duration is empty")
-    unit = raw[-1] if raw[-1].isalpha() else "m"
-    body = raw[:-1] if raw[-1].isalpha() else raw
-    try:
-        value = int(body)
-    except ValueError as exc:
-        raise typer.BadParameter(f"invalid duration {spec!r}") from exc
-    if value <= 0:
-        raise typer.BadParameter("duration must be positive")
-    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-    if unit not in multipliers:
-        raise typer.BadParameter(f"invalid duration unit {unit!r}; use s / m / h / d")
-    delta = timedelta(seconds=value * multipliers[unit])
-    return datetime.now().astimezone() - delta
-
-
-@debug_app.command("intents")
-def debug_intents(
-    last: str = typer.Option(
-        "1h",
-        "--last",
-        "-l",
-        help="Lookback window (e.g. 30m, 1h, 2d). Default 1h.",
-    ),
-    scope: str = typer.Option(
-        "",
-        "--scope",
-        help="Filter by scene scope (e.g. session-<id>, fast-K1). Default: all.",
-    ),
-    status: str = typer.Option(
-        "",
-        "--status",
-        help="Filter by status (open / armed / consumed / dismissed). Default: all.",
-    ),
-) -> None:
-    """Show recognized intents from the unified intent stream in the lookback window.
-
-    Diagnostic tool over the ``intents`` table — the table-of-record every
-    recognizer (slow trajectory + fast K1 + scene packs) persists into.
-    """
-    _init()
-    from datetime import datetime as _dt
-
-    from .intent import store as intent_store
-
-    since = _parse_duration(last)
-    with fts.cursor() as conn:
-        intents = intent_store.recent_intents(
-            conn,
-            start=since.isoformat(),
-            end=_dt.now().astimezone().isoformat(),
-            scope=scope or None,
-            status=status or None,
-        )
-
-    if not intents:
-        console.print(f"[yellow]No intents since {since.isoformat()}[/yellow]")
-        return
-
-    for it in intents:
-        when = it.payload.get("when_text", "")
-        with_list = ", ".join(it.payload.get("with") or []) or "—"
-        channel = it.payload.get("channel", "")
-        console.print(
-            f"[bold]{it.ts}[/bold] [cyan]{it.kind}[/cyan] "
-            f"scope=[magenta]{it.scope}[/magenta] status={it.status} "
-            f"confidence={it.confidence:.2f}"
-        )
-        detail = f"  when={when!r} with=[{with_list}]"
-        if channel:
-            detail += f" channel={channel}"
-        console.print(detail)
-        if it.rationale:
-            console.print(f"    rationale: {it.rationale}")
-        for ev in it.evidence:
-            if ev.quote:
-                console.print(f"    evidence: {ev.quote}")
-        if it.fire_on:
-            fired = it.fired_at or "not yet"
-            console.print(f"    fire_on={it.fire_on} fired_at={fired}")
-
-    console.print(f"\n[dim]{len(intents)} intent(s) since {since.isoformat()}.[/dim]")
 
 
 @debug_app.command("chat-captures")

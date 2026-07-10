@@ -90,14 +90,6 @@ class TestRegistryEnabledPredicates:
             Config(search=SearchConfig(hybrid_enabled=False))
         )
 
-    def test_intent_recognizer_rides_timeline_not_a_standalone_task(self) -> None:
-        # Recognition now fires on the timeline task's block-flush hook, so there
-        # is no separate "intent-recognizer-tick" task. The timeline task (which
-        # carries it) is on in full mode and off in capture-only mode.
-        assert "intent-recognizer-tick" not in _enabled_names(Config())
-        assert "timeline" in _enabled_names(Config())
-        assert "timeline" not in _enabled_names(Config(), capture_only=True)
-
     def test_mcp_disabled_when_auto_start_false(self) -> None:
         assert "mcp" not in _enabled_names(Config(mcp=MCPConfig(auto_start=False)))
 

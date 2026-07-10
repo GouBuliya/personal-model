@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from persome.intent import recall
+from persome.retrieval import layered as recall
 from persome.store import entries as entries_mod
 from persome.store import fts
 
@@ -44,7 +44,7 @@ def test_match_expr_quotes_every_token() -> None:
 def test_apostrophe_hint_matches_instead_of_erroring(ac_root, caplog) -> None:
     with fts.cursor() as conn:
         _seed(conn)
-        with caplog.at_level("WARNING", logger="persome.intent.recall"):
+        with caplog.at_level("WARNING", logger="persome.retrieval.layered"):
             out = recall.assemble_background(
                 conn, scope="", hints=["User's"], per_hint=10, fold_superseded=True
             )
@@ -56,7 +56,7 @@ def test_mixed_cjk_apostrophe_hint(ac_root, caplog) -> None:
     """中文+撇号混合 hint：整词当短语匹配，命中含同形词序的条目。"""
     with fts.cursor() as conn:
         _seed(conn)
-        with caplog.at_level("WARNING", logger="persome.intent.recall"):
+        with caplog.at_level("WARNING", logger="persome.retrieval.layered"):
             out = recall.assemble_background(
                 conn, scope="", hints=["User's 偏好"], per_hint=10, fold_superseded=True
             )
@@ -67,7 +67,7 @@ def test_mixed_cjk_apostrophe_hint(ac_root, caplog) -> None:
 def test_double_quote_hint_does_not_crash(ac_root, caplog) -> None:
     with fts.cursor() as conn:
         _seed(conn)
-        with caplog.at_level("WARNING", logger="persome.intent.recall"):
+        with caplog.at_level("WARNING", logger="persome.retrieval.layered"):
             out = recall.assemble_background(
                 conn, scope="", hints=['他说"好"'], per_hint=10, fold_superseded=True
             )

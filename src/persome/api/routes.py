@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sqlite3
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
@@ -23,9 +22,6 @@ from .. import events as events_mod
 from ..capture import ax_capture, scheduler, screenshot_crypto
 from ..config import Config
 from ..config import load as load_config
-from ..intent import recall as recall_mod
-from ..intent import schema_prior as schema_prior_mod
-from ..intent import store as intent_store
 from ..logger import get
 from ..mcp import captures as captures_mod
 from ..mcp.server import (
@@ -44,12 +40,7 @@ from ..timeline import store as timeline_store
 from .models import (
     ApiResponse,
     CaptureIngestBody,
-    DataResponse,
-    IntentsResponse,
     ModelPing,
-    RecallPackItem,
-    RecallPackResponse,
-    SetIntentStatusBody,
 )
 
 logger = get("persome.api")
@@ -1078,123 +1069,6 @@ def _node_tree(root: str) -> dict[str, Any]:
         return {"id": root, "edges": []}
 
 
-@router.get("/intents", response_model=DataResponse[IntentsResponse], tags=["intent"])
-def list_intents(
-    scope: Annotated[
-        str | None, Query(description="按场景过滤，如 timeline / session-<id>")
-    ] = None,
-    status: Annotated[
-        str | None, Query(description="按状态过滤：open / consumed / dismissed")
-    ] = None,
-    limit: Annotated[int, Query(ge=1, le=200, description="返回结果数量上限（取最新）")] = 50,
-) -> DataResponse[IntentsResponse]:
-    """列出统一意图流（debug 视图 + R3 反馈的数据源），按 ts 倒序（最新在前）。"""
-    with fts.cursor() as conn:
-        intents = intent_store.recent_intents(conn, start="", end="￿", scope=scope, status=status)
-    intents = intents[-limit:][::-1]  # newest first, capped
-    items = [i.to_dict() for i in intents]  # pydantic coerces dict→IntentItem at build
-    payload = IntentsResponse(intents=items, count=len(intents))  # type: ignore[arg-type]
-    return DataResponse(data=payload)
-
-
-def _recall_hints(text: str, *, limit: int = 8) -> list[str]:
-    """Lightweight hint terms from free text for the recall-pack endpoint.
-
-    Split on whitespace + common punctuation, keep tokens ≥2 chars, dedupe (order-
-    preserving), cap at ``limit``. CJK text without spaces stays one phrase hint —
-    matching how the recognizer feeds multi-word hints (FTS5-escaped downstream)."""
-    raw = re.split(r"[\s,.;:!?，。；：！？、/\\()\[\]{}<>\"'`]+", text or "")
-    seen: set[str] = set()
-    out: list[str] = []
-    for tok in raw:
-        t = tok.strip()
-        if len(t) < 2 or t in seen:
-            continue
-        seen.add(t)
-        out.append(t)
-        if len(out) >= limit:
-            break
-    return out
-
-
-@router.get("/recall/pack", response_model=DataResponse[RecallPackResponse], tags=["intent"])
-def recall_pack(
-    intent_id: Annotated[
-        int | None, Query(description="按意图行 id 召回（解析 scope/hints/raw 句柄）")
-    ] = None,
-    scope: Annotated[
-        str | None, Query(description="场景 id（无 intent_id 时必填），如 timeline / session-<id>")
-    ] = None,
-    text: Annotated[str | None, Query(description="自由文本，派生 hints + 稠密查询")] = None,
-    hints: Annotated[
-        list[str] | None, Query(description="显式 hint 词覆盖；省略则由 text 派生")
-    ] = None,
-    max_chars: Annotated[
-        int | None, Query(ge=1, le=20000, description="字符预算；省略=recall_max_chars 配置")
-    ] = None,
-    per_layer_cap: Annotated[int, Query(ge=0, le=50, description="每层最多保留几条（0=不限）")] = 8,
-    include_semantic: Annotated[
-        bool | None, Query(description="是否跑稠密层；省略=配置开关；无 embedding 凭据自动空跑")
-    ] = None,
-    include_raw_handles: Annotated[
-        bool, Query(description="是否回 capture_stem/timeline_block_id（外部 prompt 可置 false）")
-    ] = True,
-) -> DataResponse[RecallPackResponse]:
-    """结构化、带引用、分层的召回包 —— 供主动任务 prompt 内联（识别即办）。
-
-    与 ``intent.recall.assemble_background`` 跑同一套 per-layer helper、同序，但每条
-    带 ``cite`` 句柄；scene 项再带 RAW 捕获句柄（截图 stem / timeline 块 id）。只读、
-    不写遥测 tick。``intent_id`` 优先：按行解析 scope/hints/raw 句柄；否则用 scope+text。
-    无 embedding 凭据时稠密层自动空跑（``dense.active=false``），全程确定性。"""
-    if intent_id is None and not (scope and scope.strip()):
-        raise HTTPException(status_code=422, detail="provide intent_id or scope")
-    cfg = _get_cfg().intent_recognizer
-    resolved_scope = scope or ""
-    query_text = text or ""
-    with fts.cursor() as conn:
-        if intent_id is not None:
-            it = intent_store.get_intent(conn, intent_id)
-            if it is None:
-                raise HTTPException(status_code=404, detail="no such intent")
-            resolved_scope = it.scope
-            if not query_text:
-                query_text = str(
-                    it.payload.get("text") or it.payload.get("task_text") or it.rationale or ""
-                )
-        hint_terms = [h for h in (hints or []) if h and h.strip()] or _recall_hints(query_text)
-        schema_pairs = schema_prior_mod.active_schema_inferences_with_sources(conn)
-        dense_on = cfg.recall_semantic_enabled if include_semantic is None else include_semantic
-        items = recall_mod.assemble_background_structured(
-            conn,
-            scope=resolved_scope,
-            hints=hint_terms,
-            max_chars=max_chars or cfg.recall_max_chars,
-            schema_pairs=schema_pairs,
-            fold_superseded=cfg.recall_fold_superseded,
-            chain_trail=cfg.recall_chain_trail,
-            include_confidence=True,  # surface low-confidence/conflicted flags for the consumer
-            recent_events_hours=cfg.recall_recent_events_hours,
-            include_events=cfg.recall_recent_events_hours > 0,
-            dense_query=(query_text if dense_on else None),
-            dense_top_k=cfg.recall_semantic_top_k,
-            include_raw_handles=include_raw_handles,
-            per_layer_cap=per_layer_cap,
-        )
-    counts: dict[str, int] = {}
-    for it_item in items:
-        counts[it_item.layer] = counts.get(it_item.layer, 0) + 1
-    used = sum(len(i.content) for i in items)
-    payload = RecallPackResponse(
-        scope=resolved_scope,
-        intent_id=intent_id,
-        items=[RecallPackItem(**vars(i)) for i in items],
-        counts=counts,
-        budget={"max_chars": max_chars or cfg.recall_max_chars, "used": used},
-        dense={"enabled": dense_on, "active": any(i.layer == "semantic" for i in items)},
-    )
-    return DataResponse(data=payload)
-
-
 @router.get("/parser/stats", response_model=ApiResponse, tags=["parser"])
 def parser_hit_stats(
     since: Annotated[str | None, Query(description="ISO8601 起始时间（含），省略=不限")] = None,
@@ -1211,29 +1085,6 @@ def parser_hit_stats(
     with fts.cursor() as conn:
         data = parser_ticks_store.stats(conn, since=since or "", until=until or "￿")
     return ApiResponse(data=data)
-
-
-@router.patch("/intents/{intent_id}", response_model=ApiResponse, tags=["intent"])
-def set_intent_status(
-    intent_id: Annotated[int, Path(description="意图行 ID")], body: SetIntentStatusBody
-) -> ApiResponse:
-    """回写意图状态（反馈闭环）：采纳=consumed / 忽略=dismissed / 做完=completed / 失败=failed。
-
-    仅接受用户反馈态（``FEEDBACK_STATUSES``，#631 nit T）；``armed``/``expired`` 是引擎自有
-    生命周期态，客户端不得设置，否则可造无 ``fire_config`` 的 armed 僵尸或把行回写成过期。
-    ``completed``/``failed``（反向闭环 spec 2026-06-26 G2）由 app 的 ``maybeFinalize`` 对已采纳
-    且执行完毕的 `.context` 任务回写，服务端盖 ``completed_at`` 戳，喂识别器的正向 ``_completed_prior``。
-    """
-    if body.status not in intent_store.FEEDBACK_STATUSES:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"invalid status '{body.status}', expected one of {intent_store.FEEDBACK_STATUSES}"
-            ),
-        )
-    with fts.cursor() as conn:
-        ok = intent_store.update_intent_status(conn, intent_id=intent_id, new_status=body.status)
-    return ApiResponse(data={"success": ok, "intent_id": intent_id, "new_status": body.status})
 
 
 # ─── Reference ─────────────────────────────────────────────────────────────

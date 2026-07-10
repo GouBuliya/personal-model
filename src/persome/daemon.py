@@ -227,32 +227,6 @@ async def _run(cfg: Config, *, capture_only: bool = False, hard_exit: bool = Fal
 
     await asyncio.to_thread(evo_integrity.startup_check, cfg)
 
-    # Intent expiry catch-up (#628): the expiry harvest otherwise only fires at
-    # the 23:55 ``daily-safety-net`` tick, so a daemon that was stopped / running
-    # old code / never reached 23:55 misses a whole day's harvest — overdue
-    # grounded intents (``open`` and #629 ``armed``), #532-stale armed rows, and
-    # #612-stale UNGROUNDED ``open`` rows stay un-flipped and keep leaking into
-    # recall's scene layer (real ids 6/7/9 sat ``open`` ≥3 days; the #612 backlog
-    # was 66/70). Replay the SAME harvest once at boot so a missed 23:55 is
-    # repaired immediately instead of waiting for the next one. The harvest is
-    # idempotent (only touches still-``open``/``armed`` overdue/stale rows),
-    # one-shot (not per-tick), and a pure side channel — a failure alerts and
-    # never blocks boot.
-    try:
-        expired, dismissed_armed, stale_open = await asyncio.to_thread(
-            session_tick.expire_overdue_intents
-        )
-        if expired or dismissed_armed or stale_open:
-            logger.info(
-                "boot: intent expiry catch-up — %d open/armed → expired, "
-                "%d armed → dismissed (#628), %d ungrounded open → expired (#612)",
-                expired,
-                dismissed_armed,
-                stale_open,
-            )
-    except Exception as exc:  # noqa: BLE001 - catch-up must never block boot
-        logger.warning("boot: intent expiry catch-up failed: %s", exc)
-
     # (OCR warmup is started AFTER the signal handlers below, because importing
     # PaddleOCR/paddle hijacks the fatal signals — see _install_signal_handlers.)
 

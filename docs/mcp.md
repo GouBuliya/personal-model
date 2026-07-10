@@ -53,12 +53,10 @@ Example stdio client configuration:
 | `attention_trajectory` | Read the derived attention path used by state formation. |
 | `get_schema` | Return the Markdown memory schema. |
 
-## Transitional tools
+## Observability
 
-`list_intents`, `set_intent_status`, `parser_stats`, and
-`recall_budget_stats` remain while intent-owned model inputs are migrated to
-neutral entity and activity sources. They support observability and legacy
-data; they are not presented as the paper's prediction benchmark.
+`parser_stats` exposes parser hit/miss telemetry. Product intent lifecycle and
+recall-budget tools are not part of the paper runtime's MCP surface.
 
 ## Transport
 

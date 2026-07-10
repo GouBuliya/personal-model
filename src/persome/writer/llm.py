@@ -1,7 +1,7 @@
 """Anthropic SDK wrapper with per-stage model resolution.
 
 All background stages (timeline / reducer / classifier / compact /
-pattern_detector / active / consolidator / intent_recognizer) call the Anthropic
+pattern_detector / active / consolidator) call the Anthropic
 Messages API directly through the official SDK — the same client path chat uses.
 litellm was removed: it serialized custom tools with a ``type:"custom"`` variant
 the DeepSeek ``/anthropic`` gateway rejects (``unknown variant 'custom'``), which

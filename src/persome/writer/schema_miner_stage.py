@@ -28,11 +28,10 @@ that closes both gaps for acme (design ``2026-06-06-migration-D2-cognition.md``)
    mine creates the file via ``create_file`` / ``append_entry``.
 
 Status is derived from the miner's confidence: ``confidence >= stable_threshold``
-→ ``stable`` (the only status the intent prior injects — design §2.4 / §4②),
-otherwise ``forming``. The ``central``, ``summary`` and ``inferences`` are
-rendered into the entry body so the seam provider (:mod:`intent.schema_prior`)
-can read the inferences back out; ``confidence`` rides as a heading tag so the
-provider can rank by it.
+→ ``stable`` (the only status exposed by the active model reader), otherwise
+``forming``. The ``central``, ``summary`` and ``inferences`` are rendered into
+the entry body so :mod:`persome.model.schema_reader` can read the inferences back
+out; ``confidence`` rides as a heading tag so the reader can rank by it.
 
 写权反转（PR-6b，SSOT 切换设计 §1.3/§5）：``write_authority="evomem"`` 时本站点
 的写（create / append / 原地 supersede / ``set_file_status`` 的 dormant↔active
@@ -69,10 +68,9 @@ from . import llm as llm_mod
 logger = get("persome.writer")
 
 # Prefixes whose entries are durable user *facts* — the raw material a schema is
-# induced from. Aligned with the canonical fact set in ``intent/recall.py`` (minus
-# ``intent-``, a derived projection of the unified stream that must NOT be
-# re-abstracted). ``event-*`` (raw activity) and ``skill-*`` / ``intent-*`` /
-# ``schema-*`` (derived artefacts) are deliberately excluded: a schema must
+# induced from. Aligned with the canonical fact set in ``retrieval/layered.py``.
+# ``event-*`` (raw activity) and ``skill-*`` / ``schema-*`` (derived artefacts)
+# are deliberately excluded: a schema must
 # generalise grounded facts, not re-abstract other abstractions.
 _FACT_PREFIXES: tuple[str, ...] = ("user", "project", "topic", "person", "org", "tool")
 
@@ -81,9 +79,8 @@ _FACT_PREFIXES: tuple[str, ...] = ("user", "project", "topic", "person", "org", 
 _DEFAULT_MIN_FACTS = 4
 
 # Confidence at/above which a freshly mined schema is born ``stable`` (and thus
-# eligible to be injected as an intent prior). Below it the schema is ``forming``
-# — it exists and is grep-able, but stays out of recognition until more evidence
-# (or an explicit accept) promotes it. Design §2.4.
+# eligible for active model reads). Below it the schema is ``forming`` — it exists
+# and is grep-able, but stays out of snapshots until more evidence promotes it.
 _DEFAULT_STABLE_THRESHOLD = 0.6
 
 # How many durable entries to pull per file when clustering. A generous cap — a
@@ -131,7 +128,7 @@ class SchemaRunResult:
         return len(self.written)
 
 
-# ── body rendering / parsing (shared with intent.schema_prior) ───────────────
+# ── body rendering / parsing (shared with model.schema_reader) ───────────────
 
 
 def render_schema_body(
@@ -140,7 +137,7 @@ def render_schema_body(
     supporting_summary: str,
     expected_inferences: list[str],
 ) -> str:
-    """Render a schema entry body (the form :mod:`intent.schema_prior` parses back).
+    """Render a schema entry body for :mod:`persome.model.schema_reader`.
 
     Layout (design §3.3) — ``central``/``summary`` one-liners, then an
     ``inferences:`` marker followed by ``- `` bullets, one inference per line::
@@ -306,8 +303,8 @@ def _persist_schema(
     )
     tags = ["schema", status, f"confidence:{result.confidence:.2f}"]
     # A still-``forming`` schema is born ``dormant`` so it stays out of default
-    # ``list_memories`` (and the intent prior, which only injects ``stable``) until
-    # it matures; a ``stable`` schema is ``active`` (design §5 / MCP-05, issue #440).
+    # ``list_memories`` and active model reads until it matures; a ``stable``
+    # schema is ``active`` (design §5 / MCP-05, issue #440).
     file_status = "dormant" if status == "forming" else "active"
 
     path = files_mod.memory_path(name)

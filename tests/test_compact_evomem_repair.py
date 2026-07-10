@@ -18,7 +18,7 @@ import re
 
 from persome import config as config_mod
 from persome.evomem import backfill
-from persome.intent import recall
+from persome.retrieval import layered as recall
 from persome.store import entries as entries_mod
 from persome.store import files as files_mod
 from persome.store import fts

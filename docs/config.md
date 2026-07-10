@@ -145,60 +145,12 @@ While a session is active, the classifier wakes up every `interval_minutes` and 
 
 Values `< 5` are clamped to 5 to keep LLM cost bounded. Pair with `[session] flush_minutes`: the reducer flushes at a higher frequency than the classifier, so a classifier tick always has fresh entries to look at.
 
-## `[intent_recognizer]` — Hy-Memory recall/schema flags
-
-The trajectory recognizer and capture fast-path knobs live here (`enabled`, `fast_path`, `backoff_*`, `domain_allowlist`). The flags below are the **Hy-Memory migration** recall/schema toggles (default **on**). They only change the intent recognizer's recall background / schema prior — never the MCP `search` contract. The `recall_use_chain_index` / `recall_read_evo_nodes` staging flags were retired with `entry_chain` in PR-7 (the SSOT cutover): the chain-head fold has exactly one path — `evo_nodes`; leftover keys in an old `config.toml` are silently ignored by the loader.
-
-```toml
-[intent_recognizer]
-recall_fold_superseded = true    # fold recall hits to evolution-chain heads, read from evo_nodes — the SSOT (§1.4); event-* entries (Q2, never in evo_nodes) keep the superseded-column judgment; pre-backfill (evo_nodes missing/empty) degrades to the equivalent superseded-column fold
-recall_chain_trail = true        # append the `← [曾]/[精炼自] …` evolution trail to a chain head (attitude-evolution signal), rendered from the evo_nodes bidirectional pointers; only renders when the fold is on AND evo_nodes is ready
-schema_prior_enabled = true      # inject D2 predictive-schema inertia priors (schema-*.md `expected_inferences`, stable-status only, top-8 by confidence) as the highest-priority recall section; [] no-op until schema files exist
-schema_feedback_enabled = true   # R4 schema-level feedback loop: HUD dismiss/accept on an intent flows back onto the schemas injected when it was recognized (Intent.schema_sources provenance) — dismiss −0.05 / consume +0.03, stable↔forming flip on the 0.6 threshold via the miner's supersede_entry seam; intents without schema_sources are a strict no-op
-recall_include_confidence = true # annotate recall hits with ⚠(低置信)/⚠(冲突未裁决) from the entry_metadata meta-cognition index, so the recognizer down-weights shaky memories; default ON for everyone (safe-by-construction: existing memories have no confidence tag → no annotation, so it only affects new classifier-written memories)
-event_intent_enabled = true      # Hy-Memory L7: prospective "下次打开 X 时" intents stored armed, fired armed→open by the per-capture activator (MVP trigger: app_opened); default on — per-capture cost is one indexed armed-lookup
-slow_path_max_blocks = 60        # R3 慢路增量化 cost gate: most recent N session blocks render verbatim in the slow-path prompt; older blocks fold into ONE deterministic header line (no LLM). 0 = unbounded legacy prompt (byte-identical)
-slow_pregate = true              # #547 慢路锚定 pre-gate: skip the slow-path LLM call when the blocks NEW since the last tick carry no slow anchor (SLOW_ANCHOR_RE = fast _ANCHOR_RE + euphemism/willingness cues); skips recorded as recognition_ticks outcome=skipped_no_anchor (hit_rate unpolluted). false = every block flush burns one LLM call (legacy)
-material_republish = true        # R3 material-change-republish: dedup-hit re-recognition with a material change (confidence ratchet >= +0.15 / provenance counterpart_proposed→user_committed) UPDATEs the stored row (id+status kept, dismissed/consumed never resurrected) and republishes it on SSE marked `updated`; false = legacy surface-once
-recall_recent_events_hours = 48  # feed event-daily summaries from the last N hours into the slow path's lowest-priority recent-activity section; 0 = off
-recall_max_chars = 2600          # shared char budget for schema_prior→scene→behavior→fact→semantic→keyword→events
-cooldown_enabled = true          # #533 (kind, scope) 级闭集硬冷却: a kind dismissed >= cooldown_dismiss_threshold times within cooldown_window_days IN THE SAME SCOPE enters a HARD cooldown — that (kind, scope)'s intents are dropped at the unified sink (bypass prompt, covers fast/slow/meeting) for cooldown_hours from the latest dismissal (anchored on dismissed_at, not recognition ts); user_committed / confidence>=0.9 intents are EXEMPT; every suppression is logged to cooldown_suppressions telemetry. false = restore prompt-soft-only
-cooldown_window_days = 1         # #533: lookback window (days) for counting a (kind, scope)'s dismissals — SAME-magnitude as cooldown_hours so an active feedback-giver isn't near-permanently cooled over sparse dismissals
-cooldown_dismiss_threshold = 3   # #533: dismissals of one (kind, scope) within the window needed to trigger the hard cooldown
-cooldown_hours = 24.0            # #533: cooldown duration measured from the MOST RECENT dismissal — always expires (no lifetime ban; re-calibration is #534). <=0 disables defensively
-```
-
-Rollback is per-flag: set any back to `false` to drop that signal without losing the others. `entries`/`entry_metadata` and `schema-*.md` are derived retrieval state — `rebuild_index` re-derives them from the current write authority's truth (evo_nodes under evomem authority, markdown tags otherwise), so a flag flip never corrupts memory.
-
-`schema_feedback_enabled` closes the **R4 schema-level feedback loop** (design-philosophy §7 「拒绝是金矿」): the recognizer stamps each produced intent with the `schema-*.md` files whose inferences were injected that round (`Intent.schema_sources`, coarse "当时在场" provenance), and `update_intent_status` — the single seam both HUD write-back entry points (MCP `set_intent_status`, REST `PATCH /intents/{id}`) funnel through — flows a real status transition back onto those schemas: dismissed → confidence −0.05, consumed → +0.03 (clamped to [0,1]; repeated same-status writes are idempotent, so a double HUD click never double-decays). When the confidence crosses the 0.6 stable threshold the schema entry is superseded in place through the same `supersede_entry` seam the miner uses (reason `intent feedback: dismissed/consumed`, body unchanged, tags rewritten), flipping `stable↔forming` — a forming schema automatically exits the stable-only prior injection gate. **Default on** (safe-by-construction): intents with no `schema_sources` change nothing, the write-back is best-effort and never blocks the status update, and a wrongly-decayed schema recovers via consumed feedback or the next re-mine.
-
-`slow_path_max_blocks` is the **R3 slow-path cost gate**: the trajectory recognizer re-reads the whole active session on every block flush (~60s), so the prompt grows linearly to the 2h session cap (≈120 blocks) and re-sends the same bytes 100+ times. Past the cap, only the most recent N blocks render verbatim in the「本会话事件日志」section; older blocks collapse into one deterministic summary line (「更早 X 个 block（HH:MM–HH:MM）已省略，涉及 app：…」— pure string assembly, no LLM call). **Default 60 is safe-by-construction**: a block only ages out after ~N consecutive flushes already fed it verbatim, by which time any intent it carried is persisted (dedup'd) and keeps re-surfacing via recall's scene layer in the background section. Set `0` to restore the unbounded legacy prompt byte-for-byte.
-
-`slow_pregate` is the **#547 slow-path anchored pre-gate**: the trajectory recognizer fires on every block flush, but production telemetry showed only ~14% of those ticks recognize anything — most minutes carry no schedulable signal, so ~86% of slow-path LLM calls were idle burn (the fast path has five cheap gates; the slow path had none). With this on (the default), `recognize_session` first scans the blocks **new since the last tick** (their `entries` plus the `focus_structured`/`focus_excerpt` verbatim backstops) with `event_source.SLOW_ANCHOR_RE` — the fast `_ANCHOR_RE` composed (single source, no drift) with euphemism/willingness cues (改天/回头/找个时间/到时候/见面/复盘/过一遍/串一遍…) so anchorless euphemisms, which the slow lane is the designated catcher for, are never gate-killed — and skips the LLM call when nothing hits. Only **new** blocks are scanned: older blocks were covered by the previous tick (LLM-read, or gate-proven anchorless — blocks are immutable once materialised), so the residual miss risk is bounded and arguable (设计哲学: 漏=有限损失). A skipped tick is still recorded in `recognition_ticks` with `outcome=skipped_no_anchor` — it advances the new-block bookmark and stays out of the `hit_rate` denominator (skips are "never ran", not "ran and recognized nothing"). Set to `false` to restore the legacy behavior (every block flush burns one LLM call).
-
-`material_republish` is the **R3 material-change-republish** switch: previously a dedup hit was skipped outright, so a re-recognition with higher confidence or an upgraded provenance was silently dropped. With this on (the default), `intent/sink.py:material_change` compares the re-recognition against the stored row with deterministic rules — confidence ratchet (new ≥ stored + 0.15; the update writes the new confidence back, so it fires a bounded ≤~3 times per intent) or provenance upgrade `counterpart_proposed→user_committed` — and a material change UPDATEs the row in place (same id, `status` untouched: dismissed/consumed are final and never resurrected) then republishes it in the `intent_recognized` SSE frame with `"updated": true`. Non-material wobbles still skip — 宁可漏 republish 不可重复打扰. Note「when_text 模糊→具体」(e.g.「周五」→「周五15:00」) never reaches this comparison: normalized `when_text` is part of `dedup_key`, so added specificity yields a new key and inserts a new row.
-
-`event_intent_enabled` is the **event-based prospective intent layer** (Hy-Memory L7): when the recognizer marks an intent `activation=on_event` (the user said "下次打开 X 时再…"), the sink stores it `status="armed"` (kept out of the open stream the active layer reads) instead of surfacing it now. On every capture, `intent/activator.py` checks the frontmost app against armed intents' `fire_on="app_opened"` trigger and flips a match `armed→open`, so it surfaces at the moment the user actually opens that app — a 时机门, more restrained than push-on-recognize. **Default on**, cheaply: the per-capture cost is a single indexed `status='armed'` lookup (usually 0 rows), and an armed intent only exists when the user explicitly tied an action to "下次打开 X", so the surface is naturally narrow. Set to `false` to fully disable (no armed intents emitted, activator hook not installed). MVP trigger is `app_opened` only; `url_visit`/`keyword`/`time` are future additions on the same `fire_on` seam.
-
-`recall_include_confidence` is the **meta-cognition layer** (Hy-Memory migration): the classifier records each memory's reliability as `#confidence:high|medium|low` / `#conflicted` heading tags (projected into the `entry_metadata` table). When this flag is on (the default), low-confidence and conflicted hits get a ⚠ note in the recall background so a guess never drives the same proactive action a hard fact would. It is **safe-by-construction** to ship on: pre-existing memories carry no confidence tag, so they produce no annotation — only new classifier-written memories are affected, and the only effect is to make the recognizer more cautious on shaky ones. Storage/write of the tags is always on (pure-additive, no flag); only the recall *rendering* is gated. Flip to `false` to fully suppress the annotation.
-
-`cooldown_*` is the **#533 (kind, scope) 级闭集硬冷却** — the negative-feedback loop upgraded from prompt-soft to a deterministic hard gate (design-philosophy §2/§4 「弹错=复利损失，拒绝是金矿」). Before #533 a dismissed intent only rendered as a "最近被忽略 N 次" prior the model was *asked* to honor (`recognizer._dismissed_prior`); the lone hard block was an exactly-equal `dedup_key`, so a kind the user kept dismissing re-surfaced under a fresh wording (new key). Now `intent/cooldown.py` reads dismissals as a confidence vote: when a kind is dismissed **≥ `cooldown_dismiss_threshold` (default 3)** times within **`cooldown_window_days` (default 1)** **in the same `scope`**, that `(kind, scope)` enters a hard cooldown for **`cooldown_hours` (default 24)** measured from the **most-recent** dismissal — and the gate runs at `intent/sink.py:persist_intent_result`, the single write entrance every producer (fast K1 / slow trajectory / meeting pack) funnels through, so a cooled-down `(kind, scope)`'s intents are dropped (not persisted, not surfaced) **bypassing the prompt entirely**.
-
-The cooldown clock anchors on **`dismissed_at`** — the instant the dismiss ACTION happened (`update_intent_status` stamps it; `ts` is recognition time, which the dismiss path leaves untouched). Anchoring on `ts` was the original blocking bug: a row recognized days ago and dismissed just now carries an old `ts` but a fresh `dismissed_at`, so a `ts`-window would both漏挡 (recent dismisses of old intents fall outside the window) and mistime the clock. The **#532 armed-TTL reaper** flips never-fired `armed` rows to `dismissed` directly (no `dismissed_at`), so it correctly does NOT feed the cooldown — a reminder the user never triggered isn't a rejection of the kind.
-
-Two deliberate tightenings vs the first cut (avoid the「惩罚高反馈用户」陷阱 — the same trap the retired flat `_dismissed_prior` window fell into): **(1)** the cooldown is `(kind, scope)`, not global by-kind — dismissing reminders in one *scene* cannot mute them in a genuinely different scene; **(2)** `cooldown_window_days` defaults to **1** (same magnitude as `cooldown_hours`), not 7 — a wide 7-day window + sliding 24h reset would put an active feedback-giver who sparsely dismisses 3× over a week into near-permanent cooldown. Same-magnitude requires the 3 dismisses to cluster within ~a day.
-
-**Scope dimension for the slow path** (`intent/cooldown.py:_scope_filter`): the cooldown counts dismissals per scene, but the slow trajectory recognizer stamps a **fresh `session-<uuid>` scope every session** (`scope_for_session`), so exact-`scope` matching would reset the count to 0 each session and the hard cooldown would *never fire on the slow path* — the欠抑 hole where #533 is needed most (slow re-recognition under new wording is exactly the failure mode). So all per-session `session-*` scopes **fold into one stable cross-session cooldown domain** (`scope LIKE 'session-%'`): dismissing the same kind across several sessions accumulates toward the threshold, and a fresh re-worded re-statement in yet another new session is dropped. The intents keep their true per-session identity scope in the `intents` table — only the cooldown COUNT folds. fast-K1 (constant `fast-K1` scope) and meeting packs (per-meeting stable `meeting-<id>` scope) are unaffected — neither matches `session-`, both stay exact-scope, so cross-scene isolation between genuinely-distinct scenes is intact.
-
-**Confidence/provenance bypass** (宪法 §5 零熵猎场不该被否决): a verbatim `user_committed` promise — or any intent whose calibrated `confidence >= 0.9` (`CONFIDENCE_CAP_INFERRED`; only user_committed survives the clamp that high) — is **EXEMPT** from the hard cooldown. The闸 only suppresses the model's mid/low-confidence GUESSES at a rejected kind; it must never swallow a thing the user said in so many words (that would contradict the same PR's user_committed confidence-cap exemption). Inferred intents claiming higher are first clamped to 0.9, so the boundary is inclusive-by-design.
-
-**Observability is never gated** (拒绝是金矿): a suppressed intent leaves no `intents` row, so each drop is recorded as a structured, additive trace in the `cooldown_suppressions` table (kind, scope, confidence, ts, cooldown_until) — surfaced under `/intents/stats` as `cooldown_suppressed` ({total, by_kind}) and read by the #534 recalibration. The presentation is闸掉的, the data is not.
-
-The cooldown is **always time-bounded** — it expires `cooldown_hours` after the latest dismissal and self-heals once the user stops dismissing; it is never a lifetime ban (re-calibration / manual release is #534, out of this batch), and `cooldown_hours <= 0` disables it defensively so a misconfig can't become a permanent ban. **Default on, safe-by-construction**: it only ever fires AFTER the user has explicitly dismissed the same kind 3× within ~a day in one scope, the lookup is best-effort (a DB error fails open — 漏挡=有限损失, 硬挡真意图=复利损失), high-confidence promises bypass it, and it self-heals. Set `cooldown_enabled = false` to fully restore the prompt-soft-only behavior. Companion fix in the same change: recall's ① scene layer (`recall._scene_layer`) now filters out `dismissed`/`consumed` intents, which previously re-entered the recognition prompt as positive「场景意图」context and contradicted the same prompt's negative-prior section.
-
 ## `[schema]` — D2 schema miner daily tick
 
-Drives the `schema-tick` daemon task (see the daemon task table in `CLAUDE.md`). Once per local day it runs the D2 schema miner: clusters durable facts per memory file → induces `schema-*.md` predictive priors, which feed the intent recognizer's `schema_prior` seam (gated on `[intent_recognizer] schema_prior_enabled`). It runs after the daily safety net so it consumes freshly classified facts. Gating-only — no schema is written until enough clustered facts exist.
+Drives the `schema-tick` daemon task. Once per local day it clusters durable
+facts per memory file and induces `schema-*.md` faces for the personal model.
+It runs after the daily safety net so it consumes freshly classified facts.
+No schema is written until enough clustered facts exist.
 
 ```toml
 [schema]
@@ -210,7 +162,12 @@ cross_domain_behavior_max_distance = 0.5  # behavior-distance ceiling for the pr
 cross_domain_min_confidence = 0.6         # fused schema below this is born `forming`
 ```
 
-`cross_domain_*` is the **cross-domain sweeper** (Hy-Memory batch 2): after the per-file miner runs, it pairs *stable* schemas, keeps those that are **topic-far but behavior-near**, and asks the LLM whether they collide into a higher-level schema (`schema-xdomain-*.md`, same消费链). The behavior dimension is a **deterministic** signature (app set + action-type distribution + hour histogram, traced from facts' `occurred_at` → `timeline_blocks`) — **no embedding**. Runs as the tail of the same `schema-tick` (no new daemon task). **Default on**, with a bounded downside: a low-quality collision gets a low LLM confidence → born `forming` → **not** injected into the recognizer prior (only `stable` ≥ `cross_domain_min_confidence` fusions are), so weak fusions can't pollute recognition. The main cost is the per-tick LLM probes, capped by the topic/behavior pre-filter. Set to `false` to disable.
+`cross_domain_*` controls the cross-domain sweeper: after the per-file miner runs,
+it pairs stable schemas, keeps those that are topic-far but behavior-near, and asks
+the LLM whether they form a higher-level `schema-xdomain-*.md` face. Its behavior
+pre-filter is deterministic (app set, action distribution, and hour histogram),
+with no embedding call. Low-confidence output is born `forming` and excluded from
+active snapshots. Set `cross_domain_enabled = false` to disable the sweep.
 
 ## `[writer]`
 
@@ -287,21 +244,23 @@ Controls what the **debug HUD** renders — the always-on-top panel shown when d
 
 ```toml
 [debug_hud]
-show = ["intent"]                 # allowlist of content blocks to render
+show = ["stage"]                  # allowlist of content blocks to render
 ```
 
 `show` is a single allowlist; the HUD renders **only** the keys listed. Valid keys:
 
 | Key | Shows |
 |---|---|
-| `intent` | recognized intents (kind + confidence + rationale) — **default** |
 | `tool_call` | agent tool calls (name + arguments) |
 | `thinking` | agent reasoning text (`llm_text`) |
-| `stage` | pipeline stage start/end (classifier, reducer, schema, …) |
+| `stage` | pipeline stage start/end (classifier, reducer, schema, …) — **default** |
 | `health` | daemon health + uptime / sessions / memory counts |
 | `memory` | most recent memory writes |
 
-`intent` / `tool_call` / `thinking` / `stage` are event kinds inside the **AGENT ACTIVITY** feed; `health` and `memory` are separate panels. Default is `["intent"]` so the HUD is quiet — add keys to surface more, e.g. `show = ["intent", "tool_call", "thinking", "health"]`.
+`tool_call` / `thinking` / `stage` are event kinds inside the **AGENT ACTIVITY**
+feed; `health` and `memory` are separate panels. Default is `["stage"]` so the
+HUD is quiet; add keys to surface more, for example
+`show = ["stage", "tool_call", "thinking", "health"]`.
 
 Applied **live**: the HUD reads this via `GET /config/debug-hud`, which re-reads `config.toml` on each call, so changes take effect without restarting the daemon (within the HUD's poll interval).
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 
-from persome.intent import recall
+from persome.retrieval import layered as recall
 from persome.store import entries as entries_mod
 from persome.store import fts
 
@@ -34,7 +34,7 @@ def test_corrupt_evo_nodes_logs_warning_not_silent(ac_root, caplog):
         # 折叠子查询要的 node_id/is_latest/status 不在。
         conn.execute("CREATE TABLE evo_nodes (user_id TEXT, agent_id TEXT)")
         conn.execute("INSERT INTO evo_nodes VALUES ('default', 'default')")
-        with caplog.at_level(logging.WARNING, logger="persome.intent.recall"):
+        with caplog.at_level(logging.WARNING, logger="persome.retrieval.layered"):
             bundle = recall.assemble_background(
                 conn, scope="timeline", hints=["DeepSeek"], fold_superseded=True
             )
@@ -62,7 +62,7 @@ def test_unfolded_path_unaffected_no_warning(ac_root, caplog):
         _seed(conn)
         conn.execute("CREATE TABLE evo_nodes (user_id TEXT, agent_id TEXT)")
         conn.execute("INSERT INTO evo_nodes VALUES ('default', 'default')")
-        with caplog.at_level(logging.WARNING, logger="persome.intent.recall"):
+        with caplog.at_level(logging.WARNING, logger="persome.retrieval.layered"):
             bundle = recall.assemble_background(
                 conn, scope="timeline", hints=["DeepSeek"], fold_superseded=False
             )

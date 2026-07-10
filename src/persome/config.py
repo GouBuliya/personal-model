@@ -270,485 +270,6 @@ class MemoryDecayConfig:
 
 
 @dataclass
-class IntentRecognizerConfig:
-    # Session-level trajectory intent recognizer (R1).
-    # Reads the WHOLE active session as an ordered event log + a marked focus
-    # block + recall background, so intents that span minutes (a time proposed
-    # in one minute, agreed in the next) get stitched into one. Since R4 (#544)
-    # it is the sole intent producer — timeline's per-minute tagging is retired.
-    # Trigger: the recognizer fires on each timeline block flush (wired via the
-    # timeline task's on_blocks_produced hook), not on a fixed interval.
-    max_blocks: int = 200  # upper bound on session blocks fed (model-context guard)
-    # Cross-session backdrop: the most recent N timeline blocks from BEFORE the
-    # current session, fed as a lower-authority history layer so a commitment
-    # split across a session cut (5-min idle gap) can still be stitched. 0 to
-    # disable the history layer.
-    timeline_history_blocks: int = 20
-    # Generic fallback parse for apps WITHOUT a registered per-app parser (#whitelist-minimization):
-    # instead of the ``no_parser`` app-whitelist drop, build a best-effort ParsedConversation from the
-    # capture's ``visible_text`` (recent lines as ``direction="unknown"`` messages — no fabricated
-    # sender/direction) and let the LLM judge. Removes the implicit "only Feishu/WeChat/browser" app
-    # whitelist so any IM (Slack/Telegram/钉钉/…) is covered. Noise/cost from non-chat apps
-    # (terminals/editors) is bounded by the SAME downstream gates (seen-set/cold-start) + the per-app
-    # exponential backoff (a 0-intent app self-cools) + the precision-first LLM. Kill-switch to false
-    # restores the app-whitelist drop. See docs/superpowers/specs/2026-06-28-no-parser-removal-*.md.
-    fast_generic_fallback: bool = True
-    # Stream the fast-path recognizer's LLM call and fire on the first intent's required fields
-    # (everything before the display-only ``rationale``, reordered last) instead of waiting for the
-    # whole JSON body.
-    #
-    # DEFAULT OFF — the speculative early-fire is NOT worth its risk at the current payoff:
-    #   • measured win is only ~0.2s (the recognizer's output is short — ~220 chars stream in ~0.5s —
-    #     so TTFT dominates, not the body). And streaming WITHOUT early-fire is no faster than the
-    #     blocking call (``_safe_json`` still needs the full text), so the whole streaming path's value
-    #     rests on that ~0.2s.
-    #   • risk: if the model emits ``rationale`` NOT last (occasional LLM mis-ordering), the early
-    #     prefix is missing the fields after it (e.g. ``when_text``), so the early intent's dedup_key
-    #     differs from the final parse's → it does NOT fold → a SECOND row + a SECOND notification.
-    #     A truly mis-order-safe early-fire would have to wait for the first intent's closing brace
-    #     (incl. rationale) — which erases the latency win.
-    # Kept behind this flag (off) until a dedup-key-safe early-fire is worth building. The real daemon
-    # latency win is ``fast_disable_thinking`` (~3s), independent of this. true → streaming early-fire.
-    fast_streaming: bool = False
-    # Disable the model's extended "thinking" for the fast recognizer. The lean per-arrival judge
-    # doesn't need chain-of-thought, and DeepSeek's thinking is ~half the call's wall time (measured
-    # TTFT 3.3s→1.25s with thinking off). Quality-affecting (chain-of-thought can lift precision), so
-    # it is gated + must be validated against the intent-golden LLM eval before trusting it on. The
-    # ``thinking:{type:disabled}`` param rides the request body, which the relay forwards verbatim.
-    # Default ON: validated quality-safe by the intent-golden LLM A/B (thinking ON→OFF: fast recall
-    # 0.9545→0.9545 unchanged, fast precision 0.78→0.81 slightly up, slow P/R 1.0 unchanged, 0 form
-    # violations — all thresholds passed). Saves ~half the call's wall time (TTFT 3.3s→1.25s). Flip to
-    # false to restore chain-of-thought.
-    fast_disable_thinking: bool = True
-    # Model override for the fast path. Empty string inherits the
-    # ``intent_recognizer`` stage model. Set a faster/cheaper model here to keep
-    # the per-arrival call cheap without changing the slow recognizer's model.
-    fast_model: str = ""
-    # --- Fast-path throttling (recognition-side, distinct from capture's gaps) ---
-    # Minimum seconds between two fast-path passes for the SAME app (bundle id).
-    # This is a *recognition* rate limit, separate from capture's
-    # ``min_capture_gap_seconds``: even when content genuinely changes, we don't
-    # re-run the LLM for an app more than once per this window. Keep small so two
-    # quick real messages aren't both dropped. 0 disables per-app throttling.
-    per_app_min_interval: float = 2.0
-    # ``periodic`` (heartbeat / timer) captures are the lowest-signal trigger, so
-    # they get a much longer per-app interval than user-driven focus/input/value
-    # changes. Applies on top of ``per_app_min_interval`` for periodic triggers.
-    per_app_periodic_interval: float = 30.0
-    # Per-app exponential backoff: after this many CONSECUTIVE fast-path passes
-    # that reached the LLM but yielded 0 intents, the app is skipped for a
-    # growing cool-off (``backoff_base_seconds`` doubled per extra miss, capped at
-    # ``backoff_max_seconds``). Any pass that yields ≥1 intent resets the counter.
-    # 0 disables backoff. This is the main lever against the "white-burn" misses.
-    #
-    # Softened for the anchor-gate removal (option B, spec 2026-06-26): the lexical
-    # pre-gate is gone, so EVERY new arrival reaches the LLM and a chatty thread
-    # makes consecutive_miss climb fast. At the measured volume (~26 LLM calls/day)
-    # white-burn cost is negligible, so backoff biases to RECALL — fire later (6),
-    # recover fast (≤120s) — a real scheduling message after brief chatter must not
-    # be skipped for minutes. Calibrate against live fast_path_ticks post-deploy.
-    backoff_max_misses: int = 6
-    backoff_base_seconds: float = 20.0
-    backoff_max_seconds: float = 120.0
-    # Per-domain allowlist for browser (K2) captures: when non-empty, only URLs
-    # whose host is in this list pass the fast path. Empty = allow all. K1 (chat
-    # apps with no per-capture URL) is unaffected — this is scaffolding for K2.
-    domain_allowlist: list[str] = field(default_factory=list)
-    # --- Hy-Memory migration P0 (flags default off = byte-identical to today) ---
-    # Inject inferred user-inertia priors (schema-*.md, D2 layer) as the highest-
-    # priority recall section. Off until the schema layer exists; the seam keeps
-    # the recognizer call site stable so D2 only fills in the extraction.
-    schema_prior_enabled: bool = True
-    # R4 schema-level feedback loop: HUD dismiss/accept on an intent flows back
-    # onto the schemas whose inferences were injected when it was recognized
-    # (``Intent.schema_sources`` provenance) — deterministic confidence deltas
-    # (dismiss −0.05 / consume +0.03), stable↔forming flip on the 0.6 threshold,
-    # landed through the same ``supersede_entry`` seam the miner uses. ON by
-    # default — safe-by-construction: intents without schema_sources are a
-    # strict no-op, the write is best-effort (never blocks the status
-    # write-back), and a wrongly-decayed schema is recoverable (consumed raises
-    # it back; the next re-mine re-judges from facts).
-    schema_feedback_enabled: bool = True
-    # Reverse-loop G5.1 (spec 2026-06-26 §3.3): record one content-free
-    # ``intent_fold_ticks`` row whenever the sink FOLDS a re-recognized intent
-    # onto an existing one (instead of inserting) — so "the same thing keeps
-    # getting re-recognized N×/session" becomes a measurable signal for tuning the
-    # content-fold threshold. Telemetry only, best-effort, never perturbs the fold
-    # decision; kill-switch turns the emit off (the fold behaviour is unchanged).
-    intent_fold_telemetry_enabled: bool = True
-    # G5.2 (spec 2026-06-26 §3.3): when a dormant ``armed`` event-intent is TTL-reaped
-    # (never fired in 14 days), flow its source schemas a false-positive negative
-    # signal (same ``apply_intent_feedback`` seam as a HUD dismiss) instead of a
-    # silent dismiss — the schema that predicted a trigger that never happened
-    # should lose confidence. Distinct from the kind-level ``_dismissed_prior``
-    # (deliberately NOT trained on TTL reaps); best-effort, only acts when the
-    # reaped row has ``schema_sources``. Kill-switch restores the silent reap.
-    armed_reap_schema_feedback_enabled: bool = True
-    # Few-shot positive taste prior: inject the user's recent POSITIVE feedback
-    # (accepted/completed/manual_baseline from ~/.persome/logs/context-feedback.jsonl)
-    # as a "what this user acts on" preamble in the recognizer user prompt — the
-    # cheap per-user personalization win (the thing per-user fine-tuning would
-    # buy, ~free). Positive-only on purpose: dismiss is already double-covered by
-    # ``_dismissed_prior`` (R3) + the #533 hard cooldown gate, so re-adding it
-    # here would triple-count AND re-tread the documented-weak prompt-soft path
-    # #533 replaced (config.py:448). Fail-open (missing file / no positive rows
-    # → no preamble, recognition unchanged). See ``intent/taste_profile.py``.
-    taste_profile_enabled: bool = True
-    taste_profile_days: int = 21  # lookback window for the positive prior
-    taste_profile_max_items: int = 6  # newest N items after content-dedup
-    # Shared cacheable user-profile prefix: compose schema_prior + taste into ONE
-    # stable block rendered in the CACHED prompt prefix of BOTH recognizers —
-    # memory for the fast path (which had none) + an elegant volatility-ordered
-    # reorder for the slow path (schema_prior leaves the shared recall budget,
-    # freeing it for episodic recall). ON by default. OFF = byte-identical
-    # fallback: the slow path puts schema_prior back into ``assemble_background``
-    # and taste back in the volatile body (the pre-profile layout); the fast path
-    # sends its plain system string with no profile. See ``intent/profile.py``.
-    user_profile_enabled: bool = True
-    # Fold each recall hit to its evolution-chain head, read from ``evo_nodes``
-    # (is_latest=1 AND status='active', scope=default per Q4) — THE chain-head
-    # fold (SSOT switch §1.4). PR-7 retired the entry_chain derived index along
-    # with the ``recall_use_chain_index`` / ``recall_read_evo_nodes`` staging
-    # flags: evo_nodes is the only chain store. event-* entries (Q2: never in
-    # evo_nodes) keep the superseded-column judgment; while evo_nodes is
-    # missing/empty (fresh install pre-backfill) the fold degrades to the
-    # equivalent ``superseded = 0`` derived-column guard. False = legacy
-    # un-folded recall (returns superseded versions too).
-    recall_fold_superseded: bool = True
-    # --- 演化链轨迹 (separate flag) ---
-    # Surface the evolution trajectory in recall: when a hit lands on a chain
-    # head with superseded ancestors, append a compact ``← [曾]``/``← [精炼自]``
-    # trail (latest→oldest, rendered from the evo_nodes bidirectional pointers)
-    # so the recognizer sees态度演变, not just the latest belief. Decoupled from
-    # the fold ON PURPOSE: the trail only renders when BOTH this and
-    # ``recall_fold_superseded`` are on (and evo_nodes is ready); the fold alone
-    # stays a pure, equivalence-preserving fold.
-    recall_chain_trail: bool = True
-    # --- Hy-Memory migration 元认知标签 (meta-cognition layer — separate flag) ---
-    # Annotate recall hits with a reliability note (``⚠(低置信)`` / ``⚠(冲突未裁决)``)
-    # read from the ``entry_metadata`` index, so the recognizer can down-weight a
-    # low-confidence or conflicted memory instead of treating every fact as equally
-    # certain — the asymmetric-cost lever (a guess must not drive a proactive action
-    # a hard fact would). Default ON for everyone: it is safe-by-construction —
-    # existing memories carry no confidence tag (no entry_metadata row → no
-    # annotation), so it only ever affects NEW classifier-written memories, and its
-    # only effect is to make the recognizer MORE cautious on shaky ones (never more
-    # eager). Flip to false to fully suppress the recall annotation.
-    recall_include_confidence: bool = True
-    # --- R3 慢路增量化: cost gate on the slow path's full-session re-read ------
-    # The slow recognizer re-reads the WHOLE active session on every block flush
-    # (~60s), so the prompt grows linearly with session length (2h cap ≈ 120
-    # blocks) and the same bytes are re-sent 100+ times. When the session's
-    # event-log exceeds this many blocks, only the most recent N render verbatim;
-    # older blocks collapse into ONE deterministic one-line header (pure string
-    # assembly, no LLM: 「更早 X 个 block（HH:MM–HH:MM）已省略，涉及 app：…」).
-    # Default 60 (≈1h of blocks) — safe-by-construction: a block is only folded
-    # after ~N consecutive flushes fed it verbatim, its recognized intents are
-    # already persisted (dedup'd) and re-surface through recall's scene layer,
-    # so the fold drops only bytes the pipeline has already exhausted. Set 0 to
-    # disable (today's unbounded behavior, byte-identical prompt).
-    slow_path_max_blocks: int = 60
-    # --- #547 慢路锚定 pre-gate -------------------------------------------------
-    # The slow path fires on EVERY block flush but only ~14% of ticks recognize
-    # anything — most minutes carry no schedulable signal at all. When on, the
-    # recognizer scans the blocks NEW since the last tick (entries +
-    # focus_structured/focus_excerpt text) with the slow-anchor regex
-    # (``event_source.SLOW_ANCHOR_RE`` — the fast ``_ANCHOR_RE`` plus
-    # euphemism/willingness cues, one composed source) and skips the LLM call
-    # when none hits. Old blocks were covered by the previous tick (LLM-read or
-    # gate-proven anchorless), so the miss risk is bounded and arguable (漏 =
-    # 有限损失). Skipped ticks are still recorded in ``recognition_ticks``
-    # (outcome=skipped_no_anchor) without polluting hit_rate.
-    #
-    # DEFAULT FLIPPED TO False (gate OFF): on real data the lexical gate skipped
-    # only ~12% of ticks while starving info_need/reminder/assignment (recall
-    # 6-33%) — they were recognized only ~26min late, when an unrelated anchor
-    # finally forced a full pass. Running the recognizer on EVERY block-flush tick
-    # costs only ~+12% calls (the gate barely saved) and removes that latency. The
-    # output cost of the now-more-frequent empty calls is bounded by the prompt
-    # itself: the recognizer no longer emits the (unused) scene_state, so a
-    # no-intent tick returns just `{"intents": []}` (~a few tokens). Input is the
-    # dominant cost and is largely prompt-cached. Flip back to True (+ pick
-    # pregate_mode below) to re-enable the cost gate.
-    slow_pregate: bool = False
-    # --- pre-gate discriminator: regex (default/baseline) | bge | hybrid --------
-    # The slow pre-gate above is a lexical SLOW_ANCHOR_RE cost gate: it catches
-    # meeting/commitment cues well but starves info_need / search / un-clocked
-    # reminder / assignment (measured recall info_need ~17-62%, reminder ~6-17%),
-    # so those intents only get recognized when an unrelated anchor later forces a
-    # full-session pass — the latency users feel. ``pregate_mode`` swaps the
-    # per-block discriminator WITHOUT touching the rest of the gate logic:
-    #   "regex"  — block_has_anchor (SLOW_ANCHOR_RE). The lexical baseline. DEFAULT.
-    #   "bge"    — an OPTIONAL bge-small-zh ONNX encoder + a tiny trained head scores
-    #              P(block worth an LLM call) >= pregate_bge_threshold. Fail-open:
-    #              falls back to "regex" whenever the model/onnxruntime is absent.
-    #   "hybrid" — regex OR bge (union: keep the regex hits, add bge recall).
-    # The bge model is NO LONGER bundled (dropped to keep the repo/deps lean). To use
-    # "bge"/"hybrid", `pip install onnxruntime tokenizers` and set pregate_bge_model_dir
-    # to your own exported model dir; otherwise both silently degrade to "regex".
-    # (When it WAS bundled, the pregate A/B oracle showed hybrid lifted slow-lane recall
-    # 30%→60% over regex — that gain now requires a BYO model.)
-    pregate_mode: str = "regex"
-    pregate_bge_threshold: float = 0.5
-    pregate_bge_model_dir: str = (
-        ""  # empty = disabled (no bundled model); set to a BYO exported dir to enable
-    )
-    # --- 慢路触发：统一入口 + LLM 路由（不再每 tick 都跑慢路）-------------------
-    # `every_block` = 旧行为：每个出块 block-flush tick 都跑 recognize_session（贵）。
-    # `escalation`  = 统一入口：快路 LLM 是唯一决策点——它在每条 capture 上判断
-    #   `needs_trajectory`（这条只看当前会话/单条够不够 vs 需要跨窗口/跨会话轨迹），
-    #   true 时给当前会话打升级标记（intent/escalation.py）；block-flush hook 只对
-    #   被升级的会话跑慢路。这样"要不要进慢路"由 LLM 决定,而不是定时/锚点。
-    #   召回兜底：被标记 OR 距上次慢路 ≥ `slow_fallback_minutes` 才跑；#621 finalize
-    #   终局扫仍在(会话结束必补一次)。回退=设 `every_block`。
-    slow_trigger: str = "escalation"
-    slow_fallback_minutes: float = 10.0  # 长兜底：未被升级的会话也每 N 分钟跑一次;0=纯靠升级
-    # --- #576 跨 tick 缝合例外: dangling-anchor stitch --------------------------
-    # The #547 skip drops the "问句 → 隔 tick 确认" shape: tick N reads an
-    # anchored *question* ("周五开会吗?") and recognizes nothing; tick N+1's only
-    # new block is a bare confirmation ("行") with no anchor of its own → the
-    # gate skips and the question (now an OLD block) is never re-read → the
-    # commitment is never stitched. When a NEW block carries a bare confirmation
-    # cue AND one of the last N OLD blocks carries a slow anchor, the pre-gate
-    # does NOT skip — it re-runs the LLM so the pair can be stitched. The
-    # two-signal AND + this bounded look-back keep it surgical (a bare "好" alone
-    # never un-skips; bare confirmations stay OUT of SLOW_ANCHOR_RE because they
-    # are too high-frequency to be a primary anchor) so the steady-state skip
-    # rate is preserved. 0 disables the exception (pure #547 behavior).
-    slow_pregate_stitch_lookback_blocks: int = 5
-    # --- #621 终局识别 pass (session finalization) ------------------------------
-    # The slow recognizer only ever runs against the ACTIVE session (block-flush
-    # hook → current_snapshot). The timeline tick lags the session-window close
-    # (~60s), so when a session is hard-cut its trailing blocks materialise AFTER
-    # the cut — and current_snapshot is now None or the NEXT session, so those
-    # tail blocks never get a recognition pass for the session they belong to. A
-    # session whose only schedulable signal lived in those tail blocks therefore
-    # gets ZERO recognition for its whole lifetime (~8.3% of block-producing
-    # sessions in the field). When on, the block-flush hook ALSO sweeps recently-
-    # ended sessions that were never finalized and runs one terminal
-    # recognize_session over each — gated by the SAME #547 pre-gate (skips when no
-    # anchor in the un-scanned increment) and deduped by the unified sink, so the
-    # added cost is ~one bounded, idempotent pass per ended session, not per tick.
-    # The grace window below keeps the pass from firing before the aggregator has
-    # had time to land the tail blocks (firing too early would re-create the bug).
-    # Marked one-shot via sessions.recognized_final_at. Set false to disable.
-    finalize_pass: bool = True
-    # Seconds a session must have been ENDED before the finalization pass runs —
-    # the slack for the timeline aggregator to materialise blocks that close after
-    # the cut. Default 180s (3× the 60s timeline tick), comfortably past the
-    # window-close + tick latency. Lower bounds the recognition latency for a
-    # truly-final session; higher is safer against missing a very-late block.
-    finalize_grace_seconds: int = 180
-    # --- R3 material-change-republish ------------------------------------------
-    # On a dedup hit, compare the re-recognition against the stored row with the
-    # deterministic rules in ``intent.sink.material_change`` (confidence ratchet
-    # ≥ +0.15 / provenance counterpart_proposed→user_committed). A material
-    # change UPDATEs the row in place (id + status preserved; consumed/dismissed
-    # are never resurrected) and republishes it on the SSE stream marked
-    # ``updated`` (not a new row). Republish count is bounded by construction
-    # (the confidence ratchet allows at most ~⌈1/0.15⌉ fires per intent;
-    # provenance upgrade fires once), honoring 克制优先 — 宁可漏 republish 不可
-    # 重复打扰. False → dedup hits skip outright (legacy surface-once behavior,
-    # byte-identical).
-    material_republish: bool = True
-    # Feed recent event-daily entries (session summaries) into the slow path's
-    # recall background. Hours of lookback; 0 disables the layer.
-    recall_recent_events_hours: int = 48
-    # --- recall 主预算 (#611, ablation 2026-06-10 §4 落地) ------------------------
-    # The shared char budget for ``assemble_background``'s main layers
-    # (schema_prior → scene → behavior → fact → keyword → events). The 2026-06-10
-    # ablation proved that when DECISION-RELEVANT memory (the fact/behavior
-    # layers) is squeezed out of this budget, slow-path recognition quality
-    # collapses (negative-suppression 6/6 misfires, anchor resolution → 0), and
-    # set the action gate: raise the budget to 2400 once the fact-layer squeeze
-    # rate is significant (>10%). The #647-corrected telemetry on real traffic
-    # showed fact-layer squeeze at ~66% of calls (6.6× the gate) — the squeeze is
-    # on the high-value layer, NOT the cheap keyword/events tail the issue
-    # assumed — so this lands the ablation's pre-authorized 2400 default. It is
-    # NOT a free dial: decision-layer demand has a long tail (p90 ~3.5k, max
-    # ~5.6k chars on the measured corpus), and 喂得多≠更好 — over-filling dilutes
-    # the prompt and burns volatile-segment tokens with no cache hit; the
-    # ablation found NO benefit beyond 2400 and a real dilution risk at 4800.
-    # 2400 clears ~44% of the decision-layer squeezes at ~+8% input tokens; the
-    # residual long tail is a DELIBERATE capacity tradeoff (漏低优先层 = 有限
-    # 损失), not chased higher.
-    #
-    # 2400 → 2600 (dead-semantic-layer fix): the #647 demand model PREDATED the
-    # semantic layer, which was silently dead in production (oversized embed query
-    # — fixed alongside). With it working, the recall_budget_sweep over 40 real
-    # sessions shows semantic is now the LARGEST decision layer (~1610 chars/
-    # session, > fact ~635 > scene ~16), so the decision-layer demand ceiling rose
-    # from ~835 to ~2261. At 2400 semantic was squeezed in ~5% of sessions (a
-    # 16-char shortfall); 2600 fits scene+fact+semantic with ~0 squeeze while the
-    # keyword-fallback dilution zone only begins ~2600 — so this is the smallest
-    # cap that holds the now-real decision demand, NOT a move toward the 4800
-    # dilution risk (still well under it). The faithful recognition A/B on the
-    # FIXED layer is no-harm (0 stable intent removals) + a diffuse non-negative
-    # firing lean within the noise band — so giving the layer its full budget is
-    # safe; the keyword tail past the decision layers stays a deliberate漏-tail.
-    recall_max_chars: int = 2600
-    # --- Semantic recall layer (dense te3-large ⊕ the lexical layers) ------------
-    # The lexical recall layers (keyword/fact/behavior) need a hint TOKEN to land
-    # on the right memory; they can never recall a conceptually-related fact that
-    # shares no words with the current scene (user booking a flight → recall their
-    # travel preferences). A semantic layer embeds the scene and pulls dense-similar
-    # durable memory, folded through the SAME evo_nodes chain-head fold. Default ON
-    # but the daemon only ACTIVATES it when an embeddings endpoint (OPENAI_*) is
-    # configured AND ``[search] hybrid_enabled`` (``embeddings_client.available()``);
-    # a no-creds install is byte-identical (``fts._dense_pool`` fail-opens to []).
-    recall_semantic_enabled: bool = True
-    # Dense hits surfaced into the slow-path background (sits AFTER durable facts,
-    # before the keyword fallback, so it never squeezes precise facts out).
-    recall_semantic_top_k: int = 5
-    # Fast path (per-arrival K1): same semantic recall, but embedded ONLY for gate
-    # survivors (right before the LLM call, never per raw capture) + a per-scope TTL
-    # cache so repeated arrivals in one session re-embed ≤~1/min. Keeps the <5s budget.
-    fast_recall_semantic_enabled: bool = True
-    fast_recall_semantic_top_k: int = 3
-    fast_recall_semantic_ttl_seconds: int = 60
-    # Reverse-loop POSITIVE prior (spec 2026-06-26 G2/G3): inject a damped,
-    # capped "kinds the user actually FINISHES" hint from the typed ``completed``
-    # intents (distinct from the coarse jsonl taste few-shot). This flag is the
-    # A/B switch — flip OFF for the off-arm of the longitudinal oracle (then the
-    # slow path is byte-identical to before). Default ON; the prior is empty (so
-    # also byte-identical) until completions accumulate.
-    recall_completed_prior_enabled: bool = True
-    # --- counterpart_proposed confidence cap (production over-fire fix) ----------
-    # The prompt tells the model a ``counterpart_proposed`` item (the OTHER party
-    # proposed a time, the user hasn't responded) should carry LOW confidence
-    # (建议 ≤0.6) — by design these are "lightly handed back", not auto-surfaced.
-    # But the model ignores that soft instruction ~77% of the time (production:
-    # 64/83 counterpart_proposed meetings landed ≥0.7), so they sail past the app
-    # sentinel's 0.7 surface bar and nag — counterpart_proposed meetings have a
-    # ~10% accept rate vs ~56% for user_committed. The generic ``_clamp_confidence``
-    # only caps inferred intents at 0.9 (``CONFIDENCE_CAP_INFERRED``), far above
-    # the surface bar. This is a SEPARATE, lower deterministic cap that ENFORCES
-    # the prompt's stated intent at the single sink entrance (covers fast K1 / slow
-    # trajectory / meeting pack). A capped intent still PERSISTS (recall/memory keep
-    # it) — it just no longer crosses the proactive-surface bar. Set to 0.9 to
-    # restore the prior behaviour (cap == the generic inferred cap = no-op). 0.6
-    # matches the prompt; 0.0 disables surfacing of all counterpart_proposed.
-    counterpart_confidence_cap: float = 0.6
-    # --- per-kind zero-nag confidence ceilings (production over-fire fix) --------
-    # The prompt assigns three kinds an explicit LOW confidence ceiling (≤0.4) so
-    # they are ZERO-NAG by design — `info_need` (something the user wants to read/
-    # check), `meeting_hint` (a vague coordination wish), `backlog` (a deadline-free
-    # deferred to-do). All three are low-cost memory/recall signals that must stay
-    # BELOW the app sentinel's 0.7 surface bar — they are never meant to pop a
-    # proactive proposal. The model honours this unevenly: production
-    # `meeting_hint`/`backlog` are 100% ≤0.4, but **`info_need` lands >0.4 in 97% of
-    # rows (69/81 ≥0.7)**, so miscalibrated info_need crossed the surface bar and
-    # nagged (7 surfaced-and-rejected). This deterministic per-kind ceiling enforces
-    # the prompt's stated design at the single sink entrance — UNCONDITIONALLY (even
-    # a `user_committed` info_need is a low-cost memory signal, not a high-confidence
-    # surface), composing with (min of) the provenance cap above. A capped intent
-    # still persists (recall/memory keep it); only its surfacing eligibility drops.
-    # The COMPLETE set of the prompt's zero-nag kinds is enforced (meeting_hint /
-    # backlog don't currently violate, but enforcing their stated ceiling is
-    # defensive + complete, costless today, catches future drift). This flag is the
-    # kill-switch — set false to stop enforcing the kind ceilings.
-    enforce_kind_confidence_ceilings: bool = True
-    # --- incomplete-actionable suppression (production over-fire fix) ------------
-    # Some seed kinds become NON-ACTIONABLE without one load-bearing field: a
-    # `reminder` with no `text` (no WHAT to remind), a `meeting`/`calendar` with no
-    # `when_text` (no WHEN to schedule). The existing soft validation only
-    # down-weights ×0.8 (PAYLOAD_MISSING_FIELD_PENALTY), which leaves a 0.9 intent at
-    # 0.72 — still above the app sentinel's 0.7 surface bar, so an empty reminder
-    # still nags. Production (persome intent-audit): 6 of 6 user-rejected reminders are
-    # empty-`text`, vs accepted reminders all carry text — a clean separator. This
-    # caps such load-bearing-incomplete intents to ``_INCOMPLETE_ACTIONABLE_CAP``
-    # (below the surface bar). NOTE the deliberate ASYMMETRY: `assignment` is NOT in
-    # the load-bearing set — 9 of 16 ACCEPTED assignments are missing `task_text`
-    # (the `assigned_by`/channel carry it), so its missing field stays a SOFT
-    # down-weight. Set false to restore the prior all-soft behaviour (kill-switch).
-    suppress_incomplete_actionable_intents: bool = True
-    # --- #533 负反馈 (kind, scope) 级闭集硬冷却 ----------------------------------
-    # Before #533 the negative-feedback loop was prompt-soft only: dismissed
-    # intents render as a "最近被忽略 N 次" prior the model is asked to honor; the
-    # only HARD block was an exactly-equal dedup_key, so a kind dismissed many
-    # times still re-surfaced under a new wording (new key). This闭集硬冷却 turns
-    # repeated dismissals into a deterministic gate at the unified sink (covers
-    # fast K1 / slow trajectory / meeting pack uniformly, bypassing the prompt):
-    # when a kind is dismissed ≥``cooldown_dismiss_threshold`` times within
-    # ``cooldown_window_days`` IN THE SAME SCOPE, that (kind, scope) enters a HARD
-    # cooldown for ``cooldown_hours`` measured from the most-recent dismissal —
-    # intents of that kind in that scope are dropped (not persisted, not surfaced)
-    # for the duration. The asymmetric-cost constitution makes this the right
-    # direction: 弹错=复利损失, 漏报=有限损失, so trading recall for precision on a
-    # kind the user keeps rejecting is net-positive. Two deliberate tightenings
-    # vs the first cut (avoid the「惩罚高反馈用户」trap): (1) (kind, scope) rather
-    # than global by-kind, so dismissing reminders in one session can't mute them
-    # system-wide; (2) the counting window defaults to the SAME magnitude as the
-    # cooldown (1 day vs 24h) — a wide 7-day window + sliding 24h reset would put
-    # an active feedback-giver into near-permanent cooldown over sparse dismissals.
-    # High-confidence / user_committed intents are EXEMPT from the gate (see
-    # sink.persist_intent_result): the hard闸 only压 model-inferred mid/low
-    # confidence intents — a verbatim零熵承诺 (宪法 §5) is never denied. The
-    # cooldown ALWAYS expires (time-bounded, never a lifetime ban — re-calibration
-    # / manual release is #534, out of this batch). ON by default —
-    # safe-by-construction: it only ever fires AFTER the user has explicitly
-    # dismissed the same kind 3× within ~a day in one scope, every suppression is
-    # recorded as telemetry (cooldown_suppressions — 拒绝是金矿, observability is
-    # never gated), and it self-heals once the latest dismissal ages out. Flip
-    # ``cooldown_enabled`` false to restore prompt-soft-only.
-    cooldown_enabled: bool = True
-    cooldown_window_days: float = 1.0
-    cooldown_dismiss_threshold: int = 3
-    cooldown_hours: float = 24.0
-
-    # Fuzzy content fold (重复推送相同语义修复): the ungrounded content fold
-    # (sink._find_content_fold_target) folds info_need/reminder/assignment by
-    # EXACT normalized text-body equality. Real recognition drifts wording every
-    # session, so the SAME to-do lands as many separate open rows (生产实测：一件
-    # 「为 PR #102 加 GitHub Actions secret/labels」记成 6 条). When enabled, the
-    # fold also collapses bodies whose char-bigram Jaccard ≥ content_fold_similarity
-    # (both bodies long enough; short ones stay exact-only) — deterministic,
-    # zero-LLM, governed by the golden-set gate. false = exact-only (pre-fuzzy).
-    content_fold_fuzzy_enabled: bool = True
-    # Conservative by design: distinct same-topic facts must NOT fold (golden
-    # negatives pin the floor); only near-identical re-statements clear it.
-    content_fold_similarity: float = 0.72
-    # Evidence-driven auto-close (识别即更新状态): when a new capture shows an
-    # existing OPEN intent is已做/已拒/被取代, the recognizer's resolution channel
-    # flips it to the terminal ``resolved`` status (event-driven, rides the
-    # per-capture path — no new poll). **DEFAULT OFF (kill-switch)**: off = the
-    # ``resolutions`` LLM output is parsed but never acted on (byte-identical
-    # behavior). Precision is paramount — a wrong auto-close drops a todo the user
-    # did NOT do, worse than leaving it stale — so two independent signals (the
-    # LLM resolution AND the deterministic fold-matcher) must agree before a close.
-    auto_close_resolved_enabled: bool = False
-    # Confidence floor for an evidence auto-close, independent of recognition
-    # confidence. A resolution below this is dropped.
-    auto_close_min_confidence: float = 0.85
-    # Higher floor to auto-close a high-value ``user_committed`` promise (and only
-    # on outcome=done) — a thing the user said in so many words must not be closed
-    # on a weak signal.
-    auto_close_committed_min_confidence: float = 0.95
-    # Semantic content fold (intent.embeddings, bge-small-zh cosine): on a char-bigram
-    # MISS, a second chance via sentence-embedding cosine — folds PARAPHRASES the lexical
-    # layer can't see. **DEFAULT OFF (opt-in)**: adversarial review (test_dedup_rework)
-    # proved a one-keyword-apart DISTINCT to-do ("加密钥" vs "加标签", cos 0.85; "调研连接"
-    # vs "调研部署", cos 0.90) sits in the SAME cosine band as a genuine paraphrase (cos
-    # 0.86–0.89) — no threshold separates them, so a deterministic cosine fold over-folds
-    # the 误吞=0 precision guards. The semantic mid-band is the LLM's job (recognizer
-    # dedup_against_open + the app-side re-push judge). Flip on only where recall > precision.
-    semantic_fold_enabled: bool = False
-    # Cosine threshold when enabled — HIGHER than the Jaccard 0.72 because cosine is dense.
-    semantic_fold_similarity: float = 0.82
-    # Layer 2 — recognizer-time dedup: inject today's still-open intents (cross-scope)
-    # into the slow recognizer prompt + instruct the LLM not to re-emit a semantically
-    # existing commitment. Stops the duplicate before it's generated (the sink fold is
-    # the at-insert backstop). false ⇒ recognizer never sees the existing-open checklist.
-    dedup_against_open: bool = True
-    # Fold the APP-side semantic-dedup INTO this one recognition call: also feed the user's LIVE Persome
-    # tasks + recently-dismissed proactive todos (read off-disk from ~/.persome) into the dedup checklist,
-    # so a just-arrived message that re-states something the user ALREADY has a task for (or just
-    # dismissed) isn't emitted — without a SECOND LLM round-trip in the app. Lets the app drop its
-    # judge LLM (recognition↔memory↔execution share one decision). false ⇒ checklist = open intents only.
-    dedup_against_app_state: bool = True
-
-
-@dataclass
 class SkillCheckConfig:
     # Detect skill matches inside the per-minute timeline LLM call.
     enabled: bool = True
@@ -758,10 +279,9 @@ class SkillCheckConfig:
 @dataclass
 class SchemaConfig:
     # D2 schema miner daily tick: clusters durable facts per file and induces
-    # predictive ``schema-*.md`` priors the intent recognizer reads back. Scheduled
-    # after daily-safety-net (23:55) so it sees the latest closed sessions.
-    # Disabling it stops production of new schemas only —
-    # existing schema-*.md files stay grep-able and keep feeding the intent prior.
+    # predictive ``schema-*.md`` faces for the personal model. Scheduled after
+    # daily-safety-net (23:55) so it sees the latest closed sessions. Disabling it
+    # stops production of new schemas only; existing schema files stay readable.
     enabled: bool = True
     daily_tick_hour: int = 0
     daily_tick_minute: int = 15
@@ -770,8 +290,8 @@ class SchemaConfig:
     # deterministic behavior pre-filter + LLM judge (no embedding). Runs as the tail
     # of the same schema-tick (no new daemon task). Default ON: the downside is
     # bounded — a low-quality collision gets a low LLM confidence → born ``forming``
-    # → NOT injected into the recognizer prior (only ``stable`` ≥ min_confidence
-    # fusions are), and the sweeper-prompt is biased to refuse strained merges. The
+    # → excluded from active model reads (only ``stable`` >= min_confidence fusions
+    # are visible), and the sweeper prompt is biased to refuse strained merges. The
     # main cost is the per-tick LLM probes, capped by the topic/behavior pre-filter.
     cross_domain_enabled: bool = True
     cross_domain_behavior_max_distance: float = 0.5  # ≤ this == "behavior-near" (pre-filter)
@@ -1005,18 +525,17 @@ class DebugHudConfig:
     # What the debug HUD (the always-on-top panel shown in debug mode) renders.
     # A single allowlist over every content block; the HUD shows only the keys
     # listed here. Valid keys:
-    #   intent / tool_call / thinking / stage  — AGENT ACTIVITY event kinds
+    #   tool_call / thinking / stage           — AGENT ACTIVITY event kinds
     #   health                                 — daemon health + counts
     #   memory                                 — recent memory writes
-    # Default is intents only, so the panel is quiet by default; add keys to
+    # Default is stage only, so the panel is quiet by default; add keys to
     # surface more. Read live via GET /config/debug-hud (no daemon restart).
-    show: list[str] = field(default_factory=lambda: ["intent"])
+    show: list[str] = field(default_factory=lambda: ["stage"])
 
 
 # Valid [debug_hud] show keys, in display order. The app's gear menu offers
 # exactly these; the PUT endpoint filters writes to this set.
 DEBUG_HUD_KEYS: tuple[str, ...] = (
-    "intent",
     "tool_call",
     "thinking",
     "stage",
@@ -1078,7 +597,6 @@ class Config:
     search: SearchConfig = field(default_factory=SearchConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
     pattern_detector: PatternDetectorConfig = field(default_factory=PatternDetectorConfig)
-    intent_recognizer: IntentRecognizerConfig = field(default_factory=IntentRecognizerConfig)
     memory_delta: MemoryDeltaConfig = field(default_factory=MemoryDeltaConfig)
     memory_decay: MemoryDecayConfig = field(default_factory=MemoryDecayConfig)
     orphan_reaper: OrphanReaperConfig = field(default_factory=OrphanReaperConfig)
@@ -1108,10 +626,9 @@ class Config:
     # 幻觉后默认 10→20（B 步），sweep 复跑护带。
     edge_promote_fanout: int = 20
     capture_encrypt_screenshots: bool = True
-    # Wave 2b: #7 actionable-subset extended retention + provenance · #8 view_capture.
+    # Extended retention for user-input-anchored capture receipts.
     capture_extended_retention_enabled: bool = True
     capture_actionable_retention_days: int = 7
-    view_capture_enabled: bool = True
     # Wave 3: #9 Rewind REST endpoints (/rewind/day, /rewind/screenshot).
     rewind_enabled: bool = True
 
@@ -1229,9 +746,6 @@ def load(path: Path | None = None) -> Config:
         pattern_detector=_build_dataclass(
             PatternDetectorConfig, _as_dict(raw.get("pattern_detector"))
         ),
-        intent_recognizer=_build_dataclass(
-            IntentRecognizerConfig, _as_dict(raw.get("intent_recognizer"))
-        ),
         memory_delta=_build_dataclass(MemoryDeltaConfig, _as_dict(raw.get("memory_delta"))),
         memory_decay=_build_dataclass(MemoryDecayConfig, _as_dict(raw.get("memory_decay"))),
         orphan_reaper=_build_dataclass(OrphanReaperConfig, _as_dict(raw.get("orphan_reaper"))),
@@ -1257,7 +771,6 @@ def load(path: Path | None = None) -> Config:
             raw.get("capture_extended_retention_enabled", True)
         ),
         capture_actionable_retention_days=int(raw.get("capture_actionable_retention_days", 7)),
-        view_capture_enabled=bool(raw.get("view_capture_enabled", True)),
         rewind_enabled=bool(raw.get("rewind_enabled", True)),
     )
 
@@ -1451,72 +964,6 @@ mcp_connect_daemon = true         # auto-connect to the daemon's own MCP server
 # command = "mcp-filesystem"
 # args = ["--root", "/Users/me/projects"]
 
-[intent_recognizer]
-max_blocks = 200                  # upper bound on session blocks fed to the model
-timeline_history_blocks = 20      # recent pre-session timeline blocks fed as cross-session backdrop (0 to disable)
-fast_model = ""                   # model override for the fast path (empty = inherit intent_recognizer stage model)
-per_app_min_interval = 2.0        # min seconds between fast-path passes for the same app (recognition rate limit; 0 disables)
-per_app_periodic_interval = 30.0  # longer per-app interval for periodic/heartbeat triggers (lowest-signal)
-backoff_max_misses = 6            # consecutive 0-intent LLM passes before cool-off (softened for anchor-gate removal: bias recall)
-backoff_base_seconds = 20.0       # base cool-off; doubles per extra miss beyond the threshold
-backoff_max_seconds = 120.0       # cap on the backoff cool-off (≤2min recover so a real msg after chatter isn't buried)
-domain_allowlist = []             # browser (K2) per-domain allowlist; empty = allow all; K1 chat apps unaffected (scaffold)
-schema_prior_enabled = true       # MIGRATION ACTIVATED: inject D2 schema-*.md inertia priors (predictive先验) into recall; [] no-op until schemas exist
-schema_feedback_enabled = true    # R4 反馈闭环: HUD dismiss/accept 回灌来源 schema confidence (−0.05/+0.03, 0.6 阈值翻 stable↔forming); 无 schema_sources 的 intent 零行为
-taste_profile_enabled = true      # Few-shot 正先验: 把该用户最近的正向反馈（accepted/completed/manual_baseline，读 ~/.persome/logs/context-feedback.jsonl）作为「这类他真会动手」的简短前注注入识别器 user prompt——per-user 个性化里 per-user 微调唯一能买到的东西，~free。刻意只做正例：dismiss 已被 _dismissed_prior(R3) + #533 硬冷却闸双重覆盖，再加只会三重计数 + 重踩 #533 已废弃的弱 prompt-soft 路。fail-open（无文件/无正例→不加前注，识别不变）
-taste_profile_days = 21           # 正先验的回看窗口（天）
-taste_profile_max_items = 6       # 渲染进前注的最新 N 条（content 去重后）
-user_profile_enabled = true       # 共享可缓存用户画像前缀: 把 schema_prior + taste 合成一个稳定块, 放进快路 AND 慢路的缓存前缀 —— 快路从此有 memory（原本裸 system 无 memory）, 慢路按易变性重排（schema 让出 recall 预算给情景召回）。off = byte-identical 回退（schema 回到 background、taste 回到易失体、快路裸 system）
-recall_fold_superseded = true     # fold recall hits to evolution-chain heads, read from evo_nodes — the SSOT (§1.4; entry_chain + its staging flags retired in PR-7; pre-backfill degrades to the equivalent superseded-column fold)
-recall_chain_trail = true         # append ← [曾]/[精炼自] evolution trail to chain heads (rendered from evo_nodes bidirectional pointers; needs the fold on + evo_nodes ready)
-recall_include_confidence = true  # meta-cognition: annotate recall hits with ⚠(低置信)/⚠(冲突未裁决) from entry_metadata; safe-by-construction (only affects new tagged memories), ON for everyone
-slow_path_max_blocks = 60         # R3 cost gate: most recent N session blocks render verbatim in the slow-path prompt; older blocks fold into ONE deterministic header line (no LLM). 0 = unbounded legacy prompt (byte-identical)
-slow_pregate = true               # #547 锚定 pre-gate: skip the slow-path LLM call when the blocks NEW since the last tick carry no slow-anchor (SLOW_ANCHOR_RE = fast _ANCHOR_RE + euphemism cues); skips recorded as recognition_ticks outcome=skipped_no_anchor (hit_rate unpolluted). false = every block flush burns one LLM call (legacy)
-slow_pregate_stitch_lookback_blocks = 5  # #576 跨 tick 缝合例外: do NOT skip when a NEW block carries a bare confirmation cue (行/好/可以/ok) AND one of the last N OLD blocks carries a slow anchor — re-run the LLM so a "问句 → 隔 tick 确认" commitment gets stitched. Bare confirmations stay OUT of SLOW_ANCHOR_RE (too high-frequency); the two-signal AND keeps it surgical. 0 disables (pure #547)
-pregate_mode = "regex"            # slow pre-gate discriminator: "regex" (lexical, DEFAULT) | "bge" | "hybrid" (regex ∪ bge). The bge encoder is NOT bundled — "bge"/"hybrid" require `pip install onnxruntime tokenizers` + a BYO pregate_bge_model_dir, else they fail-open to regex. (When bundled, hybrid lifted slow-lane recall 30%→60%; that gain now needs a BYO model.)
-material_republish = true        # R3: dedup-hit re-recognition with a material change (confidence ratchet >= +0.15 / counterpart_proposed→user_committed) UPDATEs the row (id+status kept, dismissed never resurrected) and republishes marked updated; false = legacy surface-once
-recall_recent_events_hours = 48   # feed event-daily session summaries from the last N hours into the slow path's recall background (lowest priority, shares the main budget last); 0 = off
-recall_max_chars = 2600           # #611: shared char budget for assemble_background's layers (schema_prior→scene→behavior→fact→semantic→keyword→events). 1200→2400 (#647: fact squeezed ~66%), then 2400→2600 after the dead-semantic-layer fix: with the semantic layer working it's now the LARGEST decision layer (~1610 chars/session per the recall_budget_sweep), so the decision-demand ceiling rose ~835→~2261; 2600 fits scene+fact+semantic at ~0 squeeze (was ~5% at 2400) and the keyword-fallback dilution zone only starts ~2600 — smallest cap that holds the now-real demand, still far under the 4800 dilution risk. Faithful A/B on the fixed layer = no-harm
-cooldown_enabled = true           # #533 (kind, scope) 级闭集硬冷却: a kind dismissed >= cooldown_dismiss_threshold times within cooldown_window_days IN THE SAME SCOPE enters a HARD cooldown — that (kind, scope)'s intents are dropped at the sink (bypass prompt, covers fast/slow/meeting) for cooldown_hours from the latest dismissal (anchored on dismissed_at, not recognition ts). user_committed / high-confidence (>=0.9) intents are EXEMPT; every suppression is logged to cooldown_suppressions telemetry. Upgrades the prompt-soft-only negative prior into a deterministic gate (弹错=复利损失). false = restore prompt-soft-only
-cooldown_window_days = 1          # #533: lookback window (days) for counting a (kind, scope)'s dismissals — kept SAME-magnitude as cooldown_hours so a sparse-over-a-week feedback-giver is not near-permanently cooled
-cooldown_dismiss_threshold = 3    # #533: dismissals of one (kind, scope) within the window needed to trigger the hard cooldown
-cooldown_hours = 24.0             # #533: cooldown duration measured from the MOST RECENT dismissal — always expires (no lifetime ban; re-calibration is #534). <=0 disables defensively
-content_fold_fuzzy_enabled = true # 重复推送相同语义修复: the ungrounded content fold (sink._find_content_fold_target) folds info_need/reminder/assignment by EXACT normalized body equality; wording drift每 session 让同一件 to-do 落成多条 open 行（生产实测一件事 6 条）. When on, the fold ALSO collapses bodies whose char-bigram Jaccard >= content_fold_similarity (both bodies long enough; short stay exact-only) — deterministic, zero-LLM, governed by the golden-set gate. false = exact-only (pre-fuzzy)
-content_fold_similarity = 0.72    # 重复推送相同语义修复: char-bigram Jaccard threshold for the fuzzy content fold. Conservative — distinct same-topic facts must NOT fold (golden negatives pin the floor); only near-identical re-statements clear it
-semantic_fold_enabled = false     # 语义去重: on a char-bigram MISS, second-chance fold via sentence-embedding cosine (intent.embeddings, bge-small-zh). DEFAULT OFF (opt-in): a one-keyword-apart DISTINCT to-do sits in the same cosine band as a genuine paraphrase (adversarial review: test_dedup_rework), so a deterministic cosine fold over-folds the 误吞=0 guards. The semantic mid-band is the LLM's job (recognizer dedup_against_open + app-side re-push judge). Flip on only where recall > precision
-semantic_fold_similarity = 0.82   # 语义去重: cosine threshold for the embedding fold. HIGHER than Jaccard's 0.72 — cosine is dense (two same-topic CN work strings already ~0.5–0.7); golden negatives pin this floor
-dedup_against_open = true         # 语义去重 Layer 2: feed today's still-open intents (cross-scope) into the slow recognizer prompt + instruct the LLM not to re-emit a semantically-existing commitment — stops the duplicate before it's generated. false = recognizer doesn't see the existing-open checklist
-auto_close_resolved_enabled = false   # 识别即更新状态: evidence-driven auto-close of stale open intents → terminal 'resolved' status (event-driven, no new poll). DEFAULT OFF (kill-switch): off = resolutions parsed but never acted on. Two signals (LLM resolution + deterministic fold-matcher) must agree before a close; a wrong close drops a real todo
-auto_close_min_confidence = 0.85      # 识别即更新状态: confidence floor for an evidence auto-close (independent of recognition confidence)
-auto_close_committed_min_confidence = 0.95  # 识别即更新状态: higher floor to close a user_committed promise (and only outcome=done)
-
-[memory_delta]
-# Session-end memory_delta consolidator (Memory-rebuild Phase 0, spec §4.1/§6.2):
-# ONE LLM read of the just-ended session → structured {entities, assertions,
-# relations, events} persisted SHADOW into the memory_deltas table. Consumers:
-# `persome delta-report` + the Phase-1 dual-run parity eval (retires the four
-# scattered extractors once parity is reached).
-enabled = false                   # default OFF — flip true to start the shadow dual-run
-max_blocks = 120                  # upper bound on session blocks fed to the model
-roster_max = 60                   # known-identity roster entries injected (选择题 — refs or explicit new_entity, never bare store-probing strings)
-min_confidence = 0.5              # deterministic parse gate: items below are dropped
-
-[memory_decay]
-# 文本轴分级遗忘（memory-rebuild §1.5-5；spec 2026-07-03-text-axis-graded-forgetting-design.md）：
-# 夜间（23:55 尾部）有界降精——老（after_days）且从未被检索强化（entry_retrieval_stats=0，
-# 读即强化=免疫）且未被保护（conflicted 待人裁/decayed:2 地板/非事实前缀）的持久条目，按文件
-# 聚簇经一次 LLM 蒸馏成粗摘要（decayed:1）→ 再老再弱降成一行（decayed:2=地板）。降精走既有
-# choke-point 动词：摘要 append 带 abstracted-from 收据，源条目 strike 退役（md 原文仍在=收据）。
-# 反幻觉闸：提及子集/收缩上限/非空——任一不过整簇保留。默认 OFF（有损变换+夜间 LLM 成本）。
-enabled = false
-after_days = 90                    # 小于此天数的条目永不触碰
-max_clusters_per_night = 3         # 每晚 ≤N 次 LLM 调用，最老簇优先
-cluster_min = 4                    # 同文件 old∧weak 细节少于此数不蒸馏（噪声非压缩）
-cluster_max = 12                   # 单簇上限（模型上下文护栏）
-shrink_ceiling = 0.5               # 摘要须 < 源总长 × 此系数
-line_max_chars = 80                # L2 一行档硬上限
-
-
 [skill_check]
 enabled = true                    # detect skill matches inside the per-minute timeline LLM call
 confidence_floor = 0.65           # minimum confidence to record a skill_hint
@@ -1533,10 +980,10 @@ cross_domain_min_confidence = 0.6 # fused cross-domain schema below this confide
 [debug_hud]
 # What the debug HUD (always-on-top panel, shown in debug mode) renders.
 # Allowlist over content blocks — the panel shows ONLY what's listed.
-# Keys: intent / tool_call / thinking / stage (AGENT ACTIVITY event kinds),
+# Keys: tool_call / thinking / stage (AGENT ACTIVITY event kinds),
 #       health (daemon health + counts), memory (recent memory writes).
-# Default is intents only; add keys to surface more. Applied live (no restart).
-show = ["intent"]
+# Default is stage only; add keys to surface more. Applied live (no restart).
+show = ["stage"]
 """
 
 

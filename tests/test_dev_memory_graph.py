@@ -158,10 +158,24 @@ class TestNodeReceipts:
     def test_event_node_returns_minting_intent(self, ac_root, dev_on):
         import json as _json
 
-        from persome.intent import store as intent_store
-
         with fts.cursor() as conn:
-            intent_store.ensure_schema(conn)
+            conn.execute(
+                """
+                CREATE TABLE intents (
+                    id INTEGER PRIMARY KEY,
+                    ts TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    status TEXT NOT NULL,
+                    rationale TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    evidence TEXT NOT NULL,
+                    dedup_key TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
             conn.execute(
                 "INSERT INTO intents (id, ts, scope, kind, confidence, status, rationale,"
                 " payload, evidence, dedup_key, created_at)"

@@ -19,7 +19,7 @@ from __future__ import annotations
 import pytest
 
 from persome.evomem import backfill
-from persome.intent import recall
+from persome.retrieval import layered as recall
 from persome.store import entries as entries_mod
 from persome.store import fts
 
@@ -230,27 +230,10 @@ def test_cold_start_degrades_to_column_fold_without_warning(ac_root, caplog) -> 
     with fts.cursor() as conn:
         _seed(conn)
         conn.execute("DROP TABLE IF EXISTS evo_nodes")
-        with caplog.at_level("WARNING", logger="persome.intent.recall"):
+        with caplog.at_level("WARNING", logger="persome.retrieval.layered"):
             out = recall.assemble_background(
                 conn, scope="", hints=["beverage"], per_hint=10, fold_superseded=True
             )
     assert "喝抹茶" in out  # 折叠照常生效（superseded 列）
     assert "喝咖啡" not in out
     assert not any("fold query failed" in r.message for r in caplog.records)
-
-
-def test_tick_records_hints_telemetry(ac_root) -> None:
-    """每次 assemble 落一行 budget telemetry，且携带 hints（调试遥测）。"""
-    from persome.store import recall_budget_ticks
-
-    _seed_and_backfill()
-    with fts.cursor() as conn:
-        recall_budget_ticks.ensure_schema(conn)
-        before = conn.execute("SELECT COUNT(*) FROM recall_budget_ticks").fetchone()[0]
-        recall.assemble_background(conn, scope="s", hints=["beverage"], per_hint=10)
-        after = conn.execute("SELECT COUNT(*) FROM recall_budget_ticks").fetchone()[0]
-        hints = conn.execute(
-            "SELECT hints FROM recall_budget_ticks ORDER BY id DESC LIMIT 1"
-        ).fetchone()[0]
-    assert after == before + 1
-    assert hints == '["beverage"]'

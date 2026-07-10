@@ -56,17 +56,11 @@ Consult OpenAPI for each request and response body. Unknown resources return
 | POST | `/memories/append` | Explicit, auditable memory write. |
 | GET | `/search` | Search durable memory. |
 | GET | `/activity` | Read recent durable activity. |
-| GET | `/recall/pack` | Return a structured, receipt-bearing recall pack. |
 
-### Transitional intent observability
-
-The following routes remain during the model-source migration. They are not a
-claim that the paper runtime already implements next-state prediction.
+### Observability
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/intents` | Read stored intent rows. |
-| PATCH | `/intents/{intent_id}` | Update an intent status. |
 | GET | `/parser/stats` | Read parser telemetry. |
 
 ### Reference and maintenance
@@ -109,5 +103,6 @@ consumer of the personal model, not a second model store.
 The paper runtime does not expose work-thread tracking, meeting assistance,
 computer-use actuation, day-0 filesystem profiling, memoir/book generation, or
 background product run boards. Upgrades do not destructively drop their legacy
-SQLite tables, but new databases no longer create them and current code no
-longer reads or writes them.
+SQLite tables. New databases no longer create them; `ActivitySource` can read a
+legacy `intents` table only to migrate completed historical activity into the
+neutral model contract.

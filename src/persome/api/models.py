@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Generic, TypeVar
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -10,40 +10,10 @@ from pydantic import BaseModel, Field
 
 
 class ApiResponse(BaseModel):
-    """松散信封：``data`` 形状不在契约里（``anyOf[object,array,string,null]``）。
-
-    历史默认信封。新接口应改用 :class:`DataResponse` 携带显式 ``data`` 形状，
-    让 ``openapi.json`` 把 payload schema 也纳入契约（drift 闸即升级为"形状闸"，
-    见 ``DataResponse`` docstring 与 issue #539）。这里保留它仅为尚未迁移的
-    存量接口兜底，迁移完成前不要删。
-    """
+    """Common response envelope for the local runtime API."""
 
     success: bool = Field(default=True, description="请求是否成功")
     data: dict | list | str | None = Field(default=None, description="响应数据")
-
-
-_DataT = TypeVar("_DataT")
-
-
-class DataResponse(BaseModel, Generic[_DataT]):
-    """带形状的信封：``DataResponse[XxxResponse]`` 让 ``data`` 形状进入契约。
-
-    与 :class:`ApiResponse` 的线上 JSON 字节完全一致（``{success, data}``），
-    区别只在 ``openapi.json``：``data`` 不再是 ``anyOf[object,...]``，而是
-    ``$ref`` 指向具体 schema。因此现有 ``tests/test_openapi_drift.py``（逐字节
-    比对）自动升级为"响应体形状闸"——任何 ``XxxResponse`` 字段变更都会改动
-    ``openapi.json``、被 drift 测试拦截，无需新增测试设施。app 端反序列化据此
-    有了机器可校验的契约锚点（#539）。
-
-    用法::
-
-        @router.get("/intents", response_model=DataResponse[IntentsResponse])
-        def intents() -> DataResponse[IntentsResponse]:
-            return DataResponse(data=IntentsResponse(...))
-    """
-
-    success: bool = Field(default=True, description="请求是否成功")
-    data: _DataT = Field(description="响应数据（形状由具体类型参数声明）")
 
 
 class ErrorResponse(BaseModel):
@@ -192,17 +162,11 @@ class RecentCaptureResponse(BaseModel):
     screenshot_mime: str | None = Field(default=None, description="截图 MIME 类型")
 
 
-class SetIntentStatusBody(BaseModel):
-    status: str = Field(
-        description="意图状态：open（待处理）/ consumed（已采纳）/ dismissed（已忽略）"
-    )
-
-
 class CaptureIngestBody(BaseModel):
     """Swift "Persome" 主程序推送的一帧 capture（``capture.source = "ingest"`` 模式）。
 
     采集层（AX 树 + 焦点窗口截图）已搬进持有 Accessibility / Screen-Recording 的 Swift
-    进程；daemon 收到后只跑富化→落库→意图快路 hook，自身不再需要任何系统权限。字段与
+    进程；daemon 收到后只跑富化与落库，自身不再需要任何系统权限。字段与
     daemon 自采路径 ``_build_capture`` 的产物对齐，缺省宽松（缺字段降级，不崩）。
     """
 
@@ -225,73 +189,3 @@ class CaptureIngestBody(BaseModel):
         default=None, description="AX 贫瘠窗口的焦点窗口截图 JPEG（base64），供本地 OCR 兜底"
     )
     ocr_tier: str | None = Field(default=None, description="OCR 档位覆盖；缺省用配置值")
-
-
-class IntentItem(BaseModel):
-    """``/intents`` 单条意图（``intent.ontology.Intent.to_dict()`` 的契约镜像）。
-
-    稳定的信封字段显式声明形状；``kind`` 是 OPEN 字符串（场景包可新增，见
-    ontology），``payload``/``fire_config``/``evidence`` 是有意开放的结构，
-    故保持松散 dict/list——契约只锁住"哪些字段一定在、是什么标量类型"，不谎称
-    payload 是闭集。新增稳定字段时这里同步即触发 drift 闸。
-    """
-
-    kind: str = Field(description="意图类型（OPEN：meeting/calendar/reminder/assignment/…）")
-    scope: str = Field(description="所属场景 id：timeline / <meeting-id> / session-<id> / …")
-    confidence: float = Field(description="识别置信度 0-1")
-    rationale: str = Field(description="识别依据")
-    status: str = Field(description="open / armed / consumed / dismissed / expired")
-    ts: str = Field(description="识别时间戳 ISO8601")
-    payload: dict = Field(description="kind 相关结构化字段（开放，如 when_text/with/channel）")
-    evidence: list[dict] = Field(description="溯源证据列表（source/ref_id/entry_index/quote）")
-    id: int | None = Field(default=None, description="持久化行 id；未落库为 null")
-    fire_on: str = Field(default="", description="休眠触发事件键（L7）；空串=即时意图")
-    fire_config: dict = Field(default_factory=dict, description="触发参数（开放）")
-    fired_at: str | None = Field(default=None, description="触发时间 ISO8601；未触发为 null")
-    schema_sources: list[str] = Field(
-        default_factory=list, description="识别上下文中在场的 schema-*.md 文件名（共现归因）"
-    )
-    resolved_at: str | None = Field(default=None, description="承诺时点 ISO8601；不可解析为 null")
-    valid_until: str | None = Field(default=None, description="过期时点 ISO8601；不可解析为 null")
-
-
-class IntentsResponse(BaseModel):
-    """``/intents`` 响应体：意图列表 + 计数。"""
-
-    intents: list[IntentItem] = Field(description="按 ts 倒序（最新在前）的意图列表")
-    count: int = Field(description="intents 数量")
-
-
-class RecallPackItem(BaseModel):
-    """``/recall/pack`` 单条结构化召回事实（``intent.recall.RecallItem`` 的契约镜像）。
-
-    供主动任务 prompt 注入：``content`` 是干净片段，``cite`` 是可追溯句柄
-    （``mem:<path>`` / ``schema:<file>`` / ``intent:<id>`` / ``block:<id>``）。
-    ``capture_stem`` / ``timeline_block_id`` 是 scene/timeline 项的 RAW 捕获句柄
-    （stem 同时索引截图与 axtree；仅回句柄字符串，绝不内联字节）。"""
-
-    layer: str = Field(
-        description="召回层：schema/behavior/fact/semantic/scene_intent/event/timeline"
-    )
-    content: str = Field(description="干净片段（无 [path] 前缀）")
-    cite: str = Field(description="可追溯引用句柄")
-    score: float | None = Field(default=None, description="语义余弦或意图置信度；无则 null")
-    confidence: str | None = Field(
-        default=None, description="记忆可靠度：low（仅标低置信）；否则 null"
-    )
-    conflicted: bool = Field(default=False, description="该记忆是否冲突未裁决")
-    capture_stem: str | None = Field(default=None, description="截图/axtree 捕获 stem；无则 null")
-    timeline_block_id: int | None = Field(
-        default=None, description="时间线块 id（慢路）；无则 null"
-    )
-
-
-class RecallPackResponse(BaseModel):
-    """``/recall/pack`` 响应体：分层带引用的召回项 + 预算/稠密/计数元信息。"""
-
-    scope: str = Field(description="召回所属场景 id")
-    intent_id: int | None = Field(default=None, description="按意图召回时的行 id；否则 null")
-    items: list[RecallPackItem] = Field(description="结构化召回项（按层优先级排序）")
-    counts: dict = Field(description="各层命中计数")
-    budget: dict = Field(description="预算口径：max_chars/used/squeezed")
-    dense: dict = Field(description="稠密层状态：enabled（配置开关）/active（实际触发）")

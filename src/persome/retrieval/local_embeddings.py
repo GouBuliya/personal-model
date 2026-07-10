@@ -1,7 +1,7 @@
-"""Optional local sentence embeddings shared by retrieval and legacy intent gates.
+"""Optional local sentence embeddings for personal-model retrieval.
 
 The implementation is deliberately fail-open: missing model files or optional ONNX/tokenizer
-dependencies make ``available`` false and ``embed``/``score`` return ``None``. Lexical retrieval
+dependencies make ``available`` false and ``embed`` return ``None``. Lexical retrieval
 continues unchanged.
 """
 
@@ -24,7 +24,6 @@ logger = get("persome.retrieval.local_embeddings")
 _MODEL_SUBDIR = "bge-small-zh"
 _ONNX_NAME = "model.int8.onnx"
 _TOKENIZER_NAME = "tokenizer.json"
-_HEAD_NAME = "head.npz"
 _MAX_LEN_FALLBACK = 256
 _CACHE_MAX = 512
 _MISS = object()
@@ -51,7 +50,7 @@ def _model_dir() -> Path | None:
     if root is None:
         return None
     directory = root / _MODEL_SUBDIR
-    needed = [directory / _ONNX_NAME, directory / _TOKENIZER_NAME, directory / _HEAD_NAME]
+    needed = [directory / _ONNX_NAME, directory / _TOKENIZER_NAME]
     return directory if all(path.exists() for path in needed) else None
 
 
@@ -72,10 +71,7 @@ class _Engine:
             providers=["CPUExecutionProvider"],
         )
         self._input_names = {item.name for item in self.session.get_inputs()}
-        head = np.load(model_dir / _HEAD_NAME)
-        self.w = head["w"].astype("float32").reshape(-1)
-        self.b = float(head["b"])
-        self.max_len = int(head["max_len"]) if "max_len" in head else _MAX_LEN_FALLBACK
+        self.max_len = _MAX_LEN_FALLBACK
 
     def embed_cls(self, text: str):  # type: ignore[no-untyped-def]
         np = self._np
@@ -94,12 +90,6 @@ class _Engine:
         vector = np.asarray(output)[0, 0]
         norm = np.linalg.norm(vector)
         return vector / norm if norm > 0 else vector
-
-    def score(self, text: str) -> float:
-        np = self._np
-        vector = self.embed_cls(text)
-        logit = float(vector @ self.w + self.b)
-        return 1.0 / (1.0 + np.exp(-logit))
 
 
 def _get_engine() -> _Engine | None:
@@ -162,26 +152,6 @@ def cosine(a: np.ndarray | None, b: np.ndarray | None) -> float:
 
 def similarity(a: str, b: str) -> float:
     return cosine(embed(a), embed(b))
-
-
-def score(text: str) -> float | None:
-    engine = _get_engine()
-    if engine is None:
-        return None
-    try:
-        return engine.score(text)
-    except Exception as exc:  # noqa: BLE001 - legacy pre-gate falls back to regex
-        logger.debug("local embedding gate failed (%s); using regex fallback", exc)
-        return None
-
-
-def default_threshold() -> float:
-    try:
-        from .. import config as config_mod
-
-        return float(config_mod.load().intent_recognizer.pregate_bge_threshold)
-    except Exception:
-        return 0.5
 
 
 def _reset_cache_for_tests() -> None:

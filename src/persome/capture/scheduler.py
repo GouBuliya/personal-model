@@ -908,31 +908,6 @@ async def run_forever(
         runner.stop_worker()
 
 
-def _actionable_stems() -> set[str]:
-    """Capture stems that earn extended screenshot retention (#7 / spec E5).
-
-    The actionable subset = captures that PRODUCED an intent (provenance, the
-    primary selector via the ``intents.source_capture`` column). A bare 24h strip
-    is too short for these — a recognized to-do may only run later, and the
-    screenshot is the grounding the proposal writer / a human review wants.
-
-    Best-effort: any DB error (table absent on a fresh install, locked, …) yields
-    an empty set, so the scanner degrades to the unconditional strip — never
-    crashes buffer hygiene over a provenance lookup. Enter-anchored frames are
-    detected per-file from the capture's own ``trigger`` (no DB needed) in
-    :func:`_is_enter_anchored`.
-    """
-    try:
-        from ..intent import store as intent_store
-        from ..store import fts as fts_store
-
-        with fts_store.cursor() as conn:
-            return intent_store.actionable_capture_stems(conn)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("actionable-stem lookup failed; extended retention skipped: %s", exc)
-        return set()
-
-
 # Capture trigger event type treated as an "Enter-anchored" frame (spec E5): a
 # keyboard-committed input is a strong actionable signal even before the
 # recognizer has run, so it earns extended retention too. There is no distinct
@@ -987,12 +962,11 @@ def cleanup_buffer(
     3. **Evict by size** once total buffer size exceeds ``max_mb`` MB.
        Oldest already-absorbed files go first. ``max_mb=0`` disables this.
 
-    **Actionable-subset extended retention (#7 / spec E5).** When
+    **User-input anchored extended retention.** When
     ``extended_retention_enabled`` (default off → byte-for-byte the legacy
-    behaviour), the strip pass SKIPS a capture that is *actionable* — it produced
-    an intent (``intents.source_capture`` provenance) or is an Enter-anchored
-    frame — until it ages past ``actionable_retention_days`` (then it strips
-    normally). A retained capture keeps its screenshot exactly as stored: if #6
+    behaviour), the strip pass skips an Enter-anchored input frame until it ages
+    past ``actionable_retention_days`` (then it strips normally). A retained
+    capture keeps its screenshot exactly as stored: if screenshot
     encryption is on the field is ciphertext and STAYS ciphertext (extended
     retention never reads or decrypts it). Whole-file delete + size eviction are
     unchanged — only the (reversible, downstream-unused) screenshot strip is
@@ -1014,12 +988,10 @@ def cleanup_buffer(
         if screenshot_thumbnail_hours and screenshot_thumbnail_hours > 0
         else None
     )
-    # Actionable captures keep their screenshot until THIS (longer) cutoff. Built
-    # only when the feature is on, so the legacy path pays no DB / per-file cost.
+    # User-input-anchored captures keep their screenshot until this longer cutoff.
     extended_cutoff = (
         now - actionable_retention_days * 86400 if extended_retention_enabled else None
     )
-    actionable_stems = _actionable_stems() if extended_retention_enabled else set()
     absorbed_before = (
         _safe_filename(processed_before_ts) if processed_before_ts is not None else None
     )
@@ -1054,7 +1026,6 @@ def cleanup_buffer(
                 p,
                 mtime=st.st_mtime,
                 extended_cutoff=extended_cutoff,
-                actionable_stems=actionable_stems,
             )
             and _strip_screenshot_inplace(p)
         ):
@@ -1074,7 +1045,6 @@ def cleanup_buffer(
                 p,
                 mtime=st.st_mtime,
                 extended_cutoff=extended_cutoff,
-                actionable_stems=actionable_stems,
             )
             and _thumbnail_screenshot_inplace(p)
         ):
@@ -1128,27 +1098,23 @@ def _retain_screenshot_extended(
     *,
     mtime: float,
     extended_cutoff: float | None,
-    actionable_stems: set[str],
 ) -> bool:
-    """Should this capture's screenshot be KEPT past the normal strip cutoff (#7)?
+    """Keep a user-input-anchored screenshot past the normal strip cutoff.
 
     True iff extended retention is active (``extended_cutoff`` not None), the
-    capture is still within the actionable retention window (mtime newer than
-    ``extended_cutoff``), AND it is actionable — its stem produced an intent
-    (provenance) or it is an Enter-anchored frame. Past ``extended_cutoff`` even
-    an actionable capture strips normally (the cap). When extended retention is
+    capture is still within the extended window (mtime newer than
+    ``extended_cutoff``), and it is an Enter-anchored frame. Past the cutoff it
+    strips normally. When extended retention is
     off this is always False, so the legacy unconditional strip runs.
 
-    Note: this NEVER reads or decrypts the screenshot field — actionability is
-    decided from provenance (the stem) + the capture's ``trigger`` only — so an
+    Note: this never reads or decrypts the screenshot field; the decision uses
+    the capture's ``trigger`` only, so an
     encrypted (#6) retained frame stays ciphertext on disk.
     """
     if extended_cutoff is None:
         return False
     if mtime <= extended_cutoff:
         return False  # past the actionable cap — strip normally
-    if path.stem in actionable_stems:
-        return True
     return _is_enter_anchored(path)
 
 

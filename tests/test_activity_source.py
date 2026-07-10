@@ -21,7 +21,30 @@ from persome.timeline import store as timeline_store
 TZ = timezone(timedelta(hours=8))
 
 
+def _ensure_legacy_intents(conn) -> None:
+    """Create the minimal old-table shape used by the read-only adapter test."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS intents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            status TEXT NOT NULL,
+            rationale TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            evidence TEXT NOT NULL,
+            dedup_key TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            resolution_outcome TEXT
+        )
+        """
+    )
+
+
 def _seed_sources(conn) -> str:
+    _ensure_legacy_intents(conn)
     entries_store.create_file(
         conn,
         name="event-2026-07-10.md",

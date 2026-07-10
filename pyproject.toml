@@ -42,11 +42,6 @@ dependencies = [
     # no x86_64 macOS wheel exists for v3.3.1+; x86_64 PyInstaller bundles skip OCR.
     "paddleocr==3.7.0; platform_machine == 'arm64'",
     "paddlepaddle==3.3.1; platform_machine == 'arm64'",
-    # NOTE: the optional bge-small-zh slow-pre-gate semantic discriminator
-    # (intent.gate_model, gated on intent_recognizer.pregate_mode) is NOT bundled —
-    # the default pre-gate is "regex". To opt back in, `pip install onnxruntime
-    # tokenizers` and point `[intent_recognizer] pregate_bge_model_dir` at your own
-    # exported model dir; the code fail-opens to regex whenever it is absent.
     # Semantic fact-space visualization (persome memory-viz / src/persome/viz/sem_layout.py):
     # community detection (louvain_communities) over the fact k-NN graph. Declared
     # explicitly — it is only transitively present via paddle on arm64, and the x86_64

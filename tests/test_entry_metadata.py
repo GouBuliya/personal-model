@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from persome.intent import recall
+from persome.retrieval import layered as recall
 from persome.store import entries as entries_mod
 from persome.store import files as files_mod
 from persome.store import fts

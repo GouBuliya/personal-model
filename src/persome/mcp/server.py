@@ -21,13 +21,11 @@ from typing import Any
 
 from ..config import Config
 from ..config import load as load_config
-from ..intent import store as intent_store
 from ..logger import get
 from ..prompts import load as load_prompt
 from ..store import files as files_mod
 from ..store import fts
 from ..store import parser_ticks as parser_ticks_store
-from ..store import recall_budget_ticks as recall_budget_ticks_store
 from ..timeline import attention_trajectory as attention_traj
 from . import captures as captures_mod
 
@@ -386,7 +384,7 @@ def _read_receipt(conn, *, entry_id: str) -> dict[str, Any]:  # type: ignore[no-
     The chain delivery hands out receipt POINTERS; this is the one-hop
     drill-down that turns a pointer into the entry itself plus the breadcrumbs
     to the NEXT disclosure layer (nearby captures → ``read_recent_capture`` /
-    ``view_capture``). Superseded entries are readable — a receipt is
+    capture receipts). Superseded entries are readable — a receipt is
     archaeology, not a claim about the present — and are labeled as such.
     Reading a receipt reinforces it (读即强化)."""
     row = conn.execute(
@@ -425,7 +423,7 @@ def _read_receipt(conn, *, entry_id: str) -> dict[str, Any]:  # type: ignore[no-
         "valid_from": temporal["valid_from"] if temporal else None,
         "valid_until": temporal["valid_until"] if temporal else None,
         # next disclosure layer: raw captures near this entry's write time —
-        # follow with read_recent_capture(at=…) or view_capture for pixels.
+        # follow with read_recent_capture(at=…) for an explicitly requested image.
         "nearby_captures": [
             {
                 "id": c["id"],
@@ -546,27 +544,6 @@ def _recent_activity(  # type: ignore[no-untyped-def]
 
 def _get_schema() -> dict[str, Any]:
     return {"schema": load_prompt("schema.md")}
-
-
-def _list_intents(  # type: ignore[no-untyped-def]
-    conn, *, scope: str | None = None, status: str | None = None, limit: int = 50
-) -> dict[str, Any]:
-    limit = max(1, min(200, limit))
-    intents = intent_store.recent_intents(conn, start="", end="￿", scope=scope, status=status)
-    intents = intents[-limit:][::-1]  # newest first, capped
-    return {"count": len(intents), "intents": [i.to_dict() for i in intents]}
-
-
-def _set_intent_status(conn, *, intent_id: int, status: str) -> dict[str, Any]:  # type: ignore[no-untyped-def]
-    # R3 feedback口 whitelist (#631 nit T): clients may only express the three
-    # USER-feedback statuses; ``armed``/``expired`` are engine-owned.
-    if status not in intent_store.FEEDBACK_STATUSES:
-        return {
-            "success": False,
-            "error": f"invalid status '{status}', expected one of {intent_store.FEEDBACK_STATUSES}",
-        }
-    ok = intent_store.update_intent_status(conn, intent_id=intent_id, new_status=status)
-    return {"success": ok, "intent_id": intent_id, "new_status": status}
 
 
 _SERVER_INSTRUCTIONS = """\
@@ -721,7 +698,7 @@ Each hit carries more than text — use all of it:
 
 - **The evidence ladder (progressive disclosure)** — every memory is auditable four
   layers down; go only as deep as the user's question demands:
-  `chains` narrative → `read_receipt(entry_id)` → `read_recent_capture(at=…)` → pixels (`view_capture`, when available).
+  `chains` narrative → `read_receipt(entry_id)` → `read_recent_capture(at=…)` for optional pixels.
 
 - **For writing / action personalization**
   - `behavior_patterns()` first (how they work), then `search` for the specific
@@ -986,7 +963,7 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
             Returns the full entry (content, tags, timestamps, validity window,
             confidence, `superseded` flag) plus `nearby_captures` — breadcrumbs to
             the NEXT evidence layer (follow with `read_recent_capture(at=…)` for
-            the raw on-screen text, or `view_capture` for the pixels). Use when
+            the raw on-screen text or explicitly request its screenshot). Use when
             you need to verify what a chain hop or a fact is actually based on;
             this is the audit trail from any memory down to the moment on screen.
             A `superseded: true` entry is history, not the current belief.
@@ -1291,55 +1268,6 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
         return json.dumps(_get_schema(), ensure_ascii=False)
 
     @server.tool()
-    def list_intents(scope: str = "", status: str = "", limit: int = 50) -> str:
-        """List recognized intents from the unified intent stream (newest first).
-
-        Intents are what recognizers (timeline tagging, the session-level
-        trajectory recognizer, meeting packs) extracted as the user's actionable
-        intent — meetings, reminders, info needs. Use this to see what's been
-        recognized and its status.
-
-        This is a raw debug view: it does NOT filter out past-``valid_until``
-        rows, and ``status`` accepts the full lifecycle set, not just the
-        user-feedback subset.
-
-        Arguments:
-          scope   — filter by scene, e.g. 'timeline' or 'session-<id>' (default: all).
-          status  — filter by one of 'open' / 'armed' / 'consumed' / 'dismissed'
-                    / 'expired' (default: all).
-          limit   — max intents, clamped to [1, 200]. Default 50.
-        """
-        with fts.cursor() as conn:
-            return json.dumps(
-                _list_intents(
-                    conn,
-                    scope=scope or None,
-                    status=status or None,
-                    limit=limit,
-                ),
-                ensure_ascii=False,
-            )
-
-    @server.tool()
-    def set_intent_status(intent_id: int, status: str) -> str:
-        """Set a recognized intent's status (R3 feedback).
-
-        Use 'consumed' when the user acted on the intent, 'dismissed' when they
-        rejected it (the recognizer treats recently dismissed intents as a
-        negative prior and avoids re-surfacing the same kind), or 'open' to
-        reset.
-
-        Arguments:
-          intent_id — numeric id from list_intents.
-          status    — 'open' / 'consumed' / 'dismissed'.
-        """
-        with fts.cursor() as conn:
-            return json.dumps(
-                _set_intent_status(conn, intent_id=intent_id, status=status),
-                ensure_ascii=False,
-            )
-
-    @server.tool()
     def parser_stats(since: str = "", until: str = "") -> str:
         """Per-app message-parser hit-rate telemetry.
 
@@ -1361,33 +1289,6 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
         with fts.cursor() as conn:
             return json.dumps(
                 parser_ticks_store.stats(conn, since=since or "", until=until or "￿"),
-                ensure_ascii=False,
-            )
-
-    @server.tool()
-    def recall_budget_stats(since: str = "", until: str = "") -> str:
-        """Recall budget squeeze-rate telemetry.
-
-        Every ``assemble_background`` call (slow-path recognizer, meeting
-        analyzer) records one row: how the shared ``max_chars`` budget was spent
-        per layer (schema_prior/scene/behavior/fact/keyword/trail) and whether
-        any candidate text was REJECTED for lack of budget (= squeezed). The
-        2026-06-10 ablation showed squeezing key memories out collapses
-        negative-suppression; this telemetry measures how often that actually
-        happens in production, gating the "raise max_chars to 2400" decision.
-
-        Returns: total_ticks, squeezed_ticks, squeeze_rate, by_layer
-        {<layer>: {admitted, admitted_chars, rejected, rejected_chars,
-        squeezed_ticks}}, rejected_share {<layer>: share of all rejections},
-        avg_used, avg_max_chars.
-
-        Arguments:
-          since — ISO8601 lower bound (inclusive); default: all time.
-          until — ISO8601 upper bound (exclusive); default: all time.
-        """
-        with fts.cursor() as conn:
-            return json.dumps(
-                recall_budget_ticks_store.stats(conn, since=since or "", until=until or "￿"),
                 ensure_ascii=False,
             )
 
@@ -1415,10 +1316,6 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
                 _memory_write.remember(conn, content=content, tags=tag_list, run_id=run_id),
                 ensure_ascii=False,
             )
-
-    from . import view_capture as view_capture_mod
-
-    view_capture_mod.register(server, cfg)
 
     from ..api import register_routes
 

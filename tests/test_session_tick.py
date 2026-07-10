@@ -110,40 +110,6 @@ def test_build_manager_wires_reducer_end_to_end(ac_root: Path, monkeypatch) -> N
     assert row.status in ("reduced", "ended")  # Either the thread raced or it finished
 
 
-def test_prune_telemetry_bounds_cooldown_suppressions(ac_root: Path) -> None:
-    """``_prune_telemetry_tables`` must keep ``cooldown_suppressions`` bounded.
-
-    Regression for the #508-style无界增长 bug: the table shipped ``prune(keep=...)``
-    but the daily retention hook (`_prune_telemetry_tables`) only pruned its three
-    sibling telemetry tables (recall_budget_ticks / recognition_ticks /
-    parser_ticks) and silently skipped cooldown_suppressions, so on a long-running
-    daemon every cooldown drop accumulated forever. This test seeds more rows than
-    the prune keep-count and asserts the daily hook actually trims it.
-    """
-    from persome.store import cooldown_suppressions
-
-    keep = 50000
-    overflow = 5  # rows beyond `keep` that must be pruned away
-    total = keep + overflow
-    with fts.cursor() as conn:
-        cooldown_suppressions.ensure_schema(conn)
-        # Bulk-insert directly (the per-row `record` path is exercised elsewhere);
-        # we only need the table over-full so the prune has something to cut.
-        conn.executemany(
-            "INSERT INTO cooldown_suppressions "
-            "(ts, kind, scope, confidence, cooldown_until, created_at) "
-            "VALUES (?, 'reminder', 'session-x', 0.5, NULL, ?)",
-            [(f"2026-01-01T00:{i:02d}", "2026-01-01T00:00:00") for i in range(total)],
-        )
-        conn.commit()
-        before = conn.execute("SELECT COUNT(*) FROM cooldown_suppressions").fetchone()[0]
-    assert before == total
-
-    deleted = session_tick._prune_telemetry_tables()
-
-    # The hook reported a non-zero prune for cooldown_suppressions (it was wired in)…
-    assert deleted.get("cooldown_suppressions") == overflow
-    # …and the table is now bounded at `keep`.
-    with fts.cursor() as conn:
-        after = conn.execute("SELECT COUNT(*) FROM cooldown_suppressions").fetchone()[0]
-    assert after == keep
+def test_prune_telemetry_calls_parser_store(ac_root: Path, monkeypatch) -> None:
+    monkeypatch.setattr(session_tick.parser_ticks_store, "prune", lambda conn: 7)
+    assert session_tick._prune_telemetry_tables() == {"parser_ticks": 7}

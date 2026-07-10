@@ -19,6 +19,7 @@ from .build import (
 )
 from .entity_source import EntityEvent, EntitySource, MemoryPersonNameSource
 from .manifest import create_build_manifest, detect_core_commit, prompt_hashes
+from .schema_reader import active_schema_inferences, active_schema_inferences_with_sources
 from .snapshot import (
     SCHEMA_VERSION,
     ModelContractError,
@@ -43,6 +44,8 @@ __all__ = [
     "EntityEvent",
     "EntitySource",
     "MemoryPersonNameSource",
+    "active_schema_inferences",
+    "active_schema_inferences_with_sources",
     "build_snapshot",
     "create_build_manifest",
     "detect_core_commit",
