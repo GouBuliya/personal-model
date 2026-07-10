@@ -89,7 +89,7 @@ patterns as evidence-backed skill memory.
 
 At 00:15 local time by default, the daemon runs the same locked build as
 `persome model build`: pending session recovery, case extraction, schema mining,
-cross-domain synthesis, Root synthesis, vectors, and semantic layout. A new or
+cross-domain synthesis, Root synthesis, and vector backfill. A new or
 sparse store is expected to be `degraded` until repeated evidence is sufficient
 for a Face, Volume, and Root. `persome model status` explains which geometry is
 missing; the viewer reflects the current store rather than filling gaps with
@@ -173,7 +173,11 @@ Swift watcher / trusted ingest
 ## Privacy
 
 - Persistent model data stays under `~/.persome`.
-- Enabled LLM stages send derived context to the endpoint you configure; optional dense retrieval sends embedding inputs to its configured endpoint.
+- Enabled LLM stages send derived context to the endpoint you configure. When
+  Chat invokes memory or capture tools, their results can include raw screen
+  text, window titles, URLs, and focused-field values; those results are sent to
+  the configured Chat model endpoint. Optional dense retrieval sends embedding
+  inputs to its configured endpoint.
 - There is no telemetry.
 - OCR is optional, subprocess-isolated, and fully local.
 - Secrets live in a 0600 env file at `~/.persome/env`.
