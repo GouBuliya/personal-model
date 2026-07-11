@@ -332,7 +332,18 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     # the daemon calls ``checkpoint()`` from the daily tick so the
     # ``.db-wal`` and ``.db-shm`` sidecars don't drift unbounded.
     conn.execute("PRAGMA wal_autocheckpoint=1000")
+    had_captures_fts = (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='captures_fts'"
+        ).fetchone()
+        is not None
+    )
     conn.executescript(SCHEMA)
+    # A schema-level FTS recovery may have removed only this derived table
+    # before an interrupted rebuild. Recreate its index from canonical rows
+    # before applying security settings or accepting the connection.
+    if not had_captures_fts:
+        conn.execute("INSERT INTO captures_fts(captures_fts) VALUES('rebuild')")
     # Core secure_delete does not cover FTS shadow segments. FTS5's persistent
     # secure-delete setting removes stale terms on UPDATE/DELETE instead of
     # leaving reconstructable delete-key segments behind (SQLite 3.42+).

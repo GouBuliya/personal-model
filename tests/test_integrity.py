@@ -134,29 +134,52 @@ def test_schema_reset_rebuilds_unloadable_derived_captures_fts(ac_root: Path) ->
     assert [hit.id for hit in hits] == ["capture-schema-reset-test"]
 
 
-def test_derived_captures_fts_repair_defers_instead_of_quarantining(
-    ac_root: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_connect_rebuilds_missing_derived_captures_fts(ac_root: Path) -> None:
     _make_healthy_db()
     with fts.cursor() as conn:
         fts.insert_capture(
             conn,
-            id="capture-deferred-fts-test",
+            id="capture-missing-fts-test",
             timestamp="2026-07-12T00:00:00+00:00",
             app_name="Test App",
             bundle_id="com.persome.test",
-            window_title="Deferred index recovery",
+            window_title="Missing index recovery",
             focused_role="AXTextArea",
             focused_value="needle",
-            visible_text="needle waits for a retry",
-            url="https://example.test/deferred",
+            visible_text="needle survives an interrupted recovery",
+            url="https://example.test/missing-fts",
         )
-        conn.execute("DELETE FROM captures_fts_data WHERE id > 1")
 
+    conn = sqlite3.connect(paths.index_db())
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        fts.reset_corrupt_captures_fts_schema(conn)
+        conn.commit()
+        conn.execute("VACUUM")
+    finally:
+        conn.close()
+
+    with fts.cursor() as conn:
+        assert [row[0] for row in conn.execute("PRAGMA integrity_check")] == ["ok"]
+        hits = fts.search_captures(conn, query="needle")
+    assert [hit.id for hit in hits] == ["capture-missing-fts-test"]
+
+
+def test_derived_captures_fts_repair_defers_instead_of_quarantining(
+    ac_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _make_healthy_db()
     monkeypatch.setattr(
-        fts,
-        "rebuild_captures_fts",
-        lambda conn: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked")),
+        integrity,
+        "_db_corruption_reason",
+        lambda _db_path: (
+            "integrity_check: malformed inverted index for FTS5 table main.captures_fts"
+        ),
+    )
+    monkeypatch.setattr(
+        integrity,
+        "_try_rebuild_captures_fts",
+        lambda _db_path: None,
     )
 
     recovered = integrity.check_and_recover()
@@ -164,7 +187,6 @@ def test_derived_captures_fts_repair_defers_instead_of_quarantining(
     assert recovered == []
     assert paths.index_db().exists()
     assert list(ac_root.glob("index.db.corrupt.*")) == []
-    assert "captures_fts" in (integrity._db_corruption_reason(paths.index_db()) or "")
 
 
 def test_captures_fts_vtable_constructor_error_is_rebuildable() -> None:
