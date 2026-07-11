@@ -28,9 +28,11 @@ Grant permissions to the executable that launches Persome. If a terminal starts
 the daemon, grant that terminal. If launchd later owns the daemon, rerun
 `persome doctor` after the handoff and confirm live capture.
 
-`install.sh` requests Screen Recording during OCR onboarding. Verify the whole
-local path with `persome ocr status --check`; use `persome ocr disable` for an
-explicit opt-out.
+Interactive `install.sh` runs `persome onboard`. It presents separate native
+dialogs for Accessibility and Screen Recording, waits for both live TCC probes,
+verifies the OCR worker, starts the daemon, polls local health, and writes one
+fresh capture. Rerun `persome onboard` after changing the launcher identity;
+use `persome ocr disable` for an explicit OCR opt-out.
 
 ## Local paths
 
@@ -58,6 +60,7 @@ upgrade, and gives its LaunchAgent umask `0077`.
 ## Lifecycle and first recall
 
 ```bash
+persome onboard
 persome llm status --check
 persome ocr status --check
 persome doctor
