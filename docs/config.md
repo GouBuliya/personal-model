@@ -131,7 +131,9 @@ cmux_source_enabled = true
   no OS watcher. The producer must obtain `PERSOME_LOCAL_API_TOKEN` through an
   owner-approved local secret channel and must never put it in a URL.
 - Accessibility permission is required for daemon AX capture. `install.sh`
-  requests Screen Recording and enables OCR after its worker initializes.
+  runs `persome onboard` in interactive sessions: it asks for Accessibility and
+  Screen Recording separately, enables OCR after its worker initializes, starts
+  the daemon, and proves local health plus one fresh capture.
 - Paddle inference runs in a local worker subprocess so a native crash does not
   kill the daemon. OCR text is backfilled into capture search and consumed by
   timeline/modeling; pixels are not sent to an LLM stage. The source-level

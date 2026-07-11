@@ -484,6 +484,35 @@ def doctor() -> None:
         raise typer.Exit(code=1)
 
 
+@app.command()
+def onboard(
+    tier: str = typer.Option("tiny", "--tier", help="OCR tier: tiny | small | medium."),
+    gui: bool = typer.Option(
+        True,
+        "--gui/--no-gui",
+        help="Use native macOS dialogs (falls back to terminal prompts).",
+    ),
+) -> None:
+    """Grant capture permissions, verify OCR, start Persome, and prove capture."""
+    from . import onboarding as onboarding_mod
+
+    _init()
+    env_file_mod.load_env_file(paths.env_file())
+    try:
+        proof = onboarding_mod.onboard(tier=tier, gui=gui)
+    except onboarding_mod.OnboardingCancelled as exc:
+        console.print(f"[yellow]Onboarding stopped: {exc}.[/yellow]")
+        raise typer.Exit(1) from exc
+    except onboarding_mod.OnboardingError as exc:
+        console.print(f"[red]Onboarding failed: {exc}.[/red]")
+        raise typer.Exit(1) from exc
+
+    console.print("[green]✓ Accessibility granted[/green]")
+    console.print("[green]✓ Local OCR and Screen Recording ready[/green]")
+    console.print(f"[green]✓ Persome running and healthy[/green] (pid {proof.pid})")
+    console.print(f"[green]✓ Fresh capture verified[/green] ({proof.capture_path})")
+
+
 def _ping_stages(cfg: config_mod.Config, stages: tuple[str, ...]) -> dict:
     """Probe each stage's configured model, deduping identical configs.
 
@@ -567,17 +596,9 @@ app.add_typer(ocr_app, name="ocr")
 
 
 def _open_screen_recording_settings() -> None:
-    if sys.platform != "darwin":
-        return
-    subprocess.run(
-        [
-            "open",
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
-        ],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    from .onboarding import open_screen_recording_settings
+
+    open_screen_recording_settings()
 
 
 @ocr_app.command("setup")
