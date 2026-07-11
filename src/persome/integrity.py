@@ -37,6 +37,7 @@ _log = get("persome.daemon")
 # budget. The first N problems are enough to decide "corrupt".
 _INTEGRITY_CHECK_LIMIT = 100
 _CAPTURES_FTS_INTEGRITY_ERROR = "malformed inverted index for FTS5 table main.captures_fts"
+_CAPTURES_FTS_VTABLE_ERROR = "vtable constructor failed: captures_fts"
 
 
 @dataclass(frozen=True)
@@ -128,6 +129,11 @@ def _is_captures_fts_only_damage(results: list[str]) -> bool:
     )
 
 
+def _is_captures_fts_vtable_failure(error: sqlite3.DatabaseError) -> bool:
+    """Return whether SQLite could not construct only the derived capture FTS."""
+    return _CAPTURES_FTS_VTABLE_ERROR in str(error)
+
+
 def _try_rebuild_captures_fts(db_path: Path) -> bool | None:
     """Repair a malformed derived capture FTS index without touching user data.
 
@@ -141,11 +147,22 @@ def _try_rebuild_captures_fts(db_path: Path) -> bool | None:
     captures_fts_only = False
     try:
         conn = sqlite3.connect(db_path, timeout=5.0)
-        results = [
-            str(row[0])
-            for row in conn.execute(f"PRAGMA integrity_check({_INTEGRITY_CHECK_LIMIT})").fetchall()
-        ]
-        captures_fts_only = _is_captures_fts_only_damage(results)
+        try:
+            results = [
+                str(row[0])
+                for row in conn.execute(
+                    f"PRAGMA integrity_check({_INTEGRITY_CHECK_LIMIT})"
+                ).fetchall()
+            ]
+        except sqlite3.DatabaseError as exc:
+            if not _is_captures_fts_vtable_failure(exc):
+                raise
+            # Some bundled SQLite versions reject PRAGMA integrity_check before
+            # returning the equivalent malformed-index row. The table name in
+            # this error is still narrow enough to rebuild the derived index.
+            captures_fts_only = True
+        else:
+            captures_fts_only = _is_captures_fts_only_damage(results)
         if not captures_fts_only:
             return False
 

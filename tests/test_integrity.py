@@ -141,6 +141,15 @@ def test_derived_captures_fts_repair_defers_instead_of_quarantining(
     assert "captures_fts" in (integrity._db_corruption_reason(paths.index_db()) or "")
 
 
+def test_captures_fts_vtable_constructor_error_is_rebuildable() -> None:
+    assert integrity._is_captures_fts_vtable_failure(
+        sqlite3.DatabaseError("vtable constructor failed: captures_fts")
+    )
+    assert not integrity._is_captures_fts_vtable_failure(
+        sqlite3.DatabaseError("vtable constructor failed: entries")
+    )
+
+
 def test_corrupt_config_is_quarantined_and_default_rebuilt(ac_root: Path) -> None:
     config = paths.config_file()
     # Invalid TOML: dangling key with no value, unclosed table header.
