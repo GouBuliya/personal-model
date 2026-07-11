@@ -63,6 +63,8 @@ class TestViewPage:
         assert "cdn.jsdelivr.net" not in body
         assert "Personal Model" in body
         assert "Points" in body and "Volumes" in body and "Root" in body
+        assert "The shape" in body and "of you." in body
+        assert "Local only" in body
 
     def test_bundled_viewer_assets_are_served(self, ac_root):
         three = routes.model_asset("three.module.js")
@@ -82,6 +84,9 @@ class TestViewPage:
         assert b'fetch("./graph"' in viewer.body
         assert b"fetch(`./node" in viewer.body
         assert b'fetch("/model' not in viewer.body
+        assert b"ACESFilmicToneMapping" in viewer.body
+        assert b"model.root?.signature" in viewer.body
+        assert b"prefers-reduced-motion" in css.body
         assert viewer.media_type == "text/javascript"
         assert layout.media_type == "text/javascript"
         assert css.media_type == "text/css"

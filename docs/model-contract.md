@@ -60,6 +60,12 @@ The layout is append-stable for normal chronological growth: existing nodes keep
 coordinates while later evidence expands the surrounding cloud. `window.__persomeLayoutState`
 exposes aggregate layout health for local visual smoke tests without exposing node content or IDs.
 
+The viewer presents that hierarchy as a personal constellation: a Root-centered luminous core,
+Volume and Face orbit structures, Point clouds, and restrained ambient depth cues. Its editorial
+frame uses the live Root signature as the model's plain-language identity statement so each view is
+recognizably personal without changing the snapshot. The `Local only` treatment is descriptive, not
+a publishing control: the viewer does not upload, export, or share model content.
+
 Visible node labels and their Point, Face, Volume, Root, or context meshes open the same provenance
 detail panel. Labels are keyboard-focusable; Escape closes the selection. Lines remain visual
 evidence of evolution, relation, and hierarchy and are intentionally excluded from pointer picking.
