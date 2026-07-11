@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from persome import config as config_mod
 from persome.api import build_api_app
 from persome.api import routes as routes_mod
-from persome.capture import scheduler
+from persome.capture import scheduler, screen_state
 from persome.model import export_snapshot, run_model_build
 from persome.session import store as session_store
 from persome.session.manager import SessionManager
@@ -101,6 +101,7 @@ def _wire_session_manager(clock_state: list[datetime]) -> SessionManager:
 
 
 def test_fresh_root_ingest_build_export_contract(ac_root, monkeypatch, fake_llm) -> None:
+    monkeypatch.setattr(screen_state, "is_screen_locked", lambda: False)
     captures = json.loads(FIXTURE.read_text(encoding="utf-8"))
     cfg = config_mod.load(ac_root / "config.toml")
     cfg.memory_delta.apply_enabled = False
@@ -117,7 +118,7 @@ def test_fresh_root_ingest_build_export_contract(ac_root, monkeypatch, fake_llm)
     scheduler._set_active_runner(runner)
     routes_mod.set_config(cfg)
     try:
-        client = TestClient(build_api_app(cfg))
+        client = TestClient(build_api_app(cfg, auth_enabled=False))
         assert client.post("/captures/ingest", json=captures[0]).status_code == 200
         clock_state[0] = datetime(2026, 7, 10, 9, 2, tzinfo=TZ)
         assert client.post("/captures/ingest", json=captures[1]).status_code == 200
@@ -218,7 +219,7 @@ def test_fresh_root_ingest_build_export_contract(ac_root, monkeypatch, fake_llm)
     assert all(volume["source_receipts"] for volume in snapshot["volumes"])
     assert exported.stat().st_mode & 0o777 == 0o600
 
-    client = TestClient(build_api_app(cfg))
+    client = TestClient(build_api_app(cfg, auth_enabled=False))
     graph_response = client.get("/model/graph")
     assert graph_response.status_code == 200
     live = graph_response.json()["model"]
@@ -231,5 +232,6 @@ def test_fresh_root_ingest_build_export_contract(ac_root, monkeypatch, fake_llm)
 
     page = client.get("/model")
     assert page.status_code == 200
-    assert "/model/assets/three.module.js" in page.text
+    assert '<base href="/model/">' in page.text
+    assert '"./assets/three.module.js"' in page.text
     assert "cdn.jsdelivr.net" not in page.text

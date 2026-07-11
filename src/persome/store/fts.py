@@ -11,9 +11,14 @@ from pathlib import Path
 from typing import Any
 
 from .. import paths
+from ..capture.timestamps import capture_timestamp_epoch
 from ..logger import get
 
 logger = get("persome.store")
+
+_MIN_SECURE_FTS_SQLITE = (3, 42, 0)
+_FTS_TABLES = ("entries", "captures_fts")
+_SECURE_FTS_MIGRATION_VERSION = 20260711
 
 SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS entries USING fts5(
@@ -253,9 +258,47 @@ def entry_metadata_map(
 
 def connect(db_path: Path | None = None) -> sqlite3.Connection:
     db_path = db_path or paths.index_db()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+    if sqlite3.sqlite_version_info < _MIN_SECURE_FTS_SQLITE:
+        required = ".".join(str(part) for part in _MIN_SECURE_FTS_SQLITE)
+        raise RuntimeError(
+            f"Persome requires SQLite {required}+ so deleted FTS5 text cannot be reconstructed"
+        )
+    try:
+        db_path.absolute().relative_to(paths.root().absolute())
+    except ValueError:
+        # Explicit external DB paths are supported by verification/restore
+        # helpers; do not chmod an arbitrary caller-owned parent directory.
+        within_data_root = False
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        try:
+            db_path.resolve().relative_to(paths.root().resolve())
+        except ValueError as exc:
+            raise RuntimeError(
+                f"database path escapes PERSOME_ROOT through a symlink: {db_path}"
+            ) from exc
+        within_data_root = True
+        paths.ensure_private_dir(db_path.parent)
+        # SQLite opens predictable sidecar names itself. Reject any pre-existing
+        # link/special file before the library can follow it outside the private
+        # data root or block on a FIFO.
+        for artifact in (
+            db_path,
+            db_path.with_name(f"{db_path.name}-wal"),
+            db_path.with_name(f"{db_path.name}-shm"),
+            db_path.with_name(f"{db_path.name}-journal"),
+        ):
+            paths.ensure_private_file(artifact)
     conn = sqlite3.connect(db_path, isolation_level=None, timeout=10.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    # SQLite's built-in date parser does not understand every ISO form Python's
+    # historical ingest accepted (notably basic ISO), and interprets naive
+    # values as UTC instead of local wall time. Keep one shared parser for all
+    # ordering/filtering without rewriting evidence IDs on upgrade.
+    conn.create_function("persome_epoch", 1, capture_timestamp_epoch)
+    # Personal text must not survive ordinary DELETE operations in free pages.
+    # Explicit wipe paths additionally VACUUM + truncate WAL below.
+    conn.execute("PRAGMA secure_delete=ON")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     # Make the auto-checkpoint pages explicit (this is also the SQLite default).
@@ -264,6 +307,30 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     # ``.db-wal`` and ``.db-shm`` sidecars don't drift unbounded.
     conn.execute("PRAGMA wal_autocheckpoint=1000")
     conn.executescript(SCHEMA)
+    # Core secure_delete does not cover FTS shadow segments. FTS5's persistent
+    # secure-delete setting removes stale terms on UPDATE/DELETE instead of
+    # leaving reconstructable delete-key segments behind (SQLite 3.42+).
+    try:
+        for table in _FTS_TABLES:
+            conn.execute(f"INSERT INTO {table}({table}, rank) VALUES('secure-delete', 1)")
+        # Releases before the secure-delete boundary may contain terms from
+        # rows that were logically deleted while FTS5 retained old segment
+        # bytes. Rebuild from live content and VACUUM exactly once per DB.
+        user_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if user_version < _SECURE_FTS_MIGRATION_VERSION:
+            for table in _FTS_TABLES:
+                conn.execute(f"INSERT INTO {table}({table}) VALUES('rebuild')")
+            checkpoint = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            if checkpoint is not None and int(checkpoint[0]) != 0:
+                raise sqlite3.OperationalError("legacy FTS purge could not checkpoint WAL")
+            conn.execute("VACUUM")
+            conn.execute(f"PRAGMA user_version={_SECURE_FTS_MIGRATION_VERSION}")
+            checkpoint = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            if checkpoint is not None and int(checkpoint[0]) != 0:
+                raise sqlite3.OperationalError("legacy FTS purge left a busy WAL")
+    except sqlite3.Error as exc:
+        conn.close()
+        raise RuntimeError("SQLite secure FTS5 setup or legacy-content purge failed") from exc
     from ..session import store as session_store
     from ..timeline import store as timeline_store
 
@@ -274,6 +341,10 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     from . import vectors as vectors_mod
 
     vectors_mod.ensure_schema(conn)
+    if within_data_root:
+        paths.ensure_private_file(db_path)
+        paths.ensure_private_file(db_path.with_name(f"{db_path.name}-wal"))
+        paths.ensure_private_file(db_path.with_name(f"{db_path.name}-shm"))
     return conn
 
 
@@ -284,6 +355,33 @@ def cursor(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
         yield conn
     finally:
         conn.close()
+
+
+def purge_deleted_content(conn: sqlite3.Connection) -> None:
+    """Physically compact deleted rows and truncate WAL remnants.
+
+    This is intentionally reserved for explicit user-facing clean operations;
+    running VACUUM on every retention tick would create avoidable write load.
+    Callers should stop the daemon first so an active reader cannot keep the WAL
+    checkpoint busy.
+    """
+    conn.execute("PRAGMA secure_delete=ON")
+    for table in _FTS_TABLES:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()
+        if exists is not None:
+            conn.execute(f"INSERT INTO {table}({table}, rank) VALUES('secure-delete', 1)")
+            conn.execute(f"INSERT INTO {table}({table}) VALUES('rebuild')")
+    before = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    if before is not None and int(before[0]) != 0:
+        raise sqlite3.OperationalError(
+            "cannot securely purge while another SQLite reader is active"
+        )
+    conn.execute("VACUUM")
+    after = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    if after is not None and int(after[0]) != 0:
+        raise sqlite3.OperationalError("WAL remained busy after secure purge")
 
 
 def checkpoint(mode: str = "TRUNCATE") -> tuple[int, int, int]:
@@ -339,6 +437,7 @@ def list_files(
     *,
     include_dormant: bool = False,
     include_archived: bool = False,
+    limit: int | None = None,
 ) -> list[FileRow]:
     statuses = ["active"]
     if include_dormant:
@@ -346,10 +445,12 @@ def list_files(
     if include_archived:
         statuses.append("archived")
     placeholders = ",".join("?" * len(statuses))
-    rows = conn.execute(
-        f"SELECT * FROM files WHERE status IN ({placeholders}) ORDER BY updated DESC",
-        statuses,
-    ).fetchall()
+    sql = f"SELECT * FROM files WHERE status IN ({placeholders}) ORDER BY updated DESC"
+    parameters: list[Any] = list(statuses)
+    if limit is not None:
+        sql += " LIMIT ?"
+        parameters.append(int(limit))
+    rows = conn.execute(sql, parameters).fetchall()
     return [_to_file_row(r) for r in rows]
 
 
@@ -1295,10 +1396,10 @@ def search_captures(
     clauses = ["captures_fts MATCH ?"]
     args: list[Any] = [safe_query]
     if since:
-        clauses.append("c.timestamp >= ?")
+        clauses.append("persome_epoch(c.timestamp) >= persome_epoch(?)")
         args.append(since)
     if until:
-        clauses.append("c.timestamp <= ?")
+        clauses.append("persome_epoch(c.timestamp) <= persome_epoch(?)")
         args.append(until)
     if app_name:
         clauses.append("LOWER(c.app_name) LIKE ?")
@@ -1343,10 +1444,10 @@ def recent_captures(
     clauses: list[str] = []
     args: list[Any] = []
     if since:
-        clauses.append("timestamp >= ?")
+        clauses.append("persome_epoch(timestamp) >= persome_epoch(?)")
         args.append(since)
     if until:
-        clauses.append("timestamp <= ?")
+        clauses.append("persome_epoch(timestamp) <= persome_epoch(?)")
         args.append(until)
     if app_name:
         clauses.append("LOWER(app_name) LIKE ?")
@@ -1356,7 +1457,7 @@ def recent_captures(
         "SELECT id, timestamp, app_name, bundle_id, window_title, "
         "       focused_role, focused_value, url "
         f"  FROM captures {where} "
-        " ORDER BY timestamp DESC LIMIT ?"
+        " ORDER BY persome_epoch(timestamp) DESC, timestamp DESC LIMIT ?"
     )
     args.append(limit)
     rows = conn.execute(sql, args).fetchall()

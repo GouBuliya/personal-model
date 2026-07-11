@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
+from ..capture.timestamps import capture_timestamp_epoch
+
 SessionStatus = Literal["active", "ended", "reduced", "failed"]
 
 SCHEMA = """
@@ -84,6 +86,7 @@ class SessionRow:
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
+    conn.create_function("persome_epoch", 1, capture_timestamp_epoch)
     conn.executescript(SCHEMA)
     _migrate(conn)
 
@@ -129,7 +132,10 @@ def recover_active(conn: sqlite3.Connection, *, recovered_at: datetime) -> list[
     newest row closes at daemon boot. The status guard in ``mark_ended`` keeps
     this recovery idempotent across repeated starts.
     """
-    rows = conn.execute("SELECT * FROM sessions ORDER BY start_time ASC, created_at ASC").fetchall()
+    rows = conn.execute(
+        "SELECT * FROM sessions ORDER BY persome_epoch(start_time) ASC, "
+        "persome_epoch(created_at) ASC"
+    ).fetchall()
     sessions = [_to_row(row) for row in rows]
     recovered: list[SessionRow] = []
     for index, row in enumerate(sessions):
@@ -264,8 +270,8 @@ def list_due_for_retry(conn: sqlite3.Connection, *, now: datetime) -> list[Sessi
         """
         SELECT * FROM sessions
          WHERE status='failed'
-           AND (next_retry_at IS NULL OR next_retry_at <= ?)
-         ORDER BY start_time ASC
+           AND (next_retry_at IS NULL OR persome_epoch(next_retry_at) <= persome_epoch(?))
+         ORDER BY persome_epoch(start_time) ASC
         """,
         (now.isoformat(),),
     ).fetchall()
@@ -280,7 +286,7 @@ def list_pending_modeling(conn: sqlite3.Connection) -> list[SessionRow]:
          WHERE status = 'reduced'
            AND end_time IS NOT NULL
            AND modeled_at IS NULL
-         ORDER BY start_time ASC
+         ORDER BY persome_epoch(start_time) ASC
         """
     ).fetchall()
     return [_to_row(r) for r in rows]
@@ -299,7 +305,7 @@ def list_pending_reduction(conn: sqlite3.Connection) -> list[SessionRow]:
         SELECT * FROM sessions
          WHERE status IN ('ended', 'failed')
            AND end_time IS NOT NULL
-         ORDER BY start_time ASC
+         ORDER BY persome_epoch(start_time) ASC
         """,
     ).fetchall()
     return [_to_row(r) for r in rows]

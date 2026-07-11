@@ -12,14 +12,34 @@ on:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v8.3.2
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.10.9"
+
+      - name: Verify release tag is on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::release tag must point to a commit reachable from origin/main"
+            exit 1
+          fi
 
       - name: Check tag matches package version
         run: |
@@ -36,24 +56,33 @@ jobs:
           PERSOME_LLM_MOCK: "1"
         run: |
           uv lock --check
-          uv sync --all-extras
-          uv run ruff check .
-          uv run ruff format --check .
+          uv sync --all-extras --locked --no-install-project --no-build
+          uv build --wheel --out-dir "$RUNNER_TEMP/persome-verify-dist" \
+            --build-constraints build-constraints.txt --require-hashes
+          uv pip install --python .venv/bin/python --no-deps --force-reinstall \
+            "$RUNNER_TEMP"/persome-verify-dist/persome_core-*.whl
+          uv export --format requirements-txt --all-extras --no-dev --locked \
+            --no-emit-project --quiet --output-file "$RUNNER_TEMP/persome-runtime.txt"
+          uv run --no-sync pip-audit --requirement "$RUNNER_TEMP/persome-runtime.txt" \
+            --require-hashes --disable-pip --progress-spinner off
+          uv run --no-sync ruff check .
+          uv run --no-sync ruff format --check .
           bash -n install.sh uninstall.sh resources/*.sh
-          uv run pytest -m "not macos and not integration" -q
-          uv run python scripts/secret_scan.py
-          uv run python scripts/pii_scan.py
-          uv run python scripts/language_scan.py
-          uv run python scripts/check_doc_links.py
+          uv run --no-sync pytest -m "not macos and not integration" -q
+          uv run --no-sync python scripts/secret_scan.py
+          uv run --no-sync python scripts/pii_scan.py
+          uv run --no-sync python scripts/language_scan.py
+          uv run --no-sync python scripts/check_doc_links.py
 
       - name: Synthetic MCP transport smoke
         env:
           PERSOME_LLM_MOCK: "1"
         run: |
-          uv run python scripts/sample_demo.py --no-open --port 18743 >/tmp/persome-sample.log 2>&1 &
+          uv run --no-sync python scripts/sample_demo.py --no-open --port 18743 >/tmp/persome-sample.log 2>&1 &
           sample_pid=$!
           trap 'kill "$sample_pid" 2>/dev/null || true' EXIT
-          for attempt in $(seq 1 30); do
+          attempts=30
+          while (( attempts > 0 )); do
             if curl --fail --silent http://127.0.0.1:18743/health >/dev/null; then
               break
             fi
@@ -61,22 +90,28 @@ jobs:
               cat /tmp/persome-sample.log
               exit 1
             fi
+            attempts=$((attempts - 1))
             sleep 1
           done
           curl --fail --silent http://127.0.0.1:18743/health >/dev/null
-          uv run python scripts/verify_sample_mcp.py --url http://127.0.0.1:18743/mcp
+          uv run --no-sync python scripts/verify_sample_mcp.py --url http://127.0.0.1:18743/mcp
 
       - name: Build sdist + wheel
         run: |
-          uv build
+          uv build --build-constraints build-constraints.txt --require-hashes
           cd dist
-          sha256sum *.whl *.tar.gz > SHA256SUMS
+          sha256sum ./*.whl ./*.tar.gz > SHA256SUMS
           sha256sum --check SHA256SUMS
 
       - name: Smoke-test built wheel
         run: |
+          uv export --format requirements-txt --all-extras --no-dev --locked \
+            --no-emit-project --quiet --output-file /tmp/persome-runtime.txt
           uv venv /tmp/persome-wheel --python 3.11
-          uv pip install --python /tmp/persome-wheel/bin/python dist/persome_core-*.whl
+          uv pip install --python /tmp/persome-wheel/bin/python --require-hashes \
+            --no-build --requirement /tmp/persome-runtime.txt
+          uv pip install --python /tmp/persome-wheel/bin/python --no-deps \
+            dist/persome_core-*.whl
           cd /tmp
           PERSOME_ROOT=/tmp/persome-smoke-root /tmp/persome-wheel/bin/persome --help >/dev/null
           /tmp/persome-wheel/bin/python - <<'PY'
@@ -102,7 +137,12 @@ jobs:
               assert (bundled / relative).is_file(), relative
           PY
 
-      - uses: actions/upload-artifact@v7
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-checksums: dist/SHA256SUMS
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dist
           path: dist/
@@ -113,9 +153,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: dist
           path: dist/

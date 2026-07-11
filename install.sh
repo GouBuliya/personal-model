@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -13,6 +14,30 @@ UV_BIN=""
 PERSOME_BIN=""
 INSTALL_BIN_DIR=""
 PYTHON_TARGET=""
+INSTALL_TRANSACTION_ACTIVE=0
+OLD_VENV_BACKUP=""
+
+rollback_uncommitted_install() {
+  local status=$?
+  trap - EXIT
+  if [[ ${status} -ne 0 && ${INSTALL_TRANSACTION_ACTIVE} -eq 1 ]]; then
+    warn "installation failed; restoring the previous virtualenv"
+    rm -rf "${VENV_DIR}"
+    if [[ -n "${OLD_VENV_BACKUP}" && -d "${OLD_VENV_BACKUP}" ]]; then
+      mv "${OLD_VENV_BACKUP}" "${VENV_DIR}"
+    fi
+  fi
+  exit "${status}"
+}
+
+trap rollback_uncommitted_install EXIT
+
+# The fallback bootstrap downloads a specific uv release and verifies the
+# archive before executing any of its contents. Update version + both digests
+# together after reviewing the upstream release.
+UV_BOOTSTRAP_VERSION="0.10.9"
+UV_SHA256_AARCH64_DARWIN="a92f61e9ac9b0f29668c15f56152e4a60143fca148ff5bfadb86718472c3f376"
+UV_SHA256_X86_64_DARWIN="9cc2de7d195fa157f98b306a8a1cb151ded93f488939b93363cebc8b9d598c28"
 
 log() {
   printf '[persome-install] %s\n' "$*"
@@ -136,26 +161,54 @@ ensure_uv() {
     return
   fi
 
-  log "uv not found; installing it"
-  if command -v curl >/dev/null 2>&1; then
-    curl -LsSf https://astral.sh/uv/install.sh | sh || die "failed to install uv via curl"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -qO- https://astral.sh/uv/install.sh | sh || die "failed to install uv via wget"
-  else
-    die "uv not found and neither curl nor wget is available to install it"
+  command -v curl >/dev/null 2>&1 || die "uv not found and curl is unavailable"
+  command -v shasum >/dev/null 2>&1 || die "uv bootstrap requires shasum"
+
+  local machine target expected archive tmp_dir actual extracted install_dir
+  machine="$(uname -m)"
+  case "${machine}" in
+    arm64)
+      target="aarch64-apple-darwin"
+      expected="${UV_SHA256_AARCH64_DARWIN}"
+      ;;
+    x86_64)
+      target="x86_64-apple-darwin"
+      expected="${UV_SHA256_X86_64_DARWIN}"
+      ;;
+    *)
+      die "unsupported macOS architecture for uv bootstrap: ${machine}"
+      ;;
+  esac
+
+  archive="uv-${target}.tar.gz"
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/persome-uv.XXXXXX")"
+  log "uv not found; downloading verified uv ${UV_BOOTSTRAP_VERSION}"
+  if ! curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+    "https://github.com/astral-sh/uv/releases/download/${UV_BOOTSTRAP_VERSION}/${archive}" \
+    --output "${tmp_dir}/${archive}"; then
+    rm -rf "${tmp_dir}"
+    die "failed to download uv ${UV_BOOTSTRAP_VERSION}"
   fi
+  actual="$(shasum -a 256 "${tmp_dir}/${archive}" | awk '{print $1}')"
+  if [[ "${actual}" != "${expected}" ]]; then
+    rm -rf "${tmp_dir}"
+    die "uv archive checksum mismatch"
+  fi
+  tar -xzf "${tmp_dir}/${archive}" -C "${tmp_dir}" \
+    || { rm -rf "${tmp_dir}"; die "failed to extract verified uv archive"; }
+  extracted="${tmp_dir}/uv-${target}/uv"
+  [[ -x "${extracted}" ]] \
+    || { rm -rf "${tmp_dir}"; die "verified uv archive had an unexpected layout"; }
 
-  local candidate candidate_dir
-  for candidate in "$HOME/.local/bin/uv" "$HOME/.cargo/bin/uv"; do
-    if [[ -x "${candidate}" ]]; then
-      UV_BIN="${candidate}"
-      candidate_dir="$(dirname "${candidate}")"
-      export PATH="${candidate_dir}:${PATH}"
-      return
-    fi
-  done
-
-  die "uv installation finished but the binary was not found in a standard user bin directory"
+  install_dir="${HOME}/.local/bin"
+  mkdir -p "${install_dir}"
+  install -m 0755 "${extracted}" "${install_dir}/uv"
+  if [[ -x "${tmp_dir}/uv-${target}/uvx" ]]; then
+    install -m 0755 "${tmp_dir}/uv-${target}/uvx" "${install_dir}/uvx"
+  fi
+  rm -rf "${tmp_dir}"
+  UV_BIN="${install_dir}/uv"
+  export PATH="${install_dir}:${PATH}"
 }
 
 find_compatible_system_python() {
@@ -166,10 +219,20 @@ find_compatible_system_python() {
   local version
   version="$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:3])))' 2>/dev/null || true)"
   [[ -n "${version}" ]] || return 1
-  # paddlepaddle ships wheels for CPython 3.11-3.13 only; a newer system
-  # Python (e.g. Homebrew 3.14) resolves to "no matching ABI" at install
-  # time, so treat it as incompatible and fall through to uv-managed Python.
-  if version_ge "${version}" "3.11" && ! version_ge "${version}" "3.14"; then
+  # paddlepaddle ships wheels for CPython 3.11-3.13 only. Persome also needs
+  # SQLite 3.42+ so FTS5 secure-delete can remove sensitive shadow-table text.
+  # Treat either mismatch as incompatible and fall through to uv-managed Python.
+  if version_ge "${version}" "3.11" && ! version_ge "${version}" "3.14" \
+    && python3 - <<'PY' >/dev/null 2>&1
+import sqlite3
+
+if sqlite3.sqlite_version_info < (3, 42, 0):
+    raise SystemExit(1)
+conn = sqlite3.connect(":memory:")
+conn.execute("CREATE VIRTUAL TABLE probe USING fts5(body)")
+conn.execute("INSERT INTO probe(probe, rank) VALUES('secure-delete', 1)")
+PY
+  then
     command -v python3
     return 0
   fi
@@ -184,25 +247,100 @@ prepare_python_target() {
     return 0
   fi
 
-  log "system Python outside the supported 3.11-3.13 band; installing managed Python ${PYTHON_SPEC} via uv"
+  log "system Python lacks a supported Python/SQLite runtime; installing managed Python ${PYTHON_SPEC} via uv"
   "${UV_BIN}" python install "${PYTHON_SPEC}" || die "failed to install Python ${PYTHON_SPEC} via uv"
   PYTHON_TARGET="${PYTHON_SPEC}"
 }
 
 install_package() {
   local python_target="$1"
-  rm -rf "${VENV_DIR}"
+  local build_dir
+  local -a wheels
+  "${UV_BIN}" lock --project "${ROOT_DIR}" --check \
+    || die "uv.lock is stale; refusing an unlocked installation"
+
+  build_dir="$(mktemp -d "${TMPDIR:-/tmp}/persome-wheel.XXXXXX")"
+  log "building Persome with hash-verified build dependencies"
+  # uv 0.10.9 mis-parses an absolute --project value containing spaces. A
+  # quoted subshell keeps arbitrary checkout paths intact without changing the
+  # caller's working directory.
+  if ! (
+    cd "${ROOT_DIR}"
+    "${UV_BIN}" build --project . --wheel \
+      --build-constraints build-constraints.txt --require-hashes \
+      --out-dir "${build_dir}"
+  ); then
+    rm -rf "${build_dir}"
+    die "failed to build Persome with the pinned build environment"
+  fi
+  wheels=("${build_dir}"/persome_core-*.whl)
+  if [[ ${#wheels[@]} -ne 1 || ! -f "${wheels[0]}" ]]; then
+    rm -rf "${build_dir}"
+    die "expected exactly one built Persome wheel"
+  fi
+
   mkdir -p "${INSTALL_HOME}"
+  chmod 0700 "${INSTALL_HOME}"
+  OLD_VENV_BACKUP="${VENV_DIR}.previous.$$"
+  rm -rf "${OLD_VENV_BACKUP}"
+  if [[ -d "${VENV_DIR}" ]]; then
+    mv "${VENV_DIR}" "${OLD_VENV_BACKUP}"
+  fi
+  INSTALL_TRANSACTION_ACTIVE=1
 
   log "creating virtualenv at ${VENV_DIR}"
-  "${UV_BIN}" venv "${VENV_DIR}" --python "${python_target}" || die "failed to create virtualenv"
+  if ! "${UV_BIN}" venv "${VENV_DIR}" --python "${python_target}"; then
+    rm -rf "${build_dir}"
+    die "failed to create virtualenv"
+  fi
 
-  log "installing Persome into the virtualenv"
-  "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python" "${ROOT_DIR}" \
-    || die "failed to install Persome into ${VENV_DIR}"
+  log "installing locked binary dependencies into the virtualenv"
+  if ! UV_PROJECT_ENVIRONMENT="${VENV_DIR}" \
+    "${UV_BIN}" sync --project "${ROOT_DIR}" --locked --no-dev \
+      --no-install-project --no-build --python "${python_target}"; then
+    rm -rf "${build_dir}"
+    die "failed to install Persome dependencies into ${VENV_DIR}"
+  fi
+
+  if ! "${VENV_DIR}/bin/python" - "${python_target}" <<'PY'
+import re
+import sqlite3
+import sys
+
+requested = sys.argv[1]
+match = re.fullmatch(r"(\d+)\.(\d+)(?:\.\d+)?", requested)
+if match and sys.version_info[:2] != (int(match.group(1)), int(match.group(2))):
+    raise SystemExit(
+        f"requested Python {requested}, got {sys.version_info.major}.{sys.version_info.minor}"
+    )
+if sqlite3.sqlite_version_info < (3, 42, 0):
+    raise SystemExit(f"SQLite 3.42+ required, got {sqlite3.sqlite_version}")
+conn = sqlite3.connect(":memory:")
+conn.execute("CREATE VIRTUAL TABLE probe USING fts5(body)")
+conn.execute("INSERT INTO probe(probe, rank) VALUES('secure-delete', 1)")
+PY
+  then
+    rm -rf "${build_dir}"
+    die "installed Python/SQLite runtime failed compatibility verification"
+  fi
+
+  log "installing the verified local Persome wheel"
+  if ! "${UV_BIN}" pip install --python "${VENV_DIR}/bin/python" --no-deps "${wheels[0]}"; then
+    rm -rf "${build_dir}"
+    die "failed to install the verified Persome wheel into ${VENV_DIR}"
+  fi
+  rm -rf "${build_dir}"
 
   PERSOME_BIN="${VENV_DIR}/bin/persome"
   [[ -x "${PERSOME_BIN}" ]] || die "expected CLI not found at ${PERSOME_BIN}"
+}
+
+commit_install() {
+  if [[ -n "${OLD_VENV_BACKUP}" ]]; then
+    rm -rf "${OLD_VENV_BACKUP}"
+  fi
+  OLD_VENV_BACKUP=""
+  INSTALL_TRANSACTION_ACTIVE=0
 }
 
 compile_bundled_binaries() {
@@ -239,17 +377,25 @@ choose_install_bin_dir() {
 install_shim() {
   INSTALL_BIN_DIR="$(choose_install_bin_dir)"
   local shim_path="${INSTALL_BIN_DIR}/persome"
-  cat > "${shim_path}" <<EOF
-#!/usr/bin/env bash
-exec "${PERSOME_BIN}" "\$@"
-EOF
-  chmod +x "${shim_path}"
+  local quoted_bin quoted_root
+  printf -v quoted_bin '%q' "${PERSOME_BIN}"
+  printf -v quoted_root '%q' "${INSTALL_HOME}"
+  # Runtime expansion in the generated shim is intentional.
+  # shellcheck disable=SC2016
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -euo pipefail' \
+    'if [[ -z "${PERSOME_ROOT:-}" ]]; then' \
+    "  export PERSOME_ROOT=${quoted_root}" \
+    'fi' \
+    "exec ${quoted_bin} \"\$@\"" > "${shim_path}"
+  chmod 0755 "${shim_path}"
   export PATH="${INSTALL_BIN_DIR}:${PATH}"
   log "installed persome shim at ${shim_path}"
 }
 
 verify_install() {
-  "${INSTALL_BIN_DIR}/persome" status >/dev/null \
+  PERSOME_ROOT="${INSTALL_HOME}" "${PERSOME_BIN}" status >/dev/null \
     || die "installation verification failed ('persome status' did not succeed)"
 }
 
@@ -329,12 +475,17 @@ maybe_configure_llm() {
 
   if [[ ! -f "${config_path}" ]]; then
     log "creating default config at ${config_path}"
-    "${VENV_DIR}/bin/python" -c "
+    if ! "${VENV_DIR}/bin/python" - "${ROOT_DIR}/src" <<'PY'
 import sys
-sys.path.insert(0, '${ROOT_DIR}/src')
+
+sys.path.insert(0, sys.argv[1])
 from persome.config import write_default_if_missing
+
 write_default_if_missing()
-" || warn "failed to create default config; you can create it manually later"
+PY
+    then
+      warn "failed to create default config; you can create it manually later"
+    fi
   fi
 
   if [[ ! -t 0 ]]; then
@@ -396,6 +547,32 @@ PY
   esac
 }
 
+ensure_local_api_token() {
+  local env_path="${INSTALL_HOME}/env"
+  local status
+  status="$("${VENV_DIR}/bin/python" - "${env_path}" <<'PY'
+import sys
+from pathlib import Path
+
+from persome.env_file import ensure_local_api_token
+
+print(ensure_local_api_token(Path(sys.argv[1])))
+PY
+)" || die "failed to provision PERSOME_LOCAL_API_TOKEN"
+
+  case "${status}" in
+    existing)
+      log "local API bearer token already configured"
+      ;;
+    generated)
+      log "generated machine-local API bearer token in ${env_path}"
+      ;;
+    *)
+      die "unexpected local API token provisioning result: ${status}"
+      ;;
+  esac
+}
+
 print_summary() {
   cat <<EOF
 
@@ -417,7 +594,7 @@ Next steps:
   3. Check status:
      persome status
   4. Open the live personal-model viewer:
-     http://127.0.0.1:8742/model
+     persome model open
 
 Event memory can appear during a session's five-minute flushes. Points and Lines
 are modeled from each successful flush while the daemon keeps running. Face,
@@ -425,9 +602,11 @@ Volume, and Root need repeated evidence and refresh in the background. The
 viewer refreshes itself; stopping Persome is never a modeling step.
 
 Connect an agent (MCP):
-  Point any MCP client at the daemon's memory server:
-    persome mcp            # stdio transport (Claude Desktop / Cursor / Cline)
-  or the in-daemon HTTP endpoint at http://127.0.0.1:8742/mcp
+  Prefer the owner-local stdio transport (no bearer token copied into client config):
+    persome install claude-code
+    persome install codex
+    persome install claude-desktop
+    persome install opencode
 
 Run a health check any time:
   persome doctor
@@ -456,12 +635,14 @@ main() {
   prepare_python_target
   [[ -n "${PYTHON_TARGET}" ]] || die "failed to determine a Python target"
   install_package "${PYTHON_TARGET}"
+  ensure_screenshot_key
+  ensure_local_api_token
   compile_bundled_binaries
-  install_shim
   verify_install
+  commit_install
+  install_shim
   inject_detected_clients
   maybe_configure_llm
-  ensure_screenshot_key
   print_summary
 }
 

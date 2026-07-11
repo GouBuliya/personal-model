@@ -71,7 +71,7 @@ def test_get_model_snapshot_uses_versioned_contract(ac_root: Path) -> None:
 
 
 def test_server_reports_runtime_version(ac_root: Path) -> None:
-    server = mcp_server.build_server()
+    server = mcp_server.build_server(auth_enabled=False)
     assert server._mcp_server.version == __version__
 
 
@@ -306,6 +306,27 @@ def test_current_context_app_filter(ac_root: Path) -> None:
 
     ctx = captures_mod.current_context(app_filter="Safari", headline_limit=5)
     assert [h["file_stem"] for h in ctx["recent_captures_headline"]] == ["c2"]
+
+
+def test_current_context_headline_normalizes_timestamp_to_display_timezone(ac_root: Path) -> None:
+    from datetime import datetime
+
+    timestamp = "2025-11-02T06:00:00+00:00"
+    with fts.cursor() as conn:
+        _seed_capture(
+            conn,
+            id="utc-capture",
+            ts=timestamp,
+            app="Cursor",
+            title="main.py",
+            value="",
+            text="A",
+        )
+
+    ctx = captures_mod.current_context(headline_limit=1)
+    assert ctx["recent_captures_headline"][0]["time"] == datetime.fromisoformat(
+        timestamp
+    ).astimezone().strftime("%H:%M")
 
 
 # --- _parse_iso_opt tz normalization (#149) --------------------------------

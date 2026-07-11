@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
+from persome import paths
 from persome.capture import scheduler as scheduler_mod
 from persome.store import fts
 
@@ -130,3 +132,122 @@ def test_cleanup_eviction_also_drops_fts(ac_root: Path) -> None:
     assert len(remaining) == 3 - stats["evicted"]
     # Newest survives.
     assert written[-1].stem in remaining
+
+
+def test_hard_cap_continues_after_unlink_failure(ac_root: Path, monkeypatch) -> None:
+    written: list[Path] = []
+    for i in range(3):
+        written.append(
+            scheduler_mod._write_capture(
+                _capture_dict(
+                    ts=f"2026-04-22T1{i}:00:00+08:00",
+                    app="Cursor",
+                    title=f"w-{i}",
+                    value="",
+                    text="x" * 500_000,
+                )
+            )
+        )
+        os.utime(written[-1], (1_700_000_000 + i, 1_700_000_000 + i))
+
+    original_unlink = Path.unlink
+
+    def fail_oldest(path: Path, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        if path == written[0]:
+            raise OSError("synthetic unlink failure")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_oldest)
+    stats = scheduler_mod.cleanup_buffer(
+        retention_hours=24 * 365 * 10,
+        processed_before_ts="2099-01-01T00:00:00+00:00",
+        max_mb=1,
+    )
+
+    assert stats["evicted"] >= 1
+    on_disk = {p.stem for p in paths.capture_buffer_dir().glob("*.json")}
+    assert sum(p.stat().st_size for p in paths.capture_buffer_dir().glob("*.json")) <= 1024**2
+    with fts.cursor() as conn:
+        indexed = {row[0] for row in conn.execute("SELECT id FROM captures").fetchall()}
+    assert indexed == on_disk
+
+
+def test_hard_cap_reconciles_after_transient_fts_failure(ac_root: Path, monkeypatch) -> None:
+    for i in range(3):
+        scheduler_mod._write_capture(
+            _capture_dict(
+                ts=f"2026-04-22T1{i}:00:00+08:00",
+                app="Cursor",
+                title=f"w-{i}",
+                value="",
+                text="x" * 500_000,
+            )
+        )
+
+    real_delete = scheduler_mod._delete_captures_from_fts
+    real_prune = scheduler_mod._prune_missing_capture_rows
+    monkeypatch.setattr(scheduler_mod, "_delete_captures_from_fts", lambda _stems: False)
+    monkeypatch.setattr(scheduler_mod, "_prune_missing_capture_rows", lambda _buf: False)
+    stats = scheduler_mod.cleanup_buffer(
+        retention_hours=24 * 365,
+        processed_before_ts="2020-01-01T00:00:00+00:00",
+        max_mb=1,
+    )
+    assert stats["evicted"] >= 1
+
+    monkeypatch.setattr(scheduler_mod, "_delete_captures_from_fts", real_delete)
+    monkeypatch.setattr(scheduler_mod, "_prune_missing_capture_rows", real_prune)
+    scheduler_mod.cleanup_buffer(retention_hours=24 * 365, max_mb=0)
+
+    on_disk = {p.stem for p in paths.capture_buffer_dir().glob("*.json")}
+    with fts.cursor() as conn:
+        indexed = {row[0] for row in conn.execute("SELECT id FROM captures").fetchall()}
+    assert indexed == on_disk
+
+
+def test_prune_does_not_delete_row_inserted_after_candidate_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    buf = tmp_path / "captures"
+    buf.mkdir()
+    ids = {"old"}
+    deleted: list[str] = []
+
+    class _Rows:
+        def fetchall(self):  # type: ignore[no-untyped-def]
+            # Model a capture that lands after the DB candidate query but before
+            # the directory scan. It must not be part of the stale candidate set.
+            ids.add("new")
+            (buf / "new.json").write_text("{}", encoding="utf-8")
+            return [("old",)]
+
+    class _Conn:
+        def execute(self, sql: str):  # type: ignore[no-untyped-def]
+            return _Rows() if sql == "SELECT id FROM captures" else self
+
+    @contextmanager
+    def fake_cursor():  # type: ignore[no-untyped-def]
+        yield _Conn()
+
+    def fake_delete(_conn, stem: str) -> None:  # type: ignore[no-untyped-def]
+        deleted.append(stem)
+        ids.discard(stem)
+
+    monkeypatch.setattr(scheduler_mod.fts_store, "cursor", fake_cursor)
+    monkeypatch.setattr(scheduler_mod.fts_store, "delete_capture", fake_delete)
+
+    assert scheduler_mod._prune_missing_capture_rows(buf) is True
+    assert deleted == ["old"]
+    assert ids == {"new"}
+
+
+def test_cleanup_removes_stale_atomic_capture_temp(ac_root: Path) -> None:
+    temporary = paths.capture_buffer_dir() / ".2026-07-11T12-00-00p00-00.json.crash"
+    temporary.write_bytes(b"RAW_CAPTURE_SCREEN_SECRET" * 100_000)
+    stale = time.time() - scheduler_mod._ATOMIC_CAPTURE_TEMP_GRACE_SECONDS - 1
+    os.utime(temporary, (stale, stale))
+
+    stats = scheduler_mod.cleanup_buffer(retention_hours=1, max_mb=1)
+
+    assert stats["deleted"] == 1
+    assert not temporary.exists()

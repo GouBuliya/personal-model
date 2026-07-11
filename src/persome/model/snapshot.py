@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 from collections import Counter
 from datetime import UTC, datetime
@@ -438,16 +437,8 @@ def export_snapshot(
         stamp = snapshot["generated_at"].replace(":", "-").replace("+", "_")
         target = paths.exports_dir() / f"model-snapshot-{stamp}.json"
     target = Path(target)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-    try:
-        temporary.write_text(
-            json.dumps(snapshot, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        os.chmod(temporary, 0o600)
-        temporary.replace(target)
-        os.chmod(target, 0o600)
-    finally:
-        temporary.unlink(missing_ok=True)
+    paths.atomic_write_private_text(
+        target,
+        json.dumps(snapshot, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    )
     return target

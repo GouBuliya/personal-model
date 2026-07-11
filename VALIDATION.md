@@ -5,13 +5,13 @@ only synthetic data and does not require provider credentials.
 
 ## 1. Install the development environment
 
-Requirements: Python 3.11+, `uv`, and macOS 13+ for live capture. The offline
-Runtime tests also run on Linux.
+Requirements: Python 3.11+, SQLite 3.42+ with FTS5, `uv`, and macOS 13+ for live
+capture. The offline Runtime tests also run on Linux.
 
 ```bash
 git clone https://github.com/Persome-ai/persome-core.git
 cd persome-core
-uv sync --all-extras
+uv sync --all-extras --locked
 ```
 
 ## 2. Exercise the complete synthetic path
@@ -46,6 +46,10 @@ The synthetic inputs and schema golden live in
 PERSOME_LLM_MOCK=1 uv run pytest -m "not macos and not integration"
 uv run ruff check .
 uv run ruff format --check .
+uv export --format requirements-txt --all-extras --no-dev --locked \
+  --no-emit-project --quiet --output-file /tmp/persome-runtime.txt
+uv run pip-audit --requirement /tmp/persome-runtime.txt \
+  --require-hashes --disable-pip --progress-spinner off
 uv run python scripts/secret_scan.py
 uv run python scripts/pii_scan.py
 uv run python scripts/language_scan.py
@@ -81,7 +85,7 @@ persome start
 persome model status
 persome model build
 persome model export
-open http://127.0.0.1:8742/model
+persome model open
 ```
 
 Active sessions flush new evidence every five minutes by default. Session end
@@ -105,9 +109,14 @@ installed CLI:
 
 ```bash
 rm -rf /tmp/persome-wheel-venv /tmp/persome-wheel-root
-uv build
+uv build --build-constraints build-constraints.txt --require-hashes
+uv export --format requirements-txt --all-extras --no-dev --locked \
+  --no-emit-project --quiet --output-file /tmp/persome-runtime.txt
 uv venv /tmp/persome-wheel-venv --python 3.11
-uv pip install --python /tmp/persome-wheel-venv/bin/python dist/persome_core-*.whl
+uv pip install --python /tmp/persome-wheel-venv/bin/python \
+  --require-hashes --no-build --requirement /tmp/persome-runtime.txt
+uv pip install --python /tmp/persome-wheel-venv/bin/python \
+  --no-deps dist/persome_core-*.whl
 cd /tmp
 PERSOME_ROOT=/tmp/persome-wheel-root \
   /tmp/persome-wheel-venv/bin/persome doctor
@@ -117,6 +126,31 @@ PERSOME_ROOT=/tmp/persome-wheel-root \
 
 `persome ocr-selftest <image>` performs a full bundled OCR inference check on
 Apple Silicon.
+
+For a GitHub Release produced by the current workflow (older releases are not
+retroactively attested), also download `SHA256SUMS`, verify it from the
+artifact directory, and constrain GitHub provenance to the release workflow,
+tag, and hosted runner:
+
+```bash
+shasum -a 256 --check SHA256SUMS
+TAG=vX.Y.Z
+gh attestation verify persome_core-*.whl \
+  --repo Persome-ai/persome-core \
+  --signer-workflow Persome-ai/persome-core/.github/workflows/release.yml \
+  --source-ref "refs/tags/${TAG}" \
+  --deny-self-hosted-runners
+gh attestation verify persome_core-*.tar.gz \
+  --repo Persome-ai/persome-core \
+  --signer-workflow Persome-ai/persome-core/.github/workflows/release.yml \
+  --source-ref "refs/tags/${TAG}" \
+  --deny-self-hosted-runners
+```
+
+The release workflow accepts only an administrator-protected version tag whose
+commit is reachable from `origin/main`. Its Actions are pinned to full commit
+SHAs and its default token permission is read-only; only the final release job
+receives `contents: write`.
 
 ## 7. Build record
 

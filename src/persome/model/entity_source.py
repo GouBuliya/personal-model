@@ -6,9 +6,17 @@ import sqlite3
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
+from datetime import UTC, datetime
+
+from ..capture.timestamps import parse_capture_timestamp
 
 _ENTITY_PREFIXES = {"person-": "person", "org-": "org", "project-": "project"}
 _DERIVED_PERSON_TAGS = ("person-entity", "person-event")
+
+
+def _time_sort_key(value: object) -> datetime:
+    parsed = parse_capture_timestamp(value) if isinstance(value, str) else None
+    return parsed if parsed is not None else datetime.min.replace(tzinfo=UTC)
 
 
 @dataclass(frozen=True)
@@ -52,7 +60,7 @@ class EntitySource:
         unique = {event.stable_id: event for event in [*direct, *mentions]}
         return sorted(
             unique.values(),
-            key=lambda event: (event.occurred_at or "", event.stable_id),
+            key=lambda event: (_time_sort_key(event.occurred_at), event.stable_id),
             reverse=True,
         )[: self._limit]
 
@@ -62,7 +70,8 @@ class EntitySource:
                 "SELECT node_id, file_name, content, occurred_at, memory_at, confidence, tags "
                 "FROM evo_nodes WHERE is_latest = 1 AND status = 'active' "
                 "AND (file_name LIKE 'person-%' OR file_name LIKE 'org-%' "
-                "OR file_name LIKE 'project-%') ORDER BY COALESCE(occurred_at, memory_at) DESC "
+                "OR file_name LIKE 'project-%') "
+                "ORDER BY persome_epoch(COALESCE(occurred_at, memory_at)) DESC "
                 "LIMIT ?",
                 (self._limit,),
             ).fetchall()
@@ -103,7 +112,8 @@ class EntitySource:
         try:
             rows = self._conn.execute(
                 "SELECT id, path, timestamp, content FROM entries "
-                "WHERE prefix = 'event' AND superseded = 0 ORDER BY timestamp DESC LIMIT ?",
+                "WHERE prefix = 'event' AND superseded = 0 "
+                "ORDER BY persome_epoch(timestamp) DESC LIMIT ?",
                 (self._limit,),
             ).fetchall()
         except sqlite3.Error:

@@ -215,7 +215,7 @@ def _create_tasks_from_registry(
 
 async def _run(cfg: Config, *, capture_only: bool = False, hard_exit: bool = False) -> None:
     paths.ensure_dirs()
-    paths.pid_file().write_text(str(os.getpid()))
+    paths.atomic_write_private_text(paths.pid_file(), str(os.getpid()))
 
     # Register this daemon ("Persome Backend") in the macOS Screen Recording list + prompt,
     # so screenshots capture real app windows instead of just the desktop wallpaper (and

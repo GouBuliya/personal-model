@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from ..capture.timestamps import parse_capture_timestamp
 from ..timeline import store as timeline_store
 
 ACTIVITY_PREFIX = "event:"
@@ -26,13 +27,12 @@ def _default_participant_resolver(names: list[str], _summary: str) -> list[str]:
 
 
 def _parse_time(value: object) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(value))
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+    return parse_capture_timestamp(value) if isinstance(value, str) and value else None
+
+
+def _time_sort_key(value: object) -> datetime:
+    parsed = _parse_time(value)
+    return parsed.astimezone(UTC) if parsed is not None else datetime.min.replace(tzinfo=UTC)
 
 
 def normalize_activity_identity(identity: str) -> str:
@@ -101,7 +101,7 @@ class ActivitySource:
             unique = {event.stable_id: event for event in events}
             return sorted(
                 unique.values(),
-                key=lambda event: (event.occurred_at or "", event.stable_id),
+                key=lambda event: (_time_sort_key(event.occurred_at), event.stable_id),
                 reverse=True,
             )[: self._limit]
         finally:
@@ -111,7 +111,8 @@ class ActivitySource:
         try:
             rows = self._conn.execute(
                 "SELECT id, path, timestamp, content FROM entries "
-                "WHERE prefix = 'event' AND superseded = 0 ORDER BY timestamp DESC LIMIT ?",
+                "WHERE prefix = 'event' AND superseded = 0 "
+                "ORDER BY persome_epoch(timestamp) DESC LIMIT ?",
                 (self._limit,),
             ).fetchall()
         except sqlite3.Error:
@@ -141,7 +142,7 @@ class ActivitySource:
             rows = self._conn.execute(
                 "SELECT id, start_time, end_time FROM sessions "
                 "WHERE status != 'active' AND end_time IS NOT NULL "
-                "ORDER BY end_time DESC LIMIT ?",
+                "ORDER BY persome_epoch(end_time) DESC LIMIT ?",
                 (self._limit,),
             ).fetchall()
         except sqlite3.Error:
@@ -185,7 +186,7 @@ class ActivitySource:
                 f"SELECT id, ts, kind, rationale, payload FROM intents "
                 f"WHERE status IN ({placeholders}) "
                 "OR (status = 'resolved' AND resolution_outcome = 'done') "
-                "ORDER BY ts DESC LIMIT ?",
+                "ORDER BY persome_epoch(ts) DESC LIMIT ?",
                 (*_DONE_INTENT_STATUSES, self._limit),
             ).fetchall()
         except sqlite3.Error:

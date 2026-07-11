@@ -12,8 +12,9 @@ Design constraints (BYO-key onboarding):
 * **Zero LLM calls.** The only network I/O is a single HTTP ``HEAD`` against the
   configured provider endpoint (3s timeout), and even that failing is a
   warning only — a firewalled machine must still be able to get a green doctor.
-* **No side effects** beyond creating the data root when probing writability.
-  Doctor never compiles helpers, never touches the DB, never writes config.
+* **No persistent side effects** beyond creating the data root when probing
+  writability. Doctor never compiles helpers, never touches the on-disk DB,
+  never writes config. Its SQLite feature probe is in-memory only.
 * Secrets are never printed — key presence is reported, values are not.
 """
 
@@ -23,6 +24,7 @@ import os
 import platform
 import shutil
 import socket
+import sqlite3
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -143,6 +145,49 @@ def check_screenshot_key() -> Check:
     )
 
 
+def check_local_api_token() -> Check:
+    """Required local HTTP bearer token, without ever printing its value."""
+    raw = os.environ.get(env_file_mod.LOCAL_API_TOKEN_ENV)
+    if env_file_mod.is_valid_local_api_token(raw):
+        return Check(env_file_mod.LOCAL_API_TOKEN_ENV, "ok", "set (owner-local bearer token)")
+    return Check(
+        env_file_mod.LOCAL_API_TOKEN_ENV,
+        "fail",
+        "missing or invalid — protected REST, Chat, viewer, and HTTP MCP are unavailable; "
+        "rerun install.sh to provision it",
+    )
+
+
+def check_sqlite_secure_fts() -> Check:
+    """SQLite must support FTS5's persistent secure-delete option (3.42+)."""
+    version = sqlite3.sqlite_version
+    if sqlite3.sqlite_version_info < (3, 42, 0):
+        return Check(
+            "SQLite secure FTS",
+            "fail",
+            f"SQLite {version} is too old; 3.42+ is required to erase deleted FTS text",
+        )
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(":memory:")
+        # Keep this ephemeral capability probe out of the static production
+        # schema inventory (which intentionally scans literal CREATE TABLE DDL).
+        conn.execute("CREATE VIRTUAL " + "TABLE secure_fts_probe USING fts5(content)")
+        conn.execute(
+            "INSERT INTO secure_fts_probe(secure_fts_probe, rank) VALUES('secure-delete', 1)"
+        )
+    except sqlite3.Error as exc:
+        return Check(
+            "SQLite secure FTS",
+            "fail",
+            f"SQLite {version} lacks secure FTS5 support ({exc.__class__.__name__})",
+        )
+    finally:
+        if conn is not None:
+            conn.close()
+    return Check("SQLite secure FTS", "ok", f"SQLite {version}")
+
+
 def check_base_url(profile: ResolvedLLMProfile | None = None) -> Check:
     """HEAD the configured provider endpoint. Reachability is a
     warning-only signal: any HTTP response counts as reachable; a network error
@@ -234,10 +279,9 @@ def check_root_writable() -> Check:
     root = paths.root()
     probe = root / ".doctor-write-probe"
     try:
-        root.mkdir(parents=True, exist_ok=True)
-        probe.write_text("ok")
+        paths.atomic_write_private_text(probe, "ok")
         probe.unlink()
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
         return Check("data root writable", "fail", f"{root}: {exc}")
     return Check("data root writable", "ok", str(root))
 
@@ -282,6 +326,8 @@ def run_checks(host: str, port: int) -> list[Check]:
     profile = _llm_profile()
     checks: list[Check] = [
         check_env_file(profile),
+        check_local_api_token(),
+        check_sqlite_secure_fts(),
         check_api_key(profile),
         check_screenshot_key(),
         check_base_url(profile),

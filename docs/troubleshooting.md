@@ -170,26 +170,37 @@ persome timeline list -n 5
 
 Symptom: Claude Code / Cursor reports the server unreachable.
 
-1. Is the daemon running?
-
-   ```bash
-   persome status
-   curl -s http://127.0.0.1:8742/mcp -XPOST -H 'Content-Type: application/json' -d '{}' | head -5
-   ```
-
-2. Is `mcp.auto_start = true` and `mcp.transport` ∈ {`sse`, `streamable-http`}?
-
-   ```bash
-   persome config | grep -A3 '\[mcp\]'
-   ```
-
-3. Did `install claude-code` actually add the entry?
+1. Confirm the installed entry uses owner-local stdio (the secure default):
 
    ```bash
    claude mcp list | grep persome
+   persome mcp
    ```
 
-If `mcp.auto_start = false`, the daemon intentionally won't host a server; use stdio instead.
+   Stop the foreground diagnostic with `Ctrl-C`. If the GUI client cannot find
+   `persome`, reinstall the entry so it contains an absolute executable path.
+
+2. For an explicitly configured HTTP client only, is the daemon healthy and
+   is the authenticated config current?
+
+   ```bash
+   persome start
+   curl --fail --silent http://127.0.0.1:8742/health
+   persome install mcp-json --http --force --filename persome-http.json
+   ```
+
+   The generated file is mode `0600` and contains the bearer; never commit or
+   share it.
+
+3. Re-register a stale client entry:
+
+   ```bash
+   persome install claude-code
+   claude mcp list | grep persome
+   ```
+
+If `mcp.auto_start = false`, the daemon intentionally will not host HTTP; stdio
+installers continue to work.
 
 ## A remote MCP client cannot see localhost
 
@@ -268,7 +279,7 @@ direct Markdown edits are not truth.
 ## `/model` is empty or incomplete
 
 The viewer only exists while the daemon's HTTP MCP task is active. Confirm
-`[mcp] auto_start = true`, open `http://127.0.0.1:8742/model`, then run:
+`[mcp] auto_start = true`, run `persome model open`, then run:
 
 ```bash
 persome model build

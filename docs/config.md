@@ -120,7 +120,9 @@ cmux_source_enabled = true
 ```
 
 - `source="daemon"` owns macOS AX capture. `source="ingest"` accepts records
-  from the trusted loopback `/captures/ingest` producer and starts no OS watcher.
+  from the trusted bearer-authenticated `/captures/ingest` producer and starts
+  no OS watcher. The producer must obtain `PERSOME_LOCAL_API_TOKEN` through an
+  owner-approved local secret channel and must never put it in a URL.
 - Accessibility permission is required for daemon AX capture. Screen Recording
   is required for screenshot/OCR use.
 - OCR is off by default. When enabled, Paddle inference runs in a local worker
@@ -130,7 +132,9 @@ cmux_source_enabled = true
 - `PERSOME_DISABLE_OCR=1` is the deployment kill switch.
 - `PERSOME_OCR_IN_PROCESS=1` is a debugging escape hatch that gives up crash
   isolation and should not be used for normal operation.
-- Retention only removes captures already absorbed by a closed timeline block.
+- Age-based retention only removes captures already absorbed by a closed
+  timeline block. `buffer_max_mb` remains a hard cap and may evict the oldest
+  unabsorbed frame to prevent unbounded disk growth.
   Screenshots degrade before AX/OCR text and whole-record deletion.
 - `cmux_source_enabled` reads visible terminal text through cmux's local,
   read-only socket because GPU terminal content is AX-poor.
@@ -348,12 +352,17 @@ mcp_connect_daemon = true
 
 The daemon HTTP transport hosts MCP, REST, Chat routes, and `/model` on the same
 loopback port. `stdio` is started explicitly with `persome mcp`; do not use it
-as an in-daemon transport.
+as an in-daemon transport. HTTP requires the dedicated
+`PERSOME_LOCAL_API_TOKEN` provisioned in `<PERSOME_ROOT>/env`; automatic client
+installers prefer stdio so the token is not duplicated.
 
-Chat always loads skill Markdown as model guidance. Executable
-`skills/*/tools.py`, shell, arbitrary filesystem, and Web tools load only when
-`unsafe_local_tools_enabled=true`. Configured external MCP servers are another
-explicit trust expansion and can have their own network behavior. The Runtime
+Chat loads only user-installed `skills/` Markdown as model guidance;
+model-generated `memory/skills` content is data, never instructions.
+Executable `skills/*/tools.py`, shell, arbitrary filesystem, and Web tools load
+only when `unsafe_local_tools_enabled=true`, and the terminal client still asks
+for exact one-shot approval before execution. Configured external MCP servers
+are another explicit trust expansion and their calls use the same approval
+boundary. The REST Chat surface refuses calls needing approval. The Runtime
 ships a terminal client (`persome chat`), not a browser Chat page.
 
 Anthropic profiles retain prompt caching and optional extended thinking.
@@ -385,6 +394,6 @@ for AX/text modeling but its screenshot is not persisted.
 Old top-level `capture_*` names are read as compatibility fallbacks, but new
 configuration should use the nested names.
 
-Keep the local-origin guard and screenshot encryption enabled. The loopback
-server has no separate bearer authentication; exposing it through a tunnel
-changes the security boundary.
+Keep the bearer boundary, local-origin guard, and screenshot encryption
+enabled. Exposing the plain-HTTP server through a tunnel or copying its bearer
+to another machine changes the security boundary and is unsupported.

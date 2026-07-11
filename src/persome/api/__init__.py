@@ -20,6 +20,11 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from .. import __version__
 from ..config import Config
 from ..logger import get as _get_logger
+from ..security.auth import LocalAPIAuthMiddleware
+from ..security.body_limit import (
+    RequestBodyLimitMiddleware,
+    RequestConcurrencyLimitMiddleware,
+)
 from ..trace import generate_trace_id, set_trace_id
 from .chat_routes import set_config as _set_chat_config
 from .routes import router
@@ -175,6 +180,7 @@ class _OriginGuardMiddleware:
             await JSONResponse(
                 {"success": False, "error": "forbidden: non-local Origin"},
                 status_code=403,
+                headers={"Connection": "close", "Cache-Control": "no-store"},
             )(scope, receive, send)
             return
         # Host header: reject a routable public hostname (DNS-rebinding guard).
@@ -182,13 +188,18 @@ class _OriginGuardMiddleware:
             await JSONResponse(
                 {"success": False, "error": "forbidden: non-local Host"},
                 status_code=403,
+                headers={"Connection": "close", "Cache-Control": "no-store"},
             )(scope, receive, send)
             return
         await self.app(scope, receive, send)
 
 
-def build_api_app(cfg: Config | None = None) -> FastAPI:
-    """Construct the FastAPI sub-application."""
+def build_api_app(cfg: Config | None = None, *, auth_enabled: bool = True) -> FastAPI:
+    """Construct the FastAPI sub-application.
+
+    Authentication is on by default.  In-process tests and schema rendering may
+    disable it explicitly; the daemon mount never does.
+    """
     app = FastAPI(
         title="Persome API",
         description="Local-first screen-context memory and personal-model REST API.",
@@ -198,13 +209,14 @@ def build_api_app(cfg: Config | None = None) -> FastAPI:
         openapi_url="/openapi.json",
     )
 
-    # Three pure-ASGI middleware (NOT BaseHTTPMiddleware — it breaks streaming
+    # Six pure-ASGI middleware (NOT BaseHTTPMiddleware — it breaks streaming
     # responses with spurious 500s on disconnect; see the class docs).
     # Starlette applies middleware LIFO by add order, so the LAST added is
     # OUTERMOST. Add innermost→outermost: access_log (closest to the route, so it
     # sees the final status, incl. ExceptionMiddleware-converted 4xx) → trace_id
-    # (ContextVar set before access_log logs) → origin_guard (outermost, so a
-    # rejected request never reaches trace_id / access_log / the handlers).
+    # (ContextVar set before access_log logs) → body limit → concurrency
+    # limit → auth → origin_guard.  Authentication stays outside body
+    # buffering, so an unauthorized large request is rejected immediately.
     # ``api_require_local_origin`` defaults to on via ``getattr`` so a Config
     # without the field still hardens by default.
     require_local_origin = (
@@ -212,13 +224,29 @@ def build_api_app(cfg: Config | None = None) -> FastAPI:
     )
     app.add_middleware(_AccessLogMiddleware)
     app.add_middleware(_TraceIdMiddleware)
+    app.add_middleware(RequestBodyLimitMiddleware)
+    app.add_middleware(RequestConcurrencyLimitMiddleware)
+    if auth_enabled:
+        app.add_middleware(LocalAPIAuthMiddleware)
     app.add_middleware(_OriginGuardMiddleware, require_local_origin=require_local_origin)
 
     app.include_router(router)
     # FastAPI's lazy openapi() regeneration can misidentify list[str] query
     # params as requestBody. Lock the schema unconditionally at build time so
     # the runtime /openapi.json endpoint always serves the correct version.
-    app.openapi_schema = app.openapi()
+    # Middleware does not automatically appear in OpenAPI, so declare the
+    # production bearer boundary explicitly and exempt only public liveness.
+    schema = app.openapi()
+    components = schema.setdefault("components", {})
+    security_schemes = components.setdefault("securitySchemes", {})
+    security_schemes["LocalBearer"] = {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Owner-local token from <PERSOME_ROOT>/env",
+    }
+    schema["security"] = [{"LocalBearer": []}]
+    schema["paths"]["/health"]["get"]["security"] = []
+    app.openapi_schema = schema
     return app
 
 
@@ -232,11 +260,16 @@ def render_openapi_json() -> str:
     cfg = Config()
     _set_route_config(cfg)
     _set_chat_config(cfg)
-    app = build_api_app(cfg)
+    app = build_api_app(cfg, auth_enabled=False)
     return json.dumps(app.openapi_schema, indent=2, ensure_ascii=False) + "\n"
 
 
-def register_routes(server: Any, cfg: Config | None = None) -> None:
+def register_routes(
+    server: Any,
+    cfg: Config | None = None,
+    *,
+    auth_enabled: bool = True,
+) -> None:
     """Mount the FastAPI app at root ``/`` on the FastMCP Starlette server.
 
     Called from :func:`persome.mcp.server.build_server` before the
@@ -249,5 +282,5 @@ def register_routes(server: Any, cfg: Config | None = None) -> None:
     set_config(cfg)
     set_chat_config(cfg)
 
-    api_app = build_api_app(cfg)
+    api_app = build_api_app(cfg, auth_enabled=auth_enabled)
     server._custom_starlette_routes.append(Mount("", app=api_app))

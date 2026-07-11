@@ -308,8 +308,9 @@ def _render_timeline_blocks(
         """
         SELECT start_time, end_time, entries, apps_used
           FROM timeline_blocks
-         WHERE end_time > ? AND start_time < ?
-         ORDER BY start_time ASC
+         WHERE persome_epoch(end_time) > persome_epoch(?)
+           AND persome_epoch(start_time) < persome_epoch(?)
+         ORDER BY persome_epoch(start_time) ASC
         """,
         (start.isoformat(), end.isoformat()),
     ).fetchall()

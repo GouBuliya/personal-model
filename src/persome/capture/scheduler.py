@@ -12,7 +12,7 @@ import queue
 import threading
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -33,12 +33,21 @@ from . import (
     window_screenshot,
 )
 from .event_dispatcher import EventDispatcher
+from .timestamps import (
+    capture_path_has_ambiguous_local_time,
+    parse_capture_path_timestamp,
+    parse_capture_timestamp,
+)
 from .watcher import AXWatcherProcess
 
 logger = get("persome.capture")
 
 # Frequency-limit cache for OCR fallback: key="bundle_id::title" -> last submit timestamp.
 _last_ocr_ts: dict[str, float] = {}
+
+# A far-future client timestamp sorts after the reducer watermark and used to
+# evade retention indefinitely. Allow ordinary clock skew, not arbitrary time.
+_MAX_INGEST_FUTURE_SKEW = timedelta(minutes=5)
 
 
 def _should_trigger_ocr(cfg: CaptureConfig, meta: dict[str, str]) -> bool:
@@ -130,7 +139,10 @@ def _image_width(image_bytes: bytes) -> int:
 
 
 def _now_iso() -> str:
-    return datetime.now(UTC).astimezone().replace(microsecond=0).isoformat()
+    # Current filenames remain lexically monotonic in UTC; fixed-width
+    # microseconds preserve the capture ID when multiple frames land per second.
+    # Upgrade-time mixed formats are always compared through timestamps.py.
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 def _safe_filename(ts: str) -> str:
@@ -141,8 +153,9 @@ def _should_skip_capture(cfg: CaptureConfig) -> bool:
     """Pause / privacy gate shared by the daemon capture loop and the ingest path.
 
     Returns True (skip this capture) when the user paused capture or the screen is
-    locked / asleep. Fail-open inside ``is_screen_locked`` — a broken probe reads
-    "unlocked" so capture is never wedged. Both checks default on.
+    locked / asleep. Lock detection is fail-closed: an unknown state skips one
+    capture rather than risking collection behind the login screen. Both checks
+    default on.
     """
     paths.ensure_dirs()
     if paths.paused_flag().exists():
@@ -356,9 +369,16 @@ def _sanitize_ingest_timestamp(raw: Any) -> str:
     """
     if isinstance(raw, str) and raw:
         try:
-            datetime.fromisoformat(raw)
-            return raw
-        except ValueError:
+            parsed = datetime.fromisoformat(raw)
+            server_now = datetime.now(UTC)
+            if parsed.tzinfo is None:
+                parsed = parsed.astimezone()
+            if parsed.astimezone(UTC) > server_now + _MAX_INGEST_FUTURE_SKEW:
+                return _now_iso()
+            # Normalize new IDs to fixed-width UTC. Readers still parse legacy
+            # local-offset IDs before ordering or retention decisions.
+            return parsed.astimezone(UTC).isoformat(timespec="microseconds")
+        except (OverflowError, ValueError):
             pass
     return _now_iso()
 
@@ -441,7 +461,7 @@ def _write_capture(out: dict[str, Any]) -> Path:
         out["ocr_submitted"] = True
 
     path = paths.capture_buffer_dir() / f"{_safe_filename(ts)}.json"
-    path.write_text(json.dumps(out, ensure_ascii=False))
+    paths.atomic_write_private_text(path, json.dumps(out, ensure_ascii=False))
     _index_capture(path.stem, out)
     meta = out.get("window_meta") or {}
     logger.info(
@@ -468,7 +488,7 @@ def _write_capture(out: dict[str, Any]) -> Path:
     return path
 
 
-def _index_capture(file_stem: str, out: dict[str, Any]) -> None:
+def _index_capture(file_stem: str, out: dict[str, Any]) -> bool:
     """Insert/upsert the capture's S1 fields into the FTS5 index.
 
     Failures here are non-fatal — a missed FTS row is recoverable via
@@ -493,6 +513,8 @@ def _index_capture(file_stem: str, out: dict[str, Any]) -> None:
             )
     except Exception as exc:  # noqa: BLE001
         logger.warning("captures FTS insert failed for %s: %s", file_stem, exc)
+        return False
+    return True
 
 
 def _content_fingerprint(out: dict[str, Any]) -> str:
@@ -788,6 +810,7 @@ async def run_forever(
 # trigger the dispatcher fires — so it is the marker. Read from the capture's
 # own ``trigger`` metadata, so this needs no DB.
 _ENTER_ANCHOR_EVENT_TYPES = frozenset({"UserTextInput"})
+_ATOMIC_CAPTURE_TEMP_GRACE_SECONDS = 5 * 60
 
 
 def _is_enter_anchored(path: Path) -> bool:
@@ -814,6 +837,7 @@ def cleanup_buffer(
 ) -> dict[str, int]:
     buf = paths.capture_buffer_dir()
     if not buf.exists():
+        _prune_missing_capture_rows(buf)
         return {"deleted": 0, "stripped": 0, "thumbnailed": 0, "evicted": 0}
 
     now = time.time()
@@ -832,30 +856,51 @@ def cleanup_buffer(
     extended_cutoff = (
         now - actionable_retention_days * 86400 if extended_retention_enabled else None
     )
+    has_watermark = processed_before_ts is not None
     absorbed_before = (
-        _safe_filename(processed_before_ts) if processed_before_ts is not None else None
+        parse_capture_timestamp(processed_before_ts) if processed_before_ts is not None else None
     )
+    if has_watermark and absorbed_before is None:
+        logger.warning("invalid capture cleanup watermark; treating every frame as unabsorbed")
 
     deleted = stripped = thumbnailed = evicted = 0
     surviving: list[tuple[float, Path, int]] = []  # (mtime, path, size_after_pass)
-    removed_stems: list[str] = []  # for FTS delete-through
+    expired: list[tuple[float, Path, int]] = []
 
     for p in sorted(buf.iterdir()):
+        # A SIGKILL can strand the private inode used by atomic capture writes.
+        # It has no recovery contract; after a short grace period (so cleanup
+        # cannot race an active rename), remove it regardless of retention.
+        if p.name.startswith(".") and ".json." in p.name:
+            try:
+                temp_stat = p.lstat()
+                if temp_stat.st_mtime <= now - _ATOMIC_CAPTURE_TEMP_GRACE_SECONDS:
+                    p.unlink(missing_ok=True)
+                    deleted += 1
+            except OSError:
+                pass
+            continue
         if not p.is_file() or p.suffix != ".json":
             continue
-        is_absorbed = absorbed_before is None or p.stem < absorbed_before
+        captured_at = parse_capture_path_timestamp(p)
+        is_absorbed = not has_watermark or (
+            absorbed_before is not None
+            and captured_at is not None
+            # A legacy naive timestamp inside the repeated DST hour has two
+            # possible instants. Never age-delete/strip it on an assumption;
+            # the hard disk cap remains the deterministic final boundary.
+            and not capture_path_has_ambiguous_local_time(p)
+            and captured_at < absorbed_before
+        )
         try:
             st = p.stat()
         except OSError:
             continue
 
         if is_absorbed and st.st_mtime <= delete_cutoff:
-            try:
-                p.unlink()
-                deleted += 1
-                removed_stems.append(p.stem)
-            except OSError:
-                pass
+            # Remove the searchable copy first. If SQLite is unavailable, keep
+            # the JSON for retry instead of leaving an invisible FTS orphan.
+            expired.append((st.st_mtime, p, st.st_size))
             continue
 
         if (
@@ -894,6 +939,20 @@ def cleanup_buffer(
 
         surviving.append((st.st_mtime, p, st.st_size))
 
+    if expired:
+        # Disk erasure remains authoritative if SQLite is temporarily down;
+        # the reconciliation pass below removes any stale searchable rows once
+        # the database is available again.
+        index_removed = _delete_captures_from_fts([p.stem for _, p, _ in expired])
+        for record in expired:
+            try:
+                record[1].unlink()
+                deleted += 1
+            except OSError:
+                if index_removed:
+                    _restore_capture_index(record[1])
+                surviving.append(record)
+
     if max_mb > 0:
         limit = max_mb * 1024 * 1024
         total = sum(sz for _, _, sz in surviving)
@@ -902,18 +961,29 @@ def cleanup_buffer(
             for _mtime, path, size in surviving:
                 if total <= limit:
                     break
-                if absorbed_before is not None and path.stem >= absorbed_before:
-                    continue  # don't evict un-absorbed captures
+                index_removed = _delete_captures_from_fts([path.stem])
+                captured_at = parse_capture_path_timestamp(path)
+                is_absorbed = not has_watermark or (
+                    absorbed_before is not None
+                    and captured_at is not None
+                    and not capture_path_has_ambiguous_local_time(path)
+                    and captured_at < absorbed_before
+                )
+                if has_watermark and not is_absorbed:
+                    logger.warning(
+                        "capture buffer hard cap evicting unabsorbed frame: %s", path.name
+                    )
                 try:
                     path.unlink()
                     total -= size
                     evicted += 1
-                    removed_stems.append(path.stem)
                 except OSError:
-                    pass
+                    if index_removed:
+                        _restore_capture_index(path)
 
-    if removed_stems:
-        _delete_captures_from_fts(removed_stems)
+    # A transient DB failure must not defeat the hard disk cap. Files still win
+    # that boundary; once SQLite recovers, reconcile any stale searchable rows.
+    _prune_missing_capture_rows(buf)
 
     return {
         "deleted": deleted,
@@ -923,14 +993,66 @@ def cleanup_buffer(
     }
 
 
-def _delete_captures_from_fts(stems: list[str]) -> None:
-    """Drop matching rows from the captures index. Non-fatal on failure."""
+def _delete_captures_from_fts(stems: list[str]) -> bool:
+    """Atomically drop matching searchable copies before deleting JSON files."""
+    if not stems:
+        return True
     try:
         with fts_store.cursor() as conn:
-            for stem in stems:
-                fts_store.delete_capture(conn, stem)
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for stem in stems:
+                    fts_store.delete_capture(conn, stem)
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
     except Exception as exc:  # noqa: BLE001
         logger.warning("captures FTS delete failed for %d stems: %s", len(stems), exc)
+        return False
+    return True
+
+
+def _restore_capture_index(path: Path) -> None:
+    """Best-effort rollback when FTS deletion succeeded but unlink did not."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        logger.error("cannot restore capture index after unlink failure: %s", path.name)
+        return
+    if not isinstance(data, dict) or not _index_capture(path.stem, data):
+        logger.error("capture remained on disk without a restored index row: %s", path.name)
+
+
+def _prune_missing_capture_rows(buf: Path) -> bool:
+    """Reconcile stale FTS rows left by a prior filesystem-first hard eviction."""
+    try:
+        with fts_store.cursor() as conn:
+            # Freeze DB writers before establishing the candidate set and then
+            # scan the filesystem. A concurrent capture writes JSON before its
+            # row; it is therefore either visible in ``present`` or inserted
+            # after this transaction commits. In neither case can reconciliation
+            # delete a brand-new searchable row based on an older directory scan.
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                candidates = {
+                    str(row[0]) for row in conn.execute("SELECT id FROM captures").fetchall()
+                }
+                present = (
+                    {p.stem for p in buf.iterdir() if p.is_file() and p.suffix == ".json"}
+                    if buf.is_dir()
+                    else set()
+                )
+                for stem in candidates - present:
+                    fts_store.delete_capture(conn, stem)
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("capture index reconciliation failed: %s", exc)
+        return False
+    return True
 
 
 def _retain_screenshot_extended(
@@ -1025,9 +1147,9 @@ def _thumbnail_screenshot_inplace(path: Path) -> bool:
 
     shot["thumbnail"] = True
     try:
-        path.write_text(json.dumps(data, ensure_ascii=False))
+        paths.atomic_write_private_text(path, json.dumps(data, ensure_ascii=False))
         return True
-    except OSError:
+    except (OSError, RuntimeError):
         return False
 
 
@@ -1046,7 +1168,7 @@ def _strip_screenshot_inplace(path: Path) -> bool:
     data.pop("screenshot", None)
     data["screenshot_stripped"] = True
     try:
-        path.write_text(json.dumps(data, ensure_ascii=False))
+        paths.atomic_write_private_text(path, json.dumps(data, ensure_ascii=False))
         return True
-    except OSError:
+    except (OSError, RuntimeError):
         return False

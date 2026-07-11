@@ -70,10 +70,14 @@ This sample path is deliberately separate from the real-data path below.
 
 ## Quick start with your data
 
-Requirements: macOS 13 or newer and Xcode Command Line Tools. The installer
+Requirements: macOS 13 or newer, Xcode Command Line Tools, and a Python build
+with SQLite 3.42+ (the installer verifies the secure FTS capability). The installer
 finds or installs `uv`, provisions Python 3.11-3.13, compiles the Swift AX
 helpers, generates the local screenshot-encryption key, and offers to register
-detected MCP clients.
+detected MCP clients. Its fallback `uv` download is version-pinned and checked
+against repository-pinned SHA-256 digests; the Runtime environment is installed
+from the committed `uv.lock`, and the complete build-backend closure is
+hash-constrained rather than resolved afresh.
 
 ```bash
 git clone https://github.com/Persome-ai/persome-core.git
@@ -82,7 +86,7 @@ bash install.sh
 
 persome doctor
 persome start
-open http://127.0.0.1:8742/model
+persome model open
 ```
 
 Grant **Accessibility** to the terminal or app that launches Persome in
@@ -132,7 +136,8 @@ or degraded states instead of inventing geometry.
   `~/.persome` unless `PERSOME_ROOT` is set.
 - AX is the default signal. Optional PP-OCRv6 runs locally in an isolated
   subprocess with bundled weights.
-- The HTTP/MCP server binds to `127.0.0.1` by default, and there is no telemetry.
+- The HTTP/MCP server is restricted to loopback (`127.0.0.1` by default), requires an owner-local
+  bearer on API/MCP routes (or its one-use derived viewer capability), and emits no telemetry.
 - Only configured semantic stages send derived text to the selected provider's
   LLM or embedding endpoint.
 
@@ -145,7 +150,7 @@ cloud recorder.
 
 ### Agent-ready
 
-- Streamable HTTP MCP: `http://127.0.0.1:8742/mcp`
+- Authenticated streamable HTTP MCP: `http://127.0.0.1:8742/mcp`
 - stdio MCP: `persome mcp`
 - Local Chat: `persome chat`
 - Stable model contract: `persome model export` and `GET /model/graph`
@@ -154,12 +159,14 @@ cloud recorder.
 
 ## Connect an MCP client
 
-Start Persome first, then register the endpoint:
+Register an owner-local stdio server. These clients launch it on demand, so the
+daemon does not need to be running and no bearer is copied into their config:
 
 ```bash
-persome start
 persome install claude-code
 persome install codex
+persome install claude-desktop
+persome install opencode
 
 # Generate a stdio config that can be merged into Cursor's MCP config:
 persome install mcp-json --filename persome-mcp.json
@@ -169,6 +176,8 @@ persome install mcp-json --filename persome-mcp.json
 |---|---|---|
 | Claude Code | `persome install claude-code` | `claude mcp list` |
 | Codex CLI / IDE | `persome install codex` | `codex mcp list` |
+| Claude Desktop | `persome install claude-desktop` | fully quit and reopen the app |
+| opencode | `persome install opencode` | `opencode mcp list` |
 | Cursor | merge the generated `mcpServers.persome` object into `.cursor/mcp.json` or `~/.cursor/mcp.json` | Cursor Settings -> MCP |
 
 The canonical JSON shape is:
@@ -184,8 +193,8 @@ The canonical JSON shape is:
 }
 ```
 
-See [MCP client setup and verification](docs/mcp-clients.md) for HTTP configs,
-uninstall commands, tested client versions, and privacy boundaries.
+See [MCP client setup and verification](docs/mcp-clients.md) for authenticated
+HTTP configs, uninstall commands, and privacy boundaries.
 
 ## Real MCP query with a cited answer
 
@@ -226,6 +235,7 @@ personalization benchmark.
 | MCP search -> receipt | `sample_demo.py` + `verify_sample_mcp.py` | real streamable HTTP MCP, deterministic synthetic pass |
 | Offline Runtime behavior | `pytest -m "not macos and not integration"` | complete offline suite; no provider key |
 | Package completeness | clean wheel install + bundled Swift, Three.js, and PP-OCRv6 checks | required by CI/release |
+| Release provenance | SHA-256 manifest + GitHub artifact attestations from a tag reachable from `main` | required by release workflow |
 | Secret and personal-data safety | `secret_scan.py` + `pii_scan.py` | required by CI/release |
 | Memory quality / next-action prediction | separate benchmark repository | **not reported here** |
 
@@ -285,7 +295,7 @@ persome status
 persome model status
 persome faces-report
 persome contradictions
-open http://127.0.0.1:8742/model
+persome model open
 
 # Correct or revoke one memory while retaining its audit trail
 persome correct --help
@@ -315,6 +325,7 @@ Client registrations are removed separately and idempotently:
 persome uninstall claude-code
 persome uninstall codex
 persome uninstall claude-desktop
+persome uninstall opencode
 ```
 
 See [operations and data control](docs/operations.md) for exact paths, backup
@@ -325,7 +336,10 @@ advice, export sensitivity, reset behavior, and manual removal steps.
 - Personal data remains local until a configured model stage or connected agent
   sends selected text to its own provider.
 - MCP capture tools can return raw screen text, titles, URLs, and focused-field
-  values. Connect only clients you trust.
+  values. Bearer/stdio access is a personal-data capability; connect only
+  clients you trust.
+- Model-generated memory never becomes trusted Chat skill instructions;
+  unsafe/external Chat tools require exact one-shot terminal approval.
 - Screenshots are omitted from MCP by default and encrypted at rest when
   retention is enabled.
 - `persome model export` is redacted by default; `--raw` is an explicit opt-out.
@@ -344,7 +358,7 @@ data, and report vulnerabilities through [SECURITY.md](SECURITY.md).
 | Linux | no live macOS capture | not packaged | offline tests and development only |
 | Windows | unsupported | unsupported | unsupported |
 
-Python 3.11-3.13 is supported by the installer. See
+Python 3.11-3.13 with SQLite 3.42+ is supported by the installer. See
 [operations](docs/operations.md) and [troubleshooting](docs/troubleshooting.md).
 
 ## Persome and Personome
@@ -384,7 +398,8 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md), follow the
 [Code of Conduct](CODE_OF_CONDUCT.md), and use [SUPPORT.md](SUPPORT.md) to choose
 the right channel. Every commit requires DCO sign-off, and CI blocks known
 secrets, personal data, non-English source text, contract drift, lint failures,
-and offline regressions.
+and offline regressions. Third-party Actions are pinned to reviewed commit SHAs
+and workflow permissions default to read-only.
 
 ### Support Persome
 

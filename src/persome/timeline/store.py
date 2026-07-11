@@ -14,6 +14,8 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from ..capture.timestamps import capture_timestamp_epoch
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS timeline_blocks (
     id TEXT PRIMARY KEY,
@@ -120,13 +122,16 @@ def _make_id(start: datetime) -> str:
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
+    conn.create_function("persome_epoch", 1, capture_timestamp_epoch)
     conn.executescript(SCHEMA)
     _migrate(conn)
 
 
 def has_window(conn: sqlite3.Connection, start: datetime, end: datetime) -> bool:
     row = conn.execute(
-        "SELECT 1 FROM timeline_blocks WHERE start_time=? AND end_time=? LIMIT 1",
+        "SELECT 1 FROM timeline_blocks "
+        "WHERE persome_epoch(start_time)=persome_epoch(?) "
+        "AND persome_epoch(end_time)=persome_epoch(?) LIMIT 1",
         (start.isoformat(), end.isoformat()),
     ).fetchone()
     return row is not None
@@ -163,7 +168,7 @@ def insert(conn: sqlite3.Connection, block: TimelineBlock) -> None:
 
 def get_latest_end(conn: sqlite3.Connection) -> datetime | None:
     row = conn.execute(
-        "SELECT end_time FROM timeline_blocks ORDER BY end_time DESC LIMIT 1"
+        "SELECT end_time FROM timeline_blocks ORDER BY persome_epoch(end_time) DESC LIMIT 1"
     ).fetchone()
     if not row:
         return None
@@ -176,7 +181,7 @@ def get_latest_end(conn: sqlite3.Connection) -> datetime | None:
 def query_recent(conn: sqlite3.Connection, *, limit: int = 12) -> list[TimelineBlock]:
     """Most recent blocks, oldest first in the returned list."""
     rows = conn.execute(
-        "SELECT * FROM timeline_blocks ORDER BY start_time DESC LIMIT ?",
+        "SELECT * FROM timeline_blocks ORDER BY persome_epoch(start_time) DESC LIMIT ?",
         (limit,),
     ).fetchall()
     blocks = [_row_to_block(r) for r in rows]
@@ -187,7 +192,9 @@ def query_recent(conn: sqlite3.Connection, *, limit: int = 12) -> list[TimelineB
 def query_since(conn: sqlite3.Connection, since: datetime) -> list[TimelineBlock]:
     """All blocks with end_time > ``since``, chronological order."""
     rows = conn.execute(
-        "SELECT * FROM timeline_blocks WHERE end_time > ? ORDER BY start_time ASC",
+        "SELECT * FROM timeline_blocks "
+        "WHERE persome_epoch(end_time) > persome_epoch(?) "
+        "ORDER BY persome_epoch(start_time) ASC",
         (since.isoformat(),),
     ).fetchall()
     return [_row_to_block(r) for r in rows]
@@ -203,15 +210,16 @@ def query_range(
     clauses: list[str] = []
     params: list[str | int] = []
     if since:
-        clauses.append("start_time >= ?")
+        clauses.append("persome_epoch(start_time) >= persome_epoch(?)")
         params.append(since.isoformat())
     if until:
-        clauses.append("end_time <= ?")
+        clauses.append("persome_epoch(end_time) <= persome_epoch(?)")
         params.append(until.isoformat())
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     params.append(min(limit, 200))
     rows = conn.execute(
-        f"SELECT * FROM timeline_blocks {where} ORDER BY start_time DESC LIMIT ?",  # noqa: S608
+        f"SELECT * FROM timeline_blocks {where} "  # noqa: S608
+        "ORDER BY persome_epoch(start_time) DESC LIMIT ?",
         params,
     ).fetchall()
     return [_row_to_block(r) for r in rows]

@@ -24,10 +24,27 @@ from ..config import Config
 from ..config import load as load_config
 from ..logger import get
 from ..prompts import load as load_prompt
+from ..security.auth import (
+    add_local_api_auth_middleware,
+    loopback_http_url,
+    reset_browser_auth_state,
+    validate_bind_host,
+)
+from ..security.body_limit import (
+    RequestBodyLimitMiddleware,
+    RequestConcurrencyLimitMiddleware,
+)
 from ..store import files as files_mod
 from ..store import fts
 from ..timeline import attention_trajectory as attention_traj
 from . import captures as captures_mod
+from .limits import (
+    bounded_float,
+    bounded_int,
+    bounded_optional_text,
+    bounded_text,
+    bounded_text_list,
+)
 
 logger = get("persome.mcp")
 
@@ -395,12 +412,12 @@ def _read_receipt(conn, *, entry_id: str) -> dict[str, Any]:  # type: ignore[no-
         (entry_id,),
     ).fetchone()
     ts = row["timestamp"]
-    # epoch-based proximity: entry/capture timestamps mix 'T' and ' ' separators,
-    # so lexicographic BETWEEN misorders — strftime('%s', …) parses both.
+    # Epoch-based proximity uses the same historical ISO parser as capture,
+    # timeline, and session ordering (including legacy basic/naive forms).
     captures = conn.execute(
         "SELECT id, timestamp, app_name, window_title FROM captures"
-        " WHERE abs(strftime('%s', timestamp) - strftime('%s', ?)) <= 1800"
-        " ORDER BY abs(strftime('%s', timestamp) - strftime('%s', ?)) LIMIT 3",
+        " WHERE abs(persome_epoch(timestamp) - persome_epoch(?)) <= 1800"
+        " ORDER BY abs(persome_epoch(timestamp) - persome_epoch(?)) LIMIT 3",
         (ts, ts),
     ).fetchall()
     if not row["superseded"]:
@@ -735,9 +752,37 @@ Raw captures have bounded retention: older on-screen content is dropped from the
 """
 
 
-def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
+def _protect_http_app(app: Any, *, host: str, auth_enabled: bool) -> Any:
+    """Apply daemon-wide HTTP security to an SDK-created Starlette app.
+
+    FastMCP's own bearer hook requires authentication only on its MCP route;
+    custom REST mounts are otherwise left open.  Wrapping the final SDK app is
+    therefore the single outer boundary for MCP, REST, Chat, and future custom
+    routes.  Keep this helper composable with other outer ASGI limits.
+    """
+    if auth_enabled:
+        validate_bind_host(host)
+    # Starlette applies middleware in reverse add order.  Add resource limits
+    # first and auth last so invalid credentials are rejected before a request
+    # body is buffered or a concurrency slot is consumed.
+    app.add_middleware(RequestBodyLimitMiddleware)
+    app.add_middleware(RequestConcurrencyLimitMiddleware)
+    return add_local_api_auth_middleware(app, enabled=auth_enabled)
+
+
+def build_server(
+    cfg: Config | None = None,
+    *,
+    auth_enabled: bool = True,
+):  # type: ignore[no-untyped-def]
     """Construct and return a FastMCP server instance (not yet running)."""
     from mcp.server.fastmcp import FastMCP  # lazy import
+
+    if auth_enabled:
+        # HTTP cookies are not port-bound. Invalidate every capability whenever
+        # a listener generation is rebuilt so a cookie captured during a crash
+        # / port-rebind window cannot be replayed after the daemon recovers.
+        reset_browser_auth_state()
 
     cfg = cfg or load_config()
 
@@ -755,8 +800,30 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
     # local Host → allowed; a browser page's foreign Origin or a rebound public Host → 421.
     from mcp.server.transport_security import TransportSecuritySettings
 
+    if auth_enabled and cfg.mcp.transport != "stdio":
+        validate_bind_host(cfg.mcp.host)
+
+    class _ProtectedFastMCP(FastMCP):
+        """FastMCP whose complete HTTP app shares the local bearer boundary."""
+
+        def streamable_http_app(self):  # type: ignore[no-untyped-def]
+            app = super().streamable_http_app()
+            return _protect_http_app(
+                app,
+                host=self.settings.host,
+                auth_enabled=auth_enabled,
+            )
+
+        def sse_app(self, mount_path=None):  # type: ignore[no-untyped-def]
+            app = super().sse_app(mount_path)
+            return _protect_http_app(
+                app,
+                host=self.settings.host,
+                auth_enabled=auth_enabled,
+            )
+
     _p = cfg.mcp.port
-    server = FastMCP(
+    server = _ProtectedFastMCP(
         "persome",
         instructions=_SERVER_INSTRUCTIONS,
         host=cfg.mcp.host,
@@ -822,6 +889,16 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
         Entries come back chronological. Supports `since` / `until` (ISO timestamps),
         `tags` (filter by any matching tag), and `tail_n` (most recent N entries only).
         """
+        path = bounded_text("path", path, maximum=512)
+        since = bounded_optional_text("since", since, maximum=64)
+        until = bounded_optional_text("until", until, maximum=64)
+        tags = bounded_text_list(
+            "tags",
+            tags,
+            maximum_items=64,
+            maximum_item_chars=128,
+        )
+        tail_n = bounded_int(tail_n, minimum=1, maximum=500) if tail_n is not None else None
         with fts.cursor() as conn:
             return json.dumps(
                 _read_memory(conn, path=path, since=since, until=until, tags=tags, tail_n=tail_n),
@@ -843,6 +920,7 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
         """
         from ..writer import correct as correct_mod
 
+        correction = bounded_text("correction", correction, maximum=20_000)
         with fts.cursor() as conn:
             res = correct_mod.update_memory(cfg, conn, correction, source="agent")
         return json.dumps(
@@ -906,6 +984,23 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
         `entities=["Alex"]` while the query text paraphrases) — unknown names
         are ignored, never an error.
         """
+        query = bounded_text("query", query, maximum=20_000)
+        paths = bounded_text_list(
+            "paths",
+            paths,
+            maximum_items=64,
+            maximum_item_chars=512,
+        )
+        since = bounded_optional_text("since", since, maximum=64)
+        until = bounded_optional_text("until", until, maximum=64)
+        top_k = bounded_int(top_k, minimum=1, maximum=50)
+        breadth = bounded_float(breadth, minimum=0.0, maximum=1.0)
+        entities = bounded_text_list(
+            "entities",
+            entities,
+            maximum_items=64,
+            maximum_item_chars=256,
+        )
         with fts.cursor() as conn:
             return json.dumps(
                 _search(
@@ -971,6 +1066,7 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
             this is the audit trail from any memory down to the moment on screen.
             A `superseded: true` entry is history, not the current belief.
             """
+            entry_id = bounded_text("entry_id", entry_id, maximum=256)
             with fts.cursor() as conn:
                 return json.dumps(_read_receipt(conn, entry_id=entry_id), ensure_ascii=False)
 
@@ -993,6 +1089,9 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
             never facts. An unresolvable name returns an honest miss (the graph
             doesn't know them yet), not a guess. Zero LLM, one SQLite read.
             """
+            name = bounded_text("name", name, maximum=512)
+            depth = bounded_int(depth, minimum=1, maximum=4)
+            as_of = bounded_text("as_of", as_of, maximum=64, allow_empty=True)
             with fts.cursor() as conn:
                 return json.dumps(
                     _entity_graph(
@@ -1024,6 +1123,9 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
         freshest evidence contradicts or postdates your claim, follow the
         evidence; if everything is stale, state it as past status or ask.
         """
+        claim = bounded_text("claim", claim, maximum=20_000)
+        top_k = bounded_int(top_k, minimum=1, maximum=50)
+        fresh_within_days = bounded_int(fresh_within_days, minimum=0, maximum=3650)
         with fts.cursor() as conn:
             return json.dumps(
                 _verify_fact(conn, claim=claim, top_k=top_k, fresh_within_days=fresh_within_days),
@@ -1053,6 +1155,14 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
         If the user's question has any temporal recency dimension, this tool
         runs in constant time and is strictly better than guessing.
         """
+        since = bounded_optional_text("since", since, maximum=64)
+        limit = bounded_int(limit, minimum=1, maximum=200)
+        prefix_filter = bounded_text_list(
+            "prefix_filter",
+            prefix_filter,
+            maximum_items=64,
+            maximum_item_chars=256,
+        )
         with fts.cursor() as conn:
             return json.dumps(
                 _recent_activity(conn, since=since, limit=limit, prefix_filter=prefix_filter),
@@ -1090,8 +1200,11 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
         timeline aggregator stamps; it is populated going forward, so the window
         only reflects activity captured since the attention-locus pipeline shipped.
         """
+        since = bounded_optional_text("since", since, maximum=64)
+        until = bounded_optional_text("until", until, maximum=64)
+        hours = bounded_int(hours, minimum=1, maximum=8760)
         now = datetime.now().astimezone()
-        start = _parse_iso_opt(since) or (now - timedelta(hours=max(1, hours)))
+        start = _parse_iso_opt(since) or (now - timedelta(hours=hours))
         end = _parse_iso_opt(until)
         with fts.cursor() as conn:
             spans = attention_traj.attention_trajectory(conn, start, end)
@@ -1149,6 +1262,14 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
         then call this with `at="HH:MM"` and `app_name="<app>"` to see the
         actual content from that moment.
         """
+        at = bounded_optional_text("at", at, maximum=128)
+        app_name = bounded_optional_text("app_name", app_name, maximum=512)
+        window_title_substring = bounded_optional_text(
+            "window_title_substring",
+            window_title_substring,
+            maximum=512,
+        )
+        max_age_minutes = bounded_int(max_age_minutes, minimum=1, maximum=10_080)
         result = captures_mod.read_recent_capture(
             at=at,
             app_name=app_name,
@@ -1195,6 +1316,11 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
           app_name  — case-insensitive substring on the capturing app name.
           limit     — top-K BM25 hits to return.
         """
+        query = bounded_text("query", query, maximum=20_000)
+        since = bounded_optional_text("since", since, maximum=64)
+        until = bounded_optional_text("until", until, maximum=64)
+        app_name = bounded_optional_text("app_name", app_name, maximum=512)
+        limit = bounded_int(limit, minimum=1, maximum=50)
         results = captures_mod.search_captures(
             query=query,
             since=since,
@@ -1251,6 +1377,10 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
         For drill-down on any specific capture or moment, call
         `read_recent_capture(at=..., app_name=...)` next.
         """
+        app_filter = bounded_optional_text("app_filter", app_filter, maximum=512)
+        headline_limit = bounded_int(headline_limit, minimum=0, maximum=50)
+        fulltext_limit = bounded_int(fulltext_limit, minimum=0, maximum=20)
+        timeline_limit = bounded_int(timeline_limit, minimum=0, maximum=50)
         result = captures_mod.current_context(
             app_filter=app_filter,
             headline_limit=headline_limit,
@@ -1288,7 +1418,18 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
           tags    — optional comma-separated extra tags (e.g. "project-x,decision").
           run_id  — optional; your `$PERSOME_TASK_ID` for per-run attribution.
         """
+        content = bounded_text("content", content, maximum=50_000)
+        tags = bounded_text("tags", tags, maximum=4096, allow_empty=True)
+        run_id = bounded_text("run_id", run_id, maximum=256, allow_empty=True)
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        if len(tag_list) > 64:
+            raise ValueError("tags exceeds 64 comma-separated items")
+        bounded_text_list(
+            "tags",
+            tag_list,
+            maximum_items=64,
+            maximum_item_chars=128,
+        )
         with fts.cursor() as conn:
             return json.dumps(
                 _memory_write.remember(conn, content=content, tags=tag_list, run_id=run_id),
@@ -1297,13 +1438,15 @@ def build_server(cfg: Config | None = None):  # type: ignore[no-untyped-def]
 
     from ..api import register_routes
 
-    register_routes(server, cfg)
+    register_routes(server, cfg, auth_enabled=auth_enabled)
     return server
 
 
 def run_stdio() -> None:
     """Run the server on stdio. Blocks until the client disconnects."""
-    server = build_server()
+    # Stdio has no HTTP request surface and therefore no bearer header.  Keep it
+    # explicitly outside the local HTTP authentication boundary.
+    server = build_server(auth_enabled=False)
     server.run()  # FastMCP.run() uses stdio by default
 
 
@@ -1311,7 +1454,10 @@ async def run_async(cfg: Config | None = None, *, transport: str | None = None) 
     """Run the MCP server with the configured transport (for use inside the daemon)."""
     cfg = cfg or load_config()
     transport = transport or cfg.mcp.transport
-    server = build_server(cfg)
+    auth_enabled = transport != "stdio"
+    if auth_enabled:
+        validate_bind_host(cfg.mcp.host)
+    server = build_server(cfg, auth_enabled=auth_enabled)
     if transport == "stdio":
         await server.run_stdio_async()
     elif transport == "sse":
@@ -1328,7 +1474,7 @@ def endpoint_url(cfg: Config) -> str:
     """Return the public URL where the daemon-hosted MCP server is reachable."""
     transport = cfg.mcp.transport
     if transport == "sse":
-        return f"http://{cfg.mcp.host}:{cfg.mcp.port}/sse"
+        return loopback_http_url(cfg.mcp.host, cfg.mcp.port, "/sse")
     if transport == "streamable-http":
-        return f"http://{cfg.mcp.host}:{cfg.mcp.port}/mcp"
+        return loopback_http_url(cfg.mcp.host, cfg.mcp.port, "/mcp")
     raise ValueError(f"endpoint_url only supported for sse/http, got {transport!r}")

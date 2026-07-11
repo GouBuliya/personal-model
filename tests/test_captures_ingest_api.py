@@ -29,7 +29,13 @@ from persome.config import load as load_config
 def _client(cfg=None):
     if cfg is None:
         cfg = load_config()
-    return TestClient(build_api_app(cfg))
+    # Ingest contract tests must not depend on the workstation/CI runner's real
+    # screen state. Lock fail-closed behavior is covered separately.
+    cfg.capture.pause_on_lock = False
+    from persome.api import routes as routes_mod
+
+    routes_mod.set_config(cfg)
+    return TestClient(build_api_app(cfg, auth_enabled=False))
 
 
 def _payload(*, with_screenshot: bool = False) -> tuple[dict, dict]:
@@ -199,13 +205,15 @@ def test_commit_prebuilt_propagates_write_error_not_dedup(ac_root, monkeypatch) 
     """A real write failure must PROPAGATE (→ HTTP 500), never be reported as a dedup."""
     from persome.capture import scheduler
 
-    runner = scheduler._CaptureRunner(load_config().capture, provider=None)
+    capture_cfg = load_config().capture
+    capture_cfg.pause_on_lock = False
+    runner = scheduler._CaptureRunner(capture_cfg, provider=None)
 
     def boom(_out):
         raise OSError("disk full")
 
     monkeypatch.setattr(scheduler, "_write_capture", boom)
-    out = scheduler.build_ingest_capture(load_config().capture, _payload()[1])
+    out = scheduler.build_ingest_capture(capture_cfg, _payload()[1])
     assert out is not None
     with pytest.raises(OSError):
         runner.commit_prebuilt(out)

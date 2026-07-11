@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from typer.testing import CliRunner
+
 from persome import cli, paths
 from persome.evomem.models import MemoryLayer, MemoryNode
 from persome.evomem.store import NodeStore
@@ -122,3 +124,34 @@ def test_clean_all_keeps_only_install_configuration_and_custom_skills(ac_root) -
         paths.index_db(),
     ):
         assert not deleted.exists()
+
+
+def test_clean_refuses_to_race_a_running_daemon(ac_root, monkeypatch) -> None:
+    capture_file = paths.capture_buffer_dir() / "must-survive.json"
+    capture_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(cli, "_read_pid", lambda: 4242)
+
+    result = CliRunner().invoke(cli.app, ["clean", "all", "--yes"])
+
+    assert result.exit_code == 1
+    assert "Refusing to clean" in result.output
+    assert capture_file.exists()
+
+
+def test_clean_running_guard_precedes_database_or_integrity_work(ac_root, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "_read_pid", lambda: 4242)
+    monkeypatch.setattr(
+        cli.fts,
+        "cursor",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("DB was opened")),
+    )
+    monkeypatch.setattr(
+        cli.integrity,
+        "check_and_recover",
+        lambda: (_ for _ in ()).throw(AssertionError("integrity work ran")),
+    )
+
+    result = CliRunner().invoke(cli.app, ["clean", "memory", "--yes"])
+
+    assert result.exit_code == 1
+    assert "Refusing to clean" in result.output

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from persome.api import routes
+from persome.api.model_view import render_memory_view
 from persome.evomem.models import MemoryLayer, MemoryNode
 from persome.evomem.store import NodeStore
 from persome.store import fts
@@ -54,10 +55,11 @@ class TestGraphJson:
 
 class TestViewPage:
     def test_page_uses_snapshot_native_offline_assets(self, ac_root):
-        body = routes.model_view().body.decode()
-        assert "/model/assets/viewer.css" in body
-        assert "/model/assets/viewer.js" in body
-        assert "/model/assets/three.module.js" in body
+        body = render_memory_view()
+        assert '<base href="/model/">' in body
+        assert 'href="assets/viewer.css"' in body
+        assert 'src="assets/viewer.js"' in body
+        assert '"./assets/three.module.js"' in body
         assert "cdn.jsdelivr.net" not in body
         assert "Personal Model" in body
         assert "Points" in body and "Volumes" in body and "Root" in body
@@ -77,12 +79,15 @@ class TestViewPage:
         assert b"model.faces" in viewer.body
         assert b"model.volumes" in viewer.body
         assert b"model.root" in viewer.body
+        assert b'fetch("./graph"' in viewer.body
+        assert b"fetch(`./node" in viewer.body
+        assert b'fetch("/model' not in viewer.body
         assert viewer.media_type == "text/javascript"
         assert layout.media_type == "text/javascript"
         assert css.media_type == "text/css"
 
     def test_viewer_interaction_contract_prefers_labels_over_lines(self, ac_root):
-        page = routes.model_view().body.decode()
+        page = render_memory_view()
         viewer = routes.model_asset("viewer.js").body.decode()
         css = routes.model_asset("viewer.css").body.decode()
 

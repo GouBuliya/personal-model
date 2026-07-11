@@ -18,6 +18,8 @@ import logging
 import os
 import sys
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
+from typing import TextIO
 
 from . import paths
 from .trace import get_trace_id
@@ -84,6 +86,17 @@ def _file_formatter(*, human: bool) -> logging.Formatter:
 _trace_filter = _TraceFilter()
 
 
+class _PrivateRotatingFileHandler(RotatingFileHandler):
+    """Rotating handler that enforces 0600 on every newly opened base file."""
+
+    def _open(self) -> TextIO:
+        return paths.open_private_append_text(
+            Path(self.baseFilename),
+            encoding=self.encoding,
+            errors=self.errors,
+        )
+
+
 def _sink(
     name: str, filename: str, *, level: int = logging.INFO, human: bool = False
 ) -> logging.Logger:
@@ -91,8 +104,12 @@ def _sink(
     if logger.handlers:
         return logger
     logger.setLevel(level)
-    fh = RotatingFileHandler(
-        paths.logs_dir() / filename, maxBytes=5_000_000, backupCount=3, encoding="utf-8"
+    log_path = paths.logs_dir() / filename
+    fh = _PrivateRotatingFileHandler(
+        log_path,
+        maxBytes=5_000_000,
+        backupCount=3,
+        encoding="utf-8",
     )
     fh.setFormatter(_file_formatter(human=human))
     fh.addFilter(_trace_filter)

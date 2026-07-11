@@ -23,8 +23,10 @@ def extract_chat_messages(
     """
     rows = conn.execute(
         "SELECT timestamp, visible_text FROM captures "
-        " WHERE app_name = ? AND timestamp >= ? AND timestamp <= ? "
-        " ORDER BY timestamp ASC",
+        " WHERE app_name = ? "
+        "   AND persome_epoch(timestamp) >= persome_epoch(?) "
+        "   AND persome_epoch(timestamp) <= persome_epoch(?) "
+        " ORDER BY persome_epoch(timestamp) ASC",
         (app_name, start_ts, end_ts),
     ).fetchall()
 
@@ -44,13 +46,23 @@ def extract_chat_messages(
     if not deduped:
         return "", 0, 0
 
+    try:
+        display_tz = datetime.fromisoformat(start_ts).tzinfo
+    except (TypeError, ValueError):
+        display_tz = None
+
     # Build output segments with gap markers between non-overlapping consecutive pairs.
     segments: list[str] = []
     gap_count = 0
 
     for i, (ts, text) in enumerate(deduped):
         try:
-            label = datetime.fromisoformat(ts).strftime("%H:%M:%S")
+            parsed = datetime.fromisoformat(ts)
+            if parsed.tzinfo is not None:
+                parsed = (
+                    parsed.astimezone(display_tz) if display_tz is not None else parsed.astimezone()
+                )
+            label = parsed.strftime("%H:%M:%S")
         except (TypeError, ValueError):
             label = ts
 

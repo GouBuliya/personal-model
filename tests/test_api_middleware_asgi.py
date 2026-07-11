@@ -28,7 +28,7 @@ from persome.api import (
 
 def test_api_app_uses_no_basehttpmiddleware() -> None:
     """Guard against re-introducing the SSE-breaking BaseHTTPMiddleware."""
-    app = build_api_app()
+    app = build_api_app(auth_enabled=False)
     classes = [mw.cls for mw in app.user_middleware]
     assert BaseHTTPMiddleware not in classes, f"BaseHTTPMiddleware reintroduced: {classes}"
     # …and the three pure-ASGI replacements are all present.
@@ -40,7 +40,7 @@ def test_api_app_uses_no_basehttpmiddleware() -> None:
 def test_origin_guard_is_outermost() -> None:
     """A rejected request must short-circuit before trace_id / access_log run, so
     the guard has to be the outermost user middleware (last added → index 0)."""
-    app = build_api_app()
+    app = build_api_app(auth_enabled=False)
     assert app.user_middleware[0].cls is _OriginGuardMiddleware
 
 

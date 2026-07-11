@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -128,6 +130,60 @@ def test_activity_source_can_exclude_legacy_intents(ac_root) -> None:
         events = ActivitySource(conn, include_legacy_intents=False).events()
     assert {event.source_kind for event in events} == {"entry", "session"}
     assert all(not event.stable_id.startswith("event:intent:") for event in events)
+
+
+def test_activity_source_limit_uses_actual_instant_across_offsets(ac_root) -> None:
+    with fts.cursor() as conn:
+        _ensure_legacy_intents(conn)
+        for timestamp, rationale, key in (
+            ("2025-11-02T10:00:00+08:00", "older", "older"),
+            ("2025-11-02T03:00:00+00:00", "newer", "newer"),
+        ):
+            conn.execute(
+                """
+                INSERT INTO intents (
+                    ts, scope, kind, confidence, status, rationale, payload, evidence,
+                    dedup_key, created_at
+                ) VALUES (?, 'synthetic', 'work', 0.9, 'consumed', ?, '{}', '[]', ?, ?)
+                """,
+                (timestamp, rationale, key, timestamp),
+            )
+        events = ActivitySource(conn, limit=1).events()
+
+    assert [event.summary for event in events] == ["newer"]
+
+
+def test_activity_source_treats_legacy_naive_entry_as_historical_local_time(
+    ac_root, monkeypatch
+) -> None:
+    original_timezone = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", "Asia/Shanghai")
+    time.tzset()
+    try:
+        with fts.cursor() as conn:
+            conn.execute(
+                "INSERT INTO entries(id,path,prefix,timestamp,tags,content,superseded) "
+                "VALUES('legacy-entry','event-old.md','event','2026-07-11T10:00','',"
+                "'older local entry',0)"
+            )
+            session_store.insert(
+                conn,
+                session_store.SessionRow(
+                    id="newer-session",
+                    start_time=datetime.fromisoformat("2026-07-11T02:30:00+00:00"),
+                    end_time=datetime.fromisoformat("2026-07-11T03:00:00+00:00"),
+                    status="reduced",
+                ),
+            )
+            events = ActivitySource(conn, include_legacy_intents=False, limit=1).events()
+
+        assert [event.stable_id for event in events] == ["event:session:newer-session"]
+    finally:
+        if original_timezone is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = original_timezone
+        time.tzset()
 
 
 @pytest.mark.parametrize(

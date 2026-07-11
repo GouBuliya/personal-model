@@ -32,7 +32,7 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path) -> TestClient:
     cfg = Config()
     set_route_config(cfg)
     set_chat_config(cfg)
-    return TestClient(build_api_app(cfg))
+    return TestClient(build_api_app(cfg, auth_enabled=False))
 
 
 def _parse_sse(body: str) -> list[Any]:

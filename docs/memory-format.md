@@ -107,8 +107,9 @@ consolidation_cadence = 8    # drain flagged files every N completed passes
 
 **Reading.** Any tool that can read Markdown works. `grep -r user- ~/.persome/memory/` is a valid first pass.
 
-**Writing.** Use `persome correct`, MCP `remember` / `correct_memory`, or Chat's
-explicit memory tools. Direct editing depends on write authority:
+**Writing.** Use `persome correct` or an explicitly trusted MCP client's
+`remember` / `correct_memory` tools. Bundled Chat's implicit daemon connection
+is read-only. Direct editing depends on write authority:
 
 - Under default `write_authority="markdown"`, edit Markdown only when you intend
   to own the correction, then run `persome rebuild-index`.
@@ -121,7 +122,7 @@ The rebuild is safe and idempotent — it parses every file and rebuilds the `en
 ## Wiping memory
 
 ```bash
-persome clean memory       # asks to confirm; empties memory/ and the FTS tables
+persome clean memory       # asks to confirm; removes every memory/ file and resets model/FTS
 persome clean all          # ...plus captures, timeline blocks, writer state
 ```
 

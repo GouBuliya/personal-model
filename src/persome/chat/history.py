@@ -18,8 +18,7 @@ from .. import paths
 
 def history_dir() -> Path:
     d = paths.root() / "chat-history"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    return paths.ensure_private_dir(d)
 
 
 def active_path() -> Path:
@@ -34,8 +33,12 @@ def archive_path(session_id: str) -> Path:
 def save_history(messages: list[dict[str, Any]]) -> None:
     """Save current messages to active session file. Skip system prompts."""
     saveable = [m for m in messages if m.get("role") != "system"]
-    with contextlib.suppress(OSError):
-        active_path().write_text(json.dumps(saveable, ensure_ascii=False, default=str, indent=2))
+    with contextlib.suppress(OSError, RuntimeError):
+        target = active_path()
+        paths.atomic_write_private_text(
+            target,
+            json.dumps(saveable, ensure_ascii=False, default=str, indent=2),
+        )
 
 
 def load_history() -> list[dict[str, Any]]:
@@ -106,11 +109,11 @@ def search_chat_history(query: str, limit: int = 10) -> list[dict[str, Any]]:
     return results
 
 
-def list_chat_sessions() -> list[dict[str, Any]]:
+def list_chat_sessions(limit: int = 20) -> list[dict[str, Any]]:
     """List all chat sessions with summary info."""
     hist = history_dir()
     sessions: list[dict[str, Any]] = []
-    for f in sorted(hist.glob("*.json"), reverse=True):
+    for f in sorted(hist.glob("*.json"), reverse=True)[:limit]:
         try:
             data = json.loads(f.read_text())
             if not isinstance(data, list):
@@ -126,4 +129,4 @@ def list_chat_sessions() -> list[dict[str, Any]]:
                 "first_message": first_msg,
             }
         )
-    return sessions[:20]
+    return sessions

@@ -24,6 +24,9 @@ logger = get("persome.store")
 
 
 def _now_iso_minute() -> str:
+    # Keep the established minute-local wire shape. Entry search has a broad
+    # historical TEXT contract; changing it to aware ISO requires a dedicated
+    # schema migration rather than mixing representations during hardening.
     return datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M")
 
 
@@ -585,8 +588,17 @@ def mark_entry_deleted(conn: sqlite3.Connection, *, name: str, entry_id: str) ->
 
 def rebuild_index(conn: sqlite3.Connection) -> tuple[int, int]:
     if evo_inversion.evomem_active():
-        return _rebuild_from_evo_nodes(conn)
-    return _rebuild_from_markdown(conn)
+        result = _rebuild_from_evo_nodes(conn)
+    else:
+        result = _rebuild_from_markdown(conn)
+    # Rebuild is a reconciliation boundary. Derived rows for source entries
+    # that no longer exist must not retain deleted personal text or vectors.
+    conn.execute("DELETE FROM entry_retrieval_stats WHERE entry_id NOT IN (SELECT id FROM entries)")
+    for table in ("entry_vectors", "vector_queue"):
+        conn.execute(
+            f"DELETE FROM {table} WHERE entry_id NOT IN (SELECT id FROM entries WHERE superseded=0)"
+        )
+    return result
 
 
 def _ingest_markdown_file(conn: sqlite3.Connection, path: Path, prefix: str) -> int:
@@ -621,6 +633,10 @@ def _ingest_markdown_file(conn: sqlite3.Connection, path: Path, prefix: str) -> 
             content=content,
             superseded=superseded,
         )
+        conn.execute(
+            "INSERT INTO entry_temporal(entry_id, valid_from, valid_until) VALUES (?, ?, ?)",
+            (e.id, e.timestamp, e.timestamp if superseded else None),
+        )
         # Replay meta-cognition through the SAME writer the incremental path
         # uses, so a fresh rebuild reproduces entry_metadata row-for-row.
         fts.set_entry_metadata(
@@ -634,9 +650,10 @@ def _ingest_markdown_file(conn: sqlite3.Connection, path: Path, prefix: str) -> 
 
 
 def _rebuild_from_markdown(conn: sqlite3.Connection) -> tuple[int, int]:
+    conn.execute("DELETE FROM entry_temporal")
+    conn.execute("DELETE FROM entry_metadata")
     conn.execute("DELETE FROM entries")
     conn.execute("DELETE FROM files")
-    conn.execute("DELETE FROM entry_metadata")
     file_count = 0
     entry_count = 0
     for path in files_mod.list_memory_files():
@@ -655,8 +672,9 @@ def _rebuild_from_evo_nodes(conn: sqlite3.Connection) -> tuple[int, int]:
     from ..evomem.store import _row_to_node
     from . import projector
 
-    conn.execute("DELETE FROM entries")
+    conn.execute("DELETE FROM entry_temporal")
     conn.execute("DELETE FROM entry_metadata")
+    conn.execute("DELETE FROM entries")
     groups: dict[str, list] = {}
     for r in conn.execute(
         "SELECT * FROM evo_nodes WHERE user_id='default' AND agent_id='default' ORDER BY node_id"
@@ -687,6 +705,14 @@ def _rebuild_from_evo_nodes(conn: sqlite3.Connection) -> tuple[int, int]:
                 tags=" ".join(projector._render_tags(n, prefix=prefix, ts_by_id=ts_by_id)),
                 content=n.content,
                 superseded=superseded,
+            )
+            conn.execute(
+                "INSERT INTO entry_temporal(entry_id, valid_from, valid_until) VALUES (?, ?, ?)",
+                (
+                    n.node_id,
+                    n.valid_from or projector._heading_ts(n),
+                    n.valid_until,
+                ),
             )
             fts.set_entry_metadata(
                 conn,

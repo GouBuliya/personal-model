@@ -10,14 +10,16 @@ code reads the resulting environment variables:
 <api_key_env selected by models.default>
 OPENAI_API_KEY / OPENAI_BASE_URL (optional dense retrieval)
 PERSOME_SCREENSHOT_KEY
+PERSOME_LOCAL_API_TOKEN
 ```
 
 `config.toml` contains behavior plus the provider id, protocol, model, endpoint,
 and key variable name, never the key value. `persome llm setup` writes that
 profile only after a live check. `PERSOME_ROOT`
 redirects the entire runtime for tests or isolated profiles.
-`install.sh` generates the machine-local screenshot key automatically and
-preserves it across reinstalls; it is not a provider credential.
+`install.sh` generates the machine-local screenshot key and local HTTP bearer
+automatically and preserves both across reinstalls; neither is a provider
+credential.
 
 ## Daemon lifecycle
 
@@ -30,8 +32,11 @@ persome stop
 ```
 
 `start` double-forks and writes `<PERSOME_ROOT>/.pid`. The HTTP/MCP server
-defaults to `127.0.0.1:8742`; the same loopback app serves `/model` and Chat
-REST routes. `persome chat` is the bundled interactive client.
+is restricted to loopback and defaults to `127.0.0.1:8742`; the same app serves `/model` and Chat
+REST routes. Except for canonical `GET /health`, the outer app requires the
+dedicated bearer provisioned in the owner-only env file. `persome model open`
+uses the one-time browser exchange; `persome chat` is the bundled interactive
+client.
 
 Optional launchd ownership:
 
@@ -52,7 +57,7 @@ belong in core.
 
 | Path | Purpose |
 |---|---|
-| `env` | provider secrets plus the generated screenshot-encryption key |
+| `env` | provider secrets plus generated screenshot and local-API credentials |
 | `config.toml` | runtime configuration |
 | `.pid` | direct-daemon PID |
 | `capture-buffer/` | bounded AX/OCR records |

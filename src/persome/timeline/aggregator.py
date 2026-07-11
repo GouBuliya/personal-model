@@ -14,11 +14,12 @@ fields are back-rendered via ``ax_tree_to_markdown`` as a fallback.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, tzinfo
 from pathlib import Path
 
 from .. import paths
 from ..capture.ax_models import ax_tree_to_markdown
+from ..capture.timestamps import parse_capture_path_timestamp, parse_capture_stem
 from ..config import Config
 from ..logger import get
 from ..parsers import parser_for_capture
@@ -218,38 +219,22 @@ def _capture_stem_in_window(stem: str, start: datetime, end: datetime) -> bool:
 
 
 def _stem_to_dt(stem: str) -> datetime | None:
-    # Capture filenames look like ``2026-04-21T17-07-32p08-00`` or
-    # ``…m05-00`` for negative offsets. Reverse the sanitisation that
-    # scheduler.py applied so fromisoformat can parse it.
-    if len(stem) < 20:
-        return None
-    try:
-        date_part = stem[:10]
-        time_part = stem[11:19].replace("-", ":")
-        offset = stem[19:]
-        if offset.startswith("p"):
-            tz = "+" + offset[1:].replace("-", ":")
-        elif offset.startswith("m"):
-            tz = "-" + offset[1:].replace("-", ":")
-        else:
-            tz = ""
-        iso = f"{date_part}T{time_part}{tz}"
-        return datetime.fromisoformat(iso)
-    except (ValueError, IndexError):
-        return None
+    return parse_capture_stem(stem)
 
 
 def captures_in_window(start: datetime, end: datetime) -> list[Path]:
     buf = paths.capture_buffer_dir()
     if not buf.exists():
         return []
-    files: list[Path] = []
-    for p in sorted(buf.iterdir()):
+    timestamped: list[tuple[datetime, Path]] = []
+    for p in buf.iterdir():
         if p.suffix != ".json" or not p.is_file():
             continue
-        if _capture_stem_in_window(p.stem, start, end):
-            files.append(p)
-    return files
+        timestamp = parse_capture_path_timestamp(p)
+        if timestamp is not None and start <= timestamp < end:
+            timestamped.append((timestamp, p))
+    timestamped.sort(key=lambda item: item[0])
+    return [path for _, path in timestamped]
 
 
 def _load_captures(capture_files: list[Path]) -> list[tuple[Path, dict]]:
@@ -277,7 +262,10 @@ def _load_captures(capture_files: list[Path]) -> list[tuple[Path, dict]]:
 
 
 def _format_events(
-    parsed: list[tuple[Path, dict]], *, locus_enabled: bool = True
+    parsed: list[tuple[Path, dict]],
+    *,
+    locus_enabled: bool = True,
+    display_tz: tzinfo | None = None,
 ) -> tuple[str, list[str], AttentionLocus | None]:
     """Render captures for the timeline prompt.
 
@@ -302,7 +290,7 @@ def _format_events(
     files = parsed[-_MAX_EVENTS_PER_WINDOW:]
     for i, (p, data) in enumerate(files, 1):
         ts_raw = str(data.get("timestamp", p.stem))
-        ts = _short_time(ts_raw)
+        ts = _short_time(ts_raw, display_tz=display_tz)
 
         wm = data.get("window_meta") or {}
         app = str(wm.get("app_name") or "Unknown")
@@ -403,10 +391,12 @@ def _format_events(
     return "\n".join(lines).strip(), sorted(apps), block_locus
 
 
-def _short_time(ts: str) -> str:
+def _short_time(ts: str, *, display_tz: tzinfo | None = None) -> str:
     """`2026-04-21T17:07:32+08:00` → `17:07:32`. Best-effort only."""
     try:
         dt = datetime.fromisoformat(ts)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(display_tz) if display_tz is not None else dt.astimezone()
         return dt.strftime("%H:%M:%S")
     except ValueError:
         return ts[:19]
@@ -493,7 +483,9 @@ def produce_block_for_window(
     # fallback so an LLM miss doesn't trigger a second pass over the same files.
     parsed = _load_captures(capture_files)
     events_text, apps_used, block_locus = _format_events(
-        parsed, locus_enabled=cfg.timeline.attention_locus_enabled
+        parsed,
+        locus_enabled=cfg.timeline.attention_locus_enabled,
+        display_tz=start.tzinfo,
     )
     # Use len(parsed) — capture_count must match what the LLM actually sees
     # and what _heuristic_entries can group; len(capture_files) overcounts

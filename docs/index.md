@@ -12,8 +12,8 @@ and MCP clients.
 
 ![Synthetic Persome model with Points, Lines, Faces, Volume, and Root](assets/persome-model-hero.png)
 
-The image is a real Runtime screenshot generated from synthetic fixtures. The
-same viewer is available at `http://127.0.0.1:8742/model` after installation.
+The image is a real Runtime screenshot generated from synthetic fixtures. Open
+the authenticated real-data viewer with `persome model open` after installation.
 
 **[Star Persome on GitHub](https://github.com/Persome-ai/persome-core)** to
 follow releases and help prioritize the next MCP integrations.
@@ -33,12 +33,13 @@ bash install.sh
 persome llm status --check
 persome doctor
 persome start
-open http://127.0.0.1:8742/model
+persome model open
 ```
 
 Persome keeps data under `~/.persome`, uses local AX capture by default, offers
 optional on-device OCR, and serves streamable HTTP MCP at
-`http://127.0.0.1:8742/mcp`.
+`http://127.0.0.1:8742/mcp` behind an owner-local bearer. Normal client
+installers use stdio and do not copy that credential.
 
 ## Read next
 

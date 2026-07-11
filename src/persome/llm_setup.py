@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import env_file
+from . import env_file, paths
 from .providers import ResolvedLLMProfile
 
 _PROBE_TOOL_NAME = "persome_setup_check"
@@ -175,8 +175,9 @@ def save_profile(
     default["base_url"] = profile.base_url
     default["api_key_env"] = profile.api_key_env
 
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(tomlkit.dumps(document), encoding="utf-8")
+    if config_path.is_symlink():
+        raise RuntimeError(f"config file must not be a symlink: {config_path}")
+    paths.atomic_write_private_text(config_path, tomlkit.dumps(document))
     if profile.api_key:
         env_file.write_env_values(env_path, {profile.api_key_env: profile.api_key})
 

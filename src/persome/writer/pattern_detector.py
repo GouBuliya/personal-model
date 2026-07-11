@@ -210,8 +210,9 @@ def _find_repeated_app_sequences(
         """
         SELECT apps_used, start_time
           FROM timeline_blocks
-         WHERE start_time >= ? AND start_time < ?
-         ORDER BY start_time ASC
+         WHERE persome_epoch(start_time) >= persome_epoch(?)
+           AND persome_epoch(start_time) < persome_epoch(?)
+         ORDER BY persome_epoch(start_time) ASC
         """,
         (start.isoformat(), end.isoformat()),
     ).fetchall()
@@ -262,9 +263,10 @@ def _find_repeated_captures_field(
         f"""
         SELECT {field}, timestamp, app_name
           FROM captures
-         WHERE timestamp >= ? AND timestamp < ?
+         WHERE persome_epoch(timestamp) >= persome_epoch(?)
+           AND persome_epoch(timestamp) < persome_epoch(?)
            AND {field} != ''
-         ORDER BY timestamp ASC
+         ORDER BY persome_epoch(timestamp) ASC
         """,
         (start.isoformat(), end.isoformat()),
     ).fetchall()
@@ -306,11 +308,12 @@ def _find_time_clusters(
     """Find sessions that start at similar times with similar dominant apps."""
     rows = conn.execute(
         """
-        SELECT start_time, end_time
+         SELECT start_time, end_time
           FROM sessions
-         WHERE start_time >= ? AND start_time < ?
+         WHERE persome_epoch(start_time) >= persome_epoch(?)
+           AND persome_epoch(start_time) < persome_epoch(?)
            AND status IN ('reduced', 'ended')
-         ORDER BY start_time ASC
+         ORDER BY persome_epoch(start_time) ASC
         """,
         (start.isoformat(), end.isoformat()),
     ).fetchall()
@@ -381,8 +384,9 @@ def _assemble_raw_context(
         """
         SELECT start_time, end_time, apps_used, entries
           FROM timeline_blocks
-         WHERE start_time >= ? AND start_time < ?
-         ORDER BY start_time ASC
+         WHERE persome_epoch(start_time) >= persome_epoch(?)
+           AND persome_epoch(start_time) < persome_epoch(?)
+         ORDER BY persome_epoch(start_time) ASC
          LIMIT 200
         """,
         (lookback_start.isoformat(), window_end.isoformat()),
@@ -402,9 +406,10 @@ def _assemble_raw_context(
         """
         SELECT timestamp, app_name, window_title, url
           FROM captures
-         WHERE timestamp >= ? AND timestamp < ?
+         WHERE persome_epoch(timestamp) >= persome_epoch(?)
+           AND persome_epoch(timestamp) < persome_epoch(?)
            AND (window_title != '' OR url != '')
-         ORDER BY timestamp ASC
+         ORDER BY persome_epoch(timestamp) ASC
          LIMIT 200
         """,
         (lookback_start.isoformat(), window_end.isoformat()),
