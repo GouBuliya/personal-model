@@ -547,7 +547,11 @@ def main() -> int:
         if not args.no_open:
             threading.Timer(0.8, lambda: webbrowser.open(url)).start()
         with contextlib.suppress(KeyboardInterrupt):
-            asyncio.run(mcp_server.run_async(cfg, transport="streamable-http"))
+            # This is an isolated, disposable synthetic root with no personal
+            # data or long-lived daemon credential.  Keep the public demo
+            # directly browsable while production HTTP always requires auth.
+            server = mcp_server.build_server(cfg, auth_enabled=False)
+            asyncio.run(server.run_streamable_http_async())
     return 0
 
 

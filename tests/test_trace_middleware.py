@@ -11,7 +11,7 @@ from persome.trace import get_trace_id
 
 
 def _make_client() -> TestClient:
-    return TestClient(build_api_app())
+    return TestClient(build_api_app(auth_enabled=False))
 
 
 def test_middleware_uses_header_value() -> None:

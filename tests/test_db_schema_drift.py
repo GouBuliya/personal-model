@@ -87,6 +87,7 @@ def test_every_create_table_in_source_is_dumped() -> None:
 
 def test_dump_never_touches_persome_root(ac_root: Path) -> None:
     """Rendering the schema must not create or open any real store."""
+    before = {p.relative_to(ac_root): p.read_bytes() for p in ac_root.rglob("*") if p.is_file()}
     render_schema_sql()
-    leftovers = [p for p in ac_root.rglob("*") if p.is_file()]
-    assert not leftovers, f"render_schema_sql() wrote into PERSOME_ROOT: {leftovers}"
+    after = {p.relative_to(ac_root): p.read_bytes() for p in ac_root.rglob("*") if p.is_file()}
+    assert after == before, "render_schema_sql() wrote into PERSOME_ROOT"

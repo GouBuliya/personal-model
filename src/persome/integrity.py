@@ -19,7 +19,6 @@ or a ``tomllib`` parse error — triggers quarantine.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import sqlite3
 import time
@@ -57,9 +56,11 @@ def _timestamp_suffix() -> str:
 def _quarantine(path: Path) -> Path:
     """Rename ``path`` (and any SQLite sidecars) to ``<name>.corrupt.<ts>``.
 
-    Returns the destination of the main file. Sidecars (``-wal`` / ``-shm``)
+    Returns the destination of the main file. Sidecars (``-wal`` / ``-shm`` / ``-journal``)
     are moved to matching names so a half-written WAL can't resurrect the
-    corrupt DB on the next open.
+    corrupt DB on the next open. Sidecars move first and every rename is
+    mandatory; otherwise the live main remains discoverable and recovery fails
+    closed instead of starting beside an unsafely retained journal.
     """
     suffix = _timestamp_suffix()
     dest = path.with_name(f"{path.name}.corrupt.{suffix}")
@@ -68,14 +69,28 @@ def _quarantine(path: Path) -> Path:
     while dest.exists():
         dest = path.with_name(f"{path.name}.corrupt.{suffix}.{n}")
         n += 1
-    path.rename(dest)
-    for sidecar in (f"{path.name}-wal", f"{path.name}-shm"):
+    moved: list[tuple[Path, Path]] = []
+    for sidecar in (f"{path.name}-wal", f"{path.name}-shm", f"{path.name}-journal"):
         src = path.with_name(sidecar)
-        if src.exists():
-            # Best-effort: a stuck sidecar shouldn't abort recovery; the fresh
-            # DB opens with its own new WAL anyway.
-            with contextlib.suppress(OSError):
-                src.rename(dest.with_name(f"{dest.name}.{sidecar.rsplit('-', 1)[1]}"))
+        try:
+            src.lstat()
+        except FileNotFoundError:
+            continue
+        else:
+            sidecar_dest = dest.with_name(f"{dest.name}.{sidecar.rsplit('-', 1)[1]}")
+            try:
+                src.rename(sidecar_dest)
+            except OSError as exc:
+                for original, quarantined in reversed(moved):
+                    quarantined.rename(original)
+                raise RuntimeError(f"cannot safely quarantine SQLite sidecar {src}") from exc
+            moved.append((src, sidecar_dest))
+    try:
+        path.rename(dest)
+    except OSError as exc:
+        for original, quarantined in reversed(moved):
+            quarantined.rename(original)
+        raise RuntimeError(f"cannot safely quarantine corrupt file {path}") from exc
     return dest
 
 
@@ -132,8 +147,11 @@ def _write_recovery_marker(quarantined: list[QuarantinedFile]) -> None:
     }
     marker = paths.integrity_recovery_marker()
     try:
-        marker.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
-    except OSError as e:
+        paths.atomic_write_private_text(
+            marker,
+            json.dumps(payload, ensure_ascii=False, indent=2),
+        )
+    except (OSError, RuntimeError) as e:
         _log.warning("integrity: failed to write recovery marker", extra={"error": str(e)})
 
 

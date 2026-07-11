@@ -22,19 +22,24 @@ CHAT_SCHEMAS: list[dict[str, Any]] = [
                     "query": {
                         "type": "string",
                         "description": "Search keywords, e.g. 'DeepSeek API' or 'weekly meeting'.",
+                        "maxLength": 20000,
                     },
                     "top_k": {
                         "type": "integer",
                         "description": "Max results to return (default 5).",
                         "default": 5,
+                        "minimum": 1,
+                        "maximum": 50,
                     },
                     "since": {
                         "type": "string",
                         "description": "Only include entries after this ISO timestamp, e.g. '2026-05-01'.",
+                        "maxLength": 64,
                     },
                     "until": {
                         "type": "string",
                         "description": "Only include entries before this ISO timestamp.",
+                        "maxLength": 64,
                     },
                 },
                 "required": ["query"],
@@ -51,7 +56,15 @@ CHAT_SCHEMAS: list[dict[str, Any]] = [
             ),
             "parameters": {
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max memory files to list (default 200).",
+                        "default": 200,
+                        "minimum": 1,
+                        "maximum": 500,
+                    }
+                },
             },
         },
     },
@@ -69,10 +82,13 @@ CHAT_SCHEMAS: list[dict[str, Any]] = [
                     "path": {
                         "type": "string",
                         "description": "Memory filename, e.g. 'user-profile.md'.",
+                        "maxLength": 512,
                     },
                     "tail_n": {
                         "type": "integer",
                         "description": "Only return the last N entries (latest first).",
+                        "minimum": 1,
+                        "maximum": 500,
                     },
                 },
                 "required": ["path"],
@@ -93,11 +109,14 @@ CHAT_SCHEMAS: list[dict[str, Any]] = [
                     "since": {
                         "type": "string",
                         "description": "ISO timestamp, e.g. '2026-05-15' or '2026-05-15T09:00'.",
+                        "maxLength": 64,
                     },
                     "limit": {
                         "type": "integer",
                         "description": "Max entries to return (default 20).",
                         "default": 20,
+                        "minimum": 1,
+                        "maximum": 200,
                     },
                 },
             },
@@ -117,6 +136,7 @@ CHAT_SCHEMAS: list[dict[str, Any]] = [
                     "app_filter": {
                         "type": "string",
                         "description": "Filter by app name, e.g. 'Chrome' or 'VS Code'.",
+                        "maxLength": 512,
                     },
                 },
             },
@@ -137,23 +157,29 @@ CHAT_SCHEMAS: list[dict[str, Any]] = [
                     "query": {
                         "type": "string",
                         "description": "Search keywords.",
+                        "maxLength": 20000,
                     },
                     "app_name": {
                         "type": "string",
                         "description": "Filter by app name.",
+                        "maxLength": 512,
                     },
                     "since": {
                         "type": "string",
                         "description": "ISO timestamp lower bound.",
+                        "maxLength": 64,
                     },
                     "until": {
                         "type": "string",
                         "description": "ISO timestamp upper bound.",
+                        "maxLength": 64,
                     },
                     "limit": {
                         "type": "integer",
                         "description": "Max results (default 10).",
                         "default": 10,
+                        "minimum": 1,
+                        "maximum": 50,
                     },
                 },
                 "required": ["query"],
@@ -385,11 +411,14 @@ CHAT_SCHEMAS: list[dict[str, Any]] = [
                     "query": {
                         "type": "string",
                         "description": "Search keyword.",
+                        "maxLength": 20000,
                     },
                     "limit": {
                         "type": "integer",
                         "description": "Max results (default 10).",
                         "default": 10,
+                        "minimum": 1,
+                        "maximum": 50,
                     },
                 },
                 "required": ["query"],
@@ -406,7 +435,15 @@ CHAT_SCHEMAS: list[dict[str, Any]] = [
             ),
             "parameters": {
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max sessions to inspect (default 20).",
+                        "default": 20,
+                        "minimum": 1,
+                        "maximum": 200,
+                    }
+                },
             },
         },
     },
@@ -414,8 +451,8 @@ CHAT_SCHEMAS: list[dict[str, Any]] = [
 
 CHAT_SCHEMA_NAMES = {t["function"]["name"] for t in CHAT_SCHEMAS}
 
-# Default model-focused Chat surface. The daemon MCP connection adds the
-# explicit model correction tools (remember/correct_memory) separately.
+# Default model-focused Chat surface. Its implicit daemon MCP connection is
+# independently restricted to an explicit read-only allowlist.
 SAFE_CHAT_SCHEMA_NAMES = frozenset(
     {
         "search_memory",

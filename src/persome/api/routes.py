@@ -7,24 +7,46 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import HTMLResponse, Response
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from .. import __version__, paths
 from ..capture import ax_capture, scheduler
+from ..capture.timestamps import newest_capture_path
 from ..config import Config
 from ..config import load as load_config
 from ..logger import get
 from ..model import ActivitySource, build_snapshot, normalize_activity_identity
+from ..security.auth import (
+    BROWSER_BOOTSTRAP_PATH,
+    BROWSER_BOOTSTRAP_TTL_SECONDS,
+    BROWSER_SESSION_COOKIE,
+    BROWSER_SESSION_TTL_SECONDS,
+    consume_browser_bootstrap_nonce,
+    issue_browser_bootstrap_nonce,
+)
 from ..store import fts
 from .chat_routes import router as chat_router
 from .models import ApiResponse, CaptureIngestBody, ModelPing
 
 logger = get("persome.api")
+
+_MODEL_PING_CACHE_TTL_SECONDS = 60.0
+_MODEL_PING_CACHE_MAX_ENTRIES = 8
+_model_ping_cache_lock = threading.Lock()
+_model_ping_cache: dict[
+    tuple[tuple[str, str, str, str, str], ...],
+    tuple[float, dict[str, ModelPing]],
+] = {}
 
 # Re-export config so it can be overridden during tests
 _cfg: Config | None = None
@@ -76,17 +98,17 @@ def _last_capture_info() -> tuple[str | None, str | None]:
     buf = paths.capture_buffer_dir()
     if not buf.exists():
         return None, None
-    json_files = sorted(p for p in buf.iterdir() if p.suffix == ".json")
-    if not json_files:
+    latest = newest_capture_path(p for p in buf.iterdir() if p.suffix == ".json")
+    if latest is None:
         return None, None
     try:
-        data = __import__("json").loads(json_files[-1].read_bytes())
+        data = __import__("json").loads(latest.read_bytes())
         ts = data.get("timestamp")
         meta = data.get("window_meta") or {}
         app = meta.get("app_name")
         return ts, app
     except (OSError, ValueError):
-        return json_files[-1].stem, None
+        return latest.stem, None
 
 
 def _health_status(pid: int | None, last_ts: str | None) -> str:
@@ -104,6 +126,81 @@ def _health_status(pid: int | None, last_ts: str | None) -> str:
     return "stale (no captures in >5m)"
 
 
+def _status_model_pings(cfg: Config) -> tuple[dict[str, Any], dict[str, ModelPing]]:
+    """Return the selected profile plus bounded, TTL-cached provider pings.
+
+    ``/status`` is polled by local clients.  A health UI must not turn every
+    refresh into paid provider traffic, and concurrent refreshes should collapse
+    into one probe.  Holding the small process-local lock while probing also
+    prevents a thundering herd after cache expiry.
+    """
+    from ..llm_setup import profile_dict
+    from ..providers import resolve_profile
+    from ..writer.llm import ping_stage
+
+    stages = ("timeline", "reducer", "classifier", "compact")
+    selected = resolve_profile(cfg.model_for("default"))
+    profile = profile_dict(selected)
+
+    resolved: dict[str, Any] = {}
+    cache_parts: list[tuple[str, str, str, str, str]] = []
+    for stage in stages:
+        item = resolve_profile(cfg.model_for(stage))
+        resolved[stage] = item
+        key_fingerprint = sha256((item.api_key or "").encode("utf-8")).hexdigest()
+        cache_parts.append((stage, item.protocol, item.model, item.base_url, key_fingerprint))
+    cache_key = tuple(cache_parts)
+
+    with _model_ping_cache_lock:
+        now = time.monotonic()
+        cached = _model_ping_cache.get(cache_key)
+        if cached is not None and now - cached[0] < _MODEL_PING_CACHE_TTL_SECONDS:
+            return profile, dict(cached[1])
+
+        dedup: dict[tuple[str, str, str, str], list[str]] = {}
+        for stage, item in resolved.items():
+            provider_key = (
+                item.protocol,
+                item.model,
+                item.base_url,
+                sha256((item.api_key or "").encode("utf-8")).hexdigest(),
+            )
+            dedup.setdefault(provider_key, []).append(stage)
+
+        results: dict[str, ModelPing] = {}
+        if dedup:
+            with ThreadPoolExecutor(max_workers=min(4, len(dedup))) as pool:
+                future_to_stages = {
+                    pool.submit(ping_stage, cfg, members[0]): members for members in dedup.values()
+                }
+                for future, members in future_to_stages.items():
+                    try:
+                        result = future.result(timeout=8.0)
+                    except Exception:  # noqa: BLE001 - status degrades instead of failing
+                        result = None
+                    for stage in members:
+                        if result is None:
+                            results[stage] = ModelPing(
+                                stage=stage,
+                                model=cfg.model_for(stage).model,
+                                ok=False,
+                            )
+                        else:
+                            results[stage] = ModelPing(
+                                stage=stage,
+                                model=result.model,
+                                ok=result.ok,
+                                latency_ms=result.latency_ms,
+                                error=result.error,
+                            )
+
+        if len(_model_ping_cache) >= _MODEL_PING_CACHE_MAX_ENTRIES:
+            oldest = min(_model_ping_cache, key=lambda key: _model_ping_cache[key][0])
+            _model_ping_cache.pop(oldest, None)
+        _model_ping_cache[cache_key] = (now, dict(results))
+        return profile, results
+
+
 router = APIRouter()
 
 
@@ -111,6 +208,49 @@ router = APIRouter()
 def health() -> ApiResponse:
     """Return the service liveness status."""
     return ApiResponse(data={"status": "ok"})
+
+
+@router.post(BROWSER_BOOTSTRAP_PATH, response_model=ApiResponse, tags=["system"])
+def create_browser_bootstrap(response: Response) -> ApiResponse:
+    """Issue a short-lived URL that opens the authenticated local model viewer.
+
+    This POST itself requires the normal bearer token.  The returned URL holds
+    only a one-minute, single-use nonce — never the long-lived daemon token.
+    """
+    nonce = issue_browser_bootstrap_nonce()
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return ApiResponse(
+        data={
+            "bootstrap_url": f"{BROWSER_BOOTSTRAP_PATH}?{urlencode({'nonce': nonce})}",
+            "expires_in_seconds": BROWSER_BOOTSTRAP_TTL_SECONDS,
+        }
+    )
+
+
+@router.get(BROWSER_BOOTSTRAP_PATH, include_in_schema=False)
+def consume_browser_bootstrap(
+    nonce: str = Query(..., min_length=32, max_length=128),
+) -> RedirectResponse:
+    """Consume one browser nonce, set a model-only cookie, and redirect."""
+    browser_session = consume_browser_bootstrap_nonce(nonce)
+    if browser_session is None:
+        raise HTTPException(status_code=410, detail="browser bootstrap expired or already used")
+    session, path_token = browser_session
+    viewer_path = f"/model/{path_token}"
+    response = RedirectResponse(url=f"{viewer_path}/", status_code=303)
+    response.set_cookie(
+        BROWSER_SESSION_COOKIE,
+        session,
+        max_age=BROWSER_SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=False,  # Runtime's loopback viewer is served over plain HTTP.
+        samesite="strict",
+        path=viewer_path,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
 
 
 @router.get("/permissions", response_model=ApiResponse, tags=["system"])
@@ -126,8 +266,8 @@ def permissions() -> ApiResponse:
 
 
 @router.get("/status", response_model=ApiResponse, tags=["system"])
-def status() -> ApiResponse:
-    """Return version, daemon, capture, memory, and LLM connectivity status."""
+def status(check_models: bool = False) -> ApiResponse:
+    """Return runtime status; provider probes run only when explicitly requested."""
     cfg = _get_cfg()
     pid = _read_pid()
     paused = paths.paused_flag().exists()
@@ -162,8 +302,9 @@ def status() -> ApiResponse:
 
     buf = paths.capture_buffer_dir()
     if buf.exists():
-        bufs = sorted(p for p in buf.iterdir() if p.suffix == ".json")
-        last = bufs[-1].name if bufs else "(none)"
+        bufs = [p for p in buf.iterdir() if p.suffix == ".json"]
+        latest = newest_capture_path(bufs)
+        last = latest.name if latest else "(none)"
         data["buffer"] = f"{len(bufs)} files, last: {last}"
 
     with fts.cursor() as conn:
@@ -184,57 +325,32 @@ def status() -> ApiResponse:
         data["memory"] = (
             f"{len(active)} active files, {len(dormant)} dormant, {total_entries} entries"
         )
-        tlb_row = conn.execute("SELECT COUNT(*), MAX(end_time) FROM timeline_blocks").fetchone()
+        tlb_row = conn.execute(
+            "SELECT COUNT(*), "
+            "(SELECT end_time FROM timeline_blocks "
+            "ORDER BY persome_epoch(end_time) DESC LIMIT 1) "
+            "FROM timeline_blocks"
+        ).fetchone()
         tlb_count = tlb_row[0] if tlb_row else 0
         tlb_last = tlb_row[1] if tlb_row and tlb_row[1] else "(none)"
         data["timeline"] = f"{tlb_count} blocks, last end: {tlb_last}"
 
-    # Model pings (best-effort; don't block on slow providers)
-    stages = ("timeline", "reducer", "classifier", "compact")
+    # Resolving configuration is local.  Provider pings can be paid API calls,
+    # so ordinary UI polling must never trigger them implicitly.
     ping_results: dict[str, ModelPing] = {}
     try:
-        from concurrent.futures import ThreadPoolExecutor
+        if check_models:
+            data["llm_profile"], ping_results = _status_model_pings(cfg)
+        else:
+            from ..llm_setup import profile_dict
+            from ..providers import resolve_profile
 
-        from ..llm_setup import profile_dict
-        from ..providers import resolve_profile
-        from ..writer.llm import ping_stage
-
-        data["llm_profile"] = profile_dict(resolve_profile(cfg.model_for("default")))
-
-        dedup: dict[tuple[str, str, str, str], list[str]] = {}
-        for stage in stages:
-            m = cfg.model_for(stage)
-            profile = resolve_profile(m)
-            key = (profile.protocol, profile.model, profile.base_url, profile.api_key or "")
-            dedup.setdefault(key, []).append(stage)
-
-        if dedup:
-            with ThreadPoolExecutor(max_workers=min(4, len(dedup))) as pool:
-                future_to_stages = {
-                    pool.submit(ping_stage, cfg, members[0]): members for members in dedup.values()
-                }
-                for future, members in future_to_stages.items():
-                    try:
-                        res = future.result(timeout=8.0)
-                    except Exception:
-                        res = None
-                    for stage in members:
-                        if res is None:
-                            ping_results[stage] = ModelPing(
-                                stage=stage, model=cfg.model_for(stage).model, ok=False
-                            )
-                        else:
-                            ping_results[stage] = ModelPing(
-                                stage=stage,
-                                model=res.model,
-                                ok=res.ok,
-                                latency_ms=res.latency_ms,
-                                error=res.error,
-                            )
+            data["llm_profile"] = profile_dict(resolve_profile(cfg.model_for("default")))
     except Exception as exc:
         logger.warning("model ping failed in status endpoint: %s", exc)
 
     data["models"] = ping_results
+    data["models_checked"] = check_models
     return ApiResponse(data=data)
 
 
@@ -256,11 +372,12 @@ def ingest_capture(body: CaptureIngestBody) -> ApiResponse:
 
 
 @router.get("/model", response_class=HTMLResponse, tags=["model"])
-def model_view() -> HTMLResponse:
+def model_view(request: Request) -> HTMLResponse:
     """Render the local Point/Line/Face/Volume/Root model explorer."""
-    from .model_view import MEMORY_VIEW_HTML
+    from .model_view import render_memory_view
 
-    return HTMLResponse(MEMORY_VIEW_HTML)
+    base_path = str(request.scope.get("persome.viewer_base_path") or "/model/")
+    return HTMLResponse(render_memory_view(base_path))
 
 
 _MODEL_ASSETS = {
@@ -311,7 +428,9 @@ def model_graph() -> dict[str, Any]:
 
 
 @router.get("/model/node", tags=["model"])
-def model_node(id: str) -> dict[str, Any]:
+def model_node(
+    id: str = Query(..., min_length=1, max_length=512),
+) -> dict[str, Any]:
     """Return the symbolic receipts behind one graph node.
 
     This is the click-through from the visual graph to the symbolic layer. Lazy per-node fetch

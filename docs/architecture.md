@@ -143,8 +143,9 @@ readers and writers coexist under WAL mode.
 - **MCP:** memory/model reads, provenance drill-down, and explicit audited writes.
 - **Chat:** `persome chat` or the loopback Chat REST routes; it uses the same
   memory and model, not a second store.
-- **Viewer:** `http://127.0.0.1:8742/model` while the daemon HTTP server is
-  active. It reads `/model/graph` and packaged local Three.js assets.
+- **Viewer:** `persome model open` while the daemon HTTP server is active. It
+  exchanges the owner bearer for a one-time browser capability, then reads
+  `/model/graph` and packaged local Three.js assets.
 - **Snapshot:** schema-versioned JSON for external clients and products.
 
 The Runtime contains no click/type actuation, notification lifecycle, meeting

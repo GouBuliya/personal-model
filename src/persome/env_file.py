@@ -25,8 +25,12 @@ from typing import Literal
 
 SCREENSHOT_KEY_ENV = "PERSOME_SCREENSHOT_KEY"
 _SCREENSHOT_KEY_HEX_LENGTH = 64
+LOCAL_API_TOKEN_ENV = "PERSOME_LOCAL_API_TOKEN"
+_LOCAL_API_TOKEN_MIN_BYTES = 32
+_LOCAL_API_TOKEN_MAX_BYTES = 512
 
 ScreenshotKeyStatus = Literal["existing", "generated"]
+LocalAPITokenStatus = Literal["existing", "generated"]
 
 
 def _parse_line(line: str) -> tuple[str, str] | None:
@@ -52,7 +56,7 @@ def load_env_file(path: Path) -> int:
     silently ignored (returns 0) — the daemon will surface a clearer error
     later when the selected provider credential lookup comes back empty.
     """
-    if not path.exists():
+    if path.is_symlink() or not path.exists():
         return 0
     try:
         text = path.read_text(encoding="utf-8")
@@ -77,6 +81,8 @@ def write_env_values(path: Path, updates: dict[str, str]) -> None:
     Used by guided onboarding so credentials are durable across daemon restarts.
     Updated keys are emitted once at the end of the owner-only file.
     """
+    if path.is_symlink():
+        raise RuntimeError(f"environment file must not be a symlink: {path}")
     invalid = [key for key in updates if not key or not key.replace("_", "").isalnum()]
     if invalid:
         raise ValueError(f"invalid environment variable name: {invalid[0]}")
@@ -121,6 +127,51 @@ def is_valid_screenshot_key(value: str | None) -> bool:
         return len(bytes.fromhex(value)) == 32
     except ValueError:
         return False
+
+
+def is_valid_local_api_token(value: str | None) -> bool:
+    """Return whether ``value`` is a safe opaque local bearer credential."""
+    if value is None or value != value.strip() or "\r" in value or "\n" in value:
+        return False
+    length = len(value.encode("utf-8"))
+    return _LOCAL_API_TOKEN_MIN_BYTES <= length <= _LOCAL_API_TOKEN_MAX_BYTES
+
+
+def ensure_local_api_token(path: Path) -> LocalAPITokenStatus:
+    """Generate and preserve one owner-only local REST/MCP bearer token.
+
+    The value is never returned or logged. Invalid/duplicate entries are
+    replaced atomically with a fresh high-entropy URL-safe token.
+    """
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        lines = []
+
+    canonical: str | None = None
+    for line in lines:
+        parsed = _parse_line(line)
+        if parsed is None:
+            continue
+        key, value = parsed
+        if key == LOCAL_API_TOKEN_ENV:
+            if canonical is None and is_valid_local_api_token(value):
+                canonical = value
+            continue
+
+    if canonical is None:
+        canonical = secrets.token_urlsafe(48)
+        status: LocalAPITokenStatus = "generated"
+    else:
+        status = "existing"
+    shell_override = os.environ.get(LOCAL_API_TOKEN_ENV)
+    write_env_values(path, {LOCAL_API_TOKEN_ENV: canonical})
+    # Match load_env_file's documented precedence: a deliberate shell export
+    # remains a process-local debugging override instead of being silently
+    # replaced when `persome start` performs idempotent provisioning.
+    if shell_override is not None:
+        os.environ[LOCAL_API_TOKEN_ENV] = shell_override
+    return status
 
 
 def ensure_screenshot_key(path: Path) -> ScreenshotKeyStatus:

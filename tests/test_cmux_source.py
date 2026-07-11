@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from persome.capture import cmux_source, window_meta
+from persome.capture import cmux_source, screen_state, window_meta
 from persome.capture import scheduler as sched_mod
 from persome.capture.ax_models import AXCaptureResult
 from persome.config import CaptureConfig
@@ -420,6 +420,7 @@ def _patch_sched_common(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sched_mod.paths, "ensure_dirs", lambda: None)
     monkeypatch.setattr(sched_mod.paths, "paused_flag", lambda: _MockPath())
     monkeypatch.setattr(sched_mod, "_last_ocr_ts", {})
+    monkeypatch.setattr(screen_state, "is_screen_locked", lambda: False)
     monkeypatch.setattr(
         window_meta,
         "active_window",

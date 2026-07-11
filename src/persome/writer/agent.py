@@ -132,9 +132,7 @@ def model_active_session(cfg: Config, *, session_id: str) -> SessionModelResult:
     """Turn the latest flushed active-session window into Points and Lines."""
     result = SessionModelResult(session_id=session_id)
     lock_path = paths.session_model_lock()
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+b") as lock:
-        lock_path.chmod(0o600)
+    with paths.open_private_lock_file(lock_path) as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
             with fts.cursor() as conn:
@@ -176,9 +174,7 @@ def finalize_session(
     """
     result = SessionModelResult(session_id=session_id)
     lock_path = paths.session_model_lock()
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+b") as lock:
-        lock_path.chmod(0o600)
+    with paths.open_private_lock_file(lock_path) as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
             with fts.cursor() as conn:

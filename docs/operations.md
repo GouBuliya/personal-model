@@ -35,7 +35,7 @@ the daemon, grant that terminal. If launchd later owns the daemon, rerun
 | Path under the root | Contents |
 |---|---|
 | `config.toml` | non-secret Runtime configuration |
-| `env` | provider credentials and screenshot key; mode `0600` |
+| `env` | provider credentials, screenshot key, and local API bearer; mode `0600` |
 | `capture-buffer/` | AX text and optional encrypted screenshot payloads |
 | `memory/` | readable Markdown memory |
 | `index.db` | FTS, canonical evomem nodes, relations, sessions, and geometry |
@@ -47,7 +47,9 @@ the daemon, grant that terminal. If launchd later owns the daemon, rerun
 | `venv/` | dedicated installer environment; code, not personal data |
 
 Treat the whole root as sensitive. Backups and exports are copies of personal
-data, not harmless metadata.
+data, not harmless metadata. Persome enforces `0700` on the root/data
+directories and `0600` on sensitive files, repairs legacy modes once after an
+upgrade, and gives its LaunchAgent umask `0077`.
 
 ## Lifecycle and first recall
 
@@ -88,7 +90,7 @@ persome faces-report
 persome root-report
 persome contradictions
 persome as-of --help
-open http://127.0.0.1:8742/model
+persome model open
 ```
 
 The viewer and `GET /model/graph` are raw owner-local inspection surfaces.
@@ -124,8 +126,9 @@ Stop the daemon first so no writer can race the deletion.
 ```bash
 persome stop
 
-# Delete Markdown, FTS entries, canonical evomem, relations, Faces, Volumes,
-# Root, exports, projections, and backups. Captures/timeline/Chat remain.
+# Delete every file under memory/, FTS entries, canonical evomem, relations,
+# Faces, Volumes, Root, exports, projections, backups, and recovery markers.
+# Captures/timeline/Chat remain.
 persome clean memory
 
 # Delete all personal data, including captures, timeline/session state, model,
@@ -134,8 +137,16 @@ persome clean memory
 persome clean all
 ```
 
-Both commands require confirmation unless `--yes` is passed. `clean captures`
-removes both capture-buffer files and indexed capture rows.
+Clean commands refuse to run while the daemon PID is live, even with `--yes`,
+so a writer cannot retain an open SQLite handle or recreate data mid-erasure.
+They require confirmation unless `--yes` is passed. `clean captures`
+removes capture-buffer files and indexed capture rows, including capture rows
+inside daily, unfinished, and integrity-quarantine SQLite copies. `clean
+timeline` applies the same rule to timeline blocks. Explicit clean operations
+use SQLite core and FTS5 secure deletion, VACUUM, WAL truncation, and journal
+cleanup; unreadable recovery copies are removed rather than retaining a hidden
+copy of data the user asked to erase. The FTS rebuild also clears historical
+segment terms produced before secure-delete became the default.
 
 ## Uninstall
 

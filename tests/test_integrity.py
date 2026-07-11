@@ -6,6 +6,8 @@ import json
 import time
 from pathlib import Path
 
+import pytest
+
 from persome import config as config_mod
 from persome import integrity, paths
 from persome.store import fts
@@ -97,6 +99,7 @@ def test_recovery_marker_written_with_paths(ac_root: Path) -> None:
 
     marker = paths.integrity_recovery_marker()
     assert marker.exists()
+    assert marker.stat().st_mode & 0o777 == 0o600
     payload = json.loads(marker.read_text())
     assert "recovered_at" in payload
     assert len(payload["files"]) == 1
@@ -138,6 +141,30 @@ def test_no_stale_wal_sidecars_survive_next_to_rebuilt_db(ac_root: Path) -> None
     with fts.cursor() as conn:
         rows = conn.execute("PRAGMA integrity_check").fetchall()
     assert [r[0] for r in rows] == ["ok"]
+
+
+def test_quarantine_sidecar_rename_failure_aborts_before_moving_main(
+    ac_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = paths.index_db()
+    db.write_bytes(b"corrupt-main")
+    wal = db.with_name(f"{db.name}-wal")
+    wal.write_bytes(b"PRIVATE_WAL_PAGE")
+    real_rename = Path.rename
+
+    def fail_wal(path: Path, target: Path):
+        if path == wal:
+            raise OSError("synthetic rename failure")
+        return real_rename(path, target)
+
+    monkeypatch.setattr(Path, "rename", fail_wal)
+
+    with pytest.raises(RuntimeError, match="cannot safely quarantine SQLite sidecar"):
+        integrity._quarantine(db)
+
+    assert db.exists()
+    assert wal.exists()
+    assert list(ac_root.glob("index.db.corrupt.*")) == []
 
 
 def test_check_is_fast_under_500ms(ac_root: Path) -> None:

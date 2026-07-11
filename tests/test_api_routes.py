@@ -10,7 +10,7 @@ from persome.api import build_api_app
 
 def test_health_returns_ok() -> None:
     """GET /health must return the documented envelope immediately."""
-    client = TestClient(build_api_app())
+    client = TestClient(build_api_app(auth_enabled=False))
     response = client.get("/health")
 
     assert response.status_code == 200
@@ -19,12 +19,12 @@ def test_health_returns_ok() -> None:
 
 
 def test_openapi_reports_runtime_version() -> None:
-    client = TestClient(build_api_app())
+    client = TestClient(build_api_app(auth_enabled=False))
     assert client.get("/openapi.json").json()["info"]["version"] == __version__
 
 
 def test_model_routes_are_public_and_local(ac_root) -> None:
-    client = TestClient(build_api_app())
+    client = TestClient(build_api_app(auth_enabled=False))
     page = client.get("/model")
     graph = client.get("/model/graph")
     asset = client.get("/model/assets/three.module.js")
@@ -37,7 +37,7 @@ def test_model_routes_are_public_and_local(ac_root) -> None:
 
 
 def test_removed_product_and_admin_routes_are_absent(ac_root) -> None:
-    client = TestClient(build_api_app())
+    client = TestClient(build_api_app(auth_enabled=False))
     for path in (
         "/memories",
         "/search?query=test",

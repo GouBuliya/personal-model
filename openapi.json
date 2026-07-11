@@ -25,6 +25,29 @@
               }
             }
           }
+        },
+        "security": []
+      }
+    },
+    "/auth/browser-bootstrap": {
+      "post": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Create Browser Bootstrap",
+        "description": "Issue a short-lived URL that opens the authenticated local model viewer.\n\nThis POST itself requires the normal bearer token.  The returned URL holds\nonly a one-minute, single-use nonce — never the long-lived daemon token.",
+        "operationId": "create_browser_bootstrap_auth_browser_bootstrap_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -56,8 +79,20 @@
           "system"
         ],
         "summary": "Status",
-        "description": "Return version, daemon, capture, memory, and LLM connectivity status.",
+        "description": "Return runtime status; provider probes run only when explicitly requested.",
         "operationId": "status_status_get",
+        "parameters": [
+          {
+            "name": "check_models",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Check Models"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -65,6 +100,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -175,6 +220,8 @@
             "required": true,
             "schema": {
               "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
               "title": "Id"
             }
           }
@@ -262,10 +309,13 @@
             "required": true,
             "schema": {
               "type": "string",
-              "description": "Eight-character session UUID",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "Bounded URL-safe session identifier",
               "title": "Session Id"
             },
-            "description": "Eight-character session UUID"
+            "description": "Bounded URL-safe session identifier"
           }
         ],
         "responses": {
@@ -305,10 +355,13 @@
             "required": true,
             "schema": {
               "type": "string",
-              "description": "Eight-character session UUID",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "Bounded URL-safe session identifier",
               "title": "Session Id"
             },
-            "description": "Eight-character session UUID"
+            "description": "Bounded URL-safe session identifier"
           }
         ],
         "responses": {
@@ -350,10 +403,13 @@
             "required": true,
             "schema": {
               "type": "string",
-              "description": "Eight-character session UUID",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "Bounded URL-safe session identifier",
               "title": "Session Id"
             },
-            "description": "Eight-character session UUID"
+            "description": "Bounded URL-safe session identifier"
           }
         ],
         "responses": {
@@ -393,10 +449,13 @@
             "required": true,
             "schema": {
               "type": "string",
-              "description": "Eight-character session UUID",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "Bounded URL-safe session identifier",
               "title": "Session Id"
             },
-            "description": "Eight-character session UUID"
+            "description": "Bounded URL-safe session identifier"
           }
         ],
         "requestBody": {
@@ -640,7 +699,8 @@
           "timestamp": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "maxLength": 64
               },
               {
                 "type": "null"
@@ -710,7 +770,8 @@
           "ocr_jpeg_b64": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "maxLength": 8388608
               },
               {
                 "type": "null"
@@ -722,7 +783,8 @@
           "ocr_tier": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "maxLength": 32
               },
               {
                 "type": "null"
@@ -753,6 +815,8 @@
         "properties": {
           "content": {
             "type": "string",
+            "maxLength": 100000,
+            "minLength": 1,
             "title": "Content",
             "description": "User message content"
           }
@@ -803,6 +867,18 @@
         ],
         "title": "ValidationError"
       }
+    },
+    "securitySchemes": {
+      "LocalBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Owner-local token from <PERSOME_ROOT>/env"
+      }
     }
-  }
+  },
+  "security": [
+    {
+      "LocalBearer": []
+    }
+  ]
 }

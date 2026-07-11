@@ -18,11 +18,12 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 from collections.abc import Sequence
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import typer
 from rich.console import Console
@@ -32,6 +33,7 @@ from . import __version__, integrity, paths
 from . import config as config_mod
 from . import env_file as env_file_mod
 from . import logger as logger_mod
+from .capture.timestamps import newest_capture_path, parse_capture_timestamp
 from .providers import ProviderSpec
 from .store import entries as entries_mod
 from .store import fts, index_md
@@ -109,19 +111,22 @@ def _capture_continuity(hours: float = 1.0) -> tuple[int, float | None]:
     Returns ``(0, None)`` when there are no captures in the window.
     """
     with fts.cursor() as conn:
-        # `captures.timestamp` is stored aware-local (e.g. ...T18:32:48+08:00);
-        # SQLite's `datetime('now')` is UTC with a space separator, so a SQL
-        # `>= datetime('now', ?)` lexicographic compare is dominated by the
-        # `T`-vs-space separator and degrades to "since the start of today"
-        # (#586 class). Compute the cutoff in the column's own format and bind it.
-        cutoff = (datetime.now().astimezone() - timedelta(minutes=int(hours * 60))).isoformat()
+        # New captures are canonical UTC, but upgrades can retain aware-local
+        # rows. SQLite's date conversion compares the underlying instant.
+        cutoff = (datetime.now(UTC) - timedelta(minutes=int(hours * 60))).isoformat(
+            timespec="microseconds"
+        )
         rows = conn.execute(
-            "SELECT timestamp FROM captures WHERE timestamp >= ? ORDER BY timestamp",
+            "SELECT timestamp FROM captures "
+            "WHERE persome_epoch(timestamp) >= persome_epoch(?) "
+            "ORDER BY persome_epoch(timestamp)",
             (cutoff,),
         ).fetchall()
     if not rows:
         return 0, None
-    timestamps = [datetime.fromisoformat(r[0]) for r in rows]
+    timestamps = [parsed for r in rows if (parsed := parse_capture_timestamp(r[0])) is not None]
+    if not timestamps:
+        return 0, None
     if len(timestamps) < 2:
         return len(timestamps), None
     gaps = [(timestamps[i + 1] - timestamps[i]).total_seconds() for i in range(len(timestamps) - 1)]
@@ -154,17 +159,17 @@ def _last_capture_info() -> tuple[str | None, str | None]:
     buf = paths.capture_buffer_dir()
     if not buf.exists():
         return None, None
-    json_files = sorted(p for p in buf.iterdir() if p.suffix == ".json")
-    if not json_files:
+    latest = newest_capture_path(p for p in buf.iterdir() if p.suffix == ".json")
+    if latest is None:
         return None, None
     try:
-        data = json.loads(json_files[-1].read_bytes())
+        data = json.loads(latest.read_bytes())
         ts = data.get("timestamp")
         meta = data.get("window_meta") or {}
         app = meta.get("app_name")
         return ts, app
     except (OSError, ValueError):
-        return json_files[-1].stem, None
+        return latest.stem, None
 
 
 def _health_status(pid: int | None, last_ts: str | None) -> tuple[str, str]:
@@ -233,6 +238,10 @@ def start(
 ) -> None:
     """Start the Persome daemon."""
     cfg = _init()
+    # Source checkouts and upgrades may start without re-running install.sh.
+    # Provision the local HTTP boundary before the daemon binds; the helper is
+    # idempotent and preserves every unrelated provider secret in the env file.
+    env_file_mod.ensure_local_api_token(paths.env_file())
     # Source the owner-only env file before any fork so the daemon and every
     # subsystem reading os.environ see the same values regardless of launcher.
     env_file_mod.load_env_file(paths.env_file())
@@ -306,7 +315,7 @@ def stop(timeout: int = typer.Option(10, help="Seconds to wait for the daemon to
 def pause() -> None:
     """Pause capture (daemon stays up but skips captures)."""
     paths.ensure_dirs()
-    paths.paused_flag().write_text(datetime.now().isoformat())
+    paths.atomic_write_private_text(paths.paused_flag(), datetime.now().isoformat())
     console.print("[yellow]Capture paused.[/yellow]")
 
 
@@ -383,8 +392,9 @@ def status() -> None:
 
     buf = paths.capture_buffer_dir()
     if buf.exists():
-        bufs = sorted(p for p in buf.iterdir() if p.suffix == ".json")
-        last = bufs[-1].name if bufs else "(none)"
+        bufs = [p for p in buf.iterdir() if p.suffix == ".json"]
+        latest = newest_capture_path(bufs)
+        last = latest.name if latest else "(none)"
         table.add_row("Buffer", f"{len(bufs)} files, last: {last}")
 
     with fts.cursor() as conn:
@@ -407,7 +417,12 @@ def status() -> None:
             "Memory",
             f"{len(active)} active files, {len(dormant)} dormant, {total_entries} entries",
         )
-        tlb_row = conn.execute("SELECT COUNT(*), MAX(end_time) FROM timeline_blocks").fetchone()
+        tlb_row = conn.execute(
+            "SELECT COUNT(*), "
+            "(SELECT end_time FROM timeline_blocks "
+            "ORDER BY persome_epoch(end_time) DESC LIMIT 1) "
+            "FROM timeline_blocks"
+        ).fetchone()
         tlb_count = tlb_row[0] if tlb_row else 0
         tlb_last = tlb_row[1] if tlb_row and tlb_row[1] else "(none)"
         table.add_row("Timeline", f"{tlb_count} blocks, last end: {tlb_last}")
@@ -431,9 +446,10 @@ def doctor() -> None:
     """Self-check a bring-your-own-provider install (offline; zero LLM calls).
 
     Prints one ✓/✗/⚠ line per prerequisite — env file present + private (0600),
-    selected provider credential configured, endpoint reachable (HEAD, warn-only), Swift
-    capture helpers compiled, macOS Accessibility trust, data root writable,
-    daemon port available. Exits 1 if any check FAILS; warnings never fail.
+    local API bearer token present, selected provider credential configured,
+    endpoint reachable (HEAD, warn-only), Swift capture helpers compiled, macOS
+    Accessibility trust, data root writable, daemon port available. Exits 1 if
+    any check FAILS; warnings never fail.
     """
     from . import doctor as doctor_mod
 
@@ -600,8 +616,9 @@ def delta_report(
         )
     if json_out:
         report = {"aggregate": agg, "recent": [dict(r) for r in rows]}
-        Path(json_out).write_text(
-            _json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        paths.atomic_write_private_text(
+            Path(json_out),
+            _json.dumps(report, ensure_ascii=False, indent=2),
         )
 
 
@@ -640,8 +657,9 @@ def root_report(
             typer.echo(f"  {line}")
         report = {"root": dict(root), "tokens": estimate_tokens(text)}
     if json_out:
-        Path(json_out).write_text(
-            _json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        paths.atomic_write_private_text(
+            Path(json_out),
+            _json.dumps(report, ensure_ascii=False, indent=2),
         )
 
 
@@ -790,8 +808,9 @@ def faces_report(
             "faces": [dict(r) for r in rows],
             "residency": [dict(r) for r in resident],
         }
-        Path(json_out).write_text(
-            _json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        paths.atomic_write_private_text(
+            Path(json_out),
+            _json.dumps(report, ensure_ascii=False, indent=2),
         )
 
 
@@ -823,9 +842,9 @@ def contradictions_cmd(
         typer.echo(f"     A {row['a_id']}: {row['a_body'][:70]}")
         typer.echo(f"     B {row['b_id']}: {row['b_body'][:70]}")
     if json_out:
-        Path(json_out).write_text(
+        paths.atomic_write_private_text(
+            Path(json_out),
             _json.dumps([dict(r) for r in rows], ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
 
 
@@ -913,7 +932,9 @@ def edge_audit(
 
     with fts.cursor() as conn:
         report = audit_mod.run_audit(conn, n=n, seed=seed or None, llm_call=llm_call)
-    _Path(json_out).write_text(_json.dumps(report, ensure_ascii=False, indent=2))
+    paths.atomic_write_private_text(
+        _Path(json_out), _json.dumps(report, ensure_ascii=False, indent=2)
+    )
     rate = report["hallucination_rate"]
     typer.echo(
         f"sampled {report['sample_size']} shadow edges → "
@@ -1035,8 +1056,9 @@ def decay_report(
                 for c in cands
             ],
         }
-        Path(json_out).write_text(
-            _json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        paths.atomic_write_private_text(
+            Path(json_out),
+            _json.dumps(report, ensure_ascii=False, indent=2),
         )
 
 
@@ -1400,6 +1422,37 @@ def _default_daemon_binary() -> str:
     return sys.executable
 
 
+def _stdio_mcp_command() -> list[str]:
+    """Return an exact local command for clients that can spawn MCP over stdio."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "mcp"]
+    shim = shutil.which("persome")
+    if shim:
+        return [shim, "mcp"]
+    # Source checkouts and isolated test environments may not have installed a
+    # console shim.  The module entry point is equivalent and remains exact.
+    return [sys.executable, "-m", "persome", "mcp"]
+
+
+def _write_private_json(path: Path, payload: dict) -> None:
+    """Atomically write a client config without leaving a world-readable secret."""
+    if path.is_symlink():
+        raise RuntimeError(f"refusing to replace symlinked config: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(path)
+        path.chmod(0o600)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 @launchagent_app.command("install")
 def launchagent_install(
     binary: str = typer.Option(
@@ -1451,23 +1504,8 @@ def install_claude_code(
     name: str = typer.Option("persome", help="MCP server name shown to the client."),
     scope: str = typer.Option("user", help="Claude Code scope: user | local | project."),
 ) -> None:
-    """Add (or refresh) Persome's entry in Claude Code's MCP config.
-
-    Always installs the current URL/transport — if an entry named ``name`` already
-    exists at the given scope, it is removed and re-registered.
-    """
-    cfg = _init()
-    from .mcp import server as mcp_server
-
-    if cfg.mcp.transport not in ("sse", "streamable-http"):
-        console.print(
-            f"[red]MCP transport is {cfg.mcp.transport!r}; install requires sse or streamable-http.[/red]"
-        )
-        raise typer.Exit(1)
-    if not cfg.mcp.auto_start:
-        console.print(
-            "[yellow]Warning: mcp.auto_start is false — the daemon won't host the server.[/yellow]"
-        )
+    """Add Persome to Claude Code as an owner-local stdio MCP subprocess."""
+    _init()
 
     claude_bin = shutil.which("claude")
     if not claude_bin:
@@ -1477,8 +1515,7 @@ def install_claude_code(
         )
         raise typer.Exit(1)
 
-    url = mcp_server.endpoint_url(cfg)
-    transport_flag = "sse" if cfg.mcp.transport == "sse" else "http"
+    stdio_command = _stdio_mcp_command()
 
     remove = subprocess.run(
         [claude_bin, "mcp", "remove", "-s", scope, name],
@@ -1494,10 +1531,9 @@ def install_claude_code(
         "add",
         "-s",
         scope,
-        "--transport",
-        transport_flag,
         name,
-        url,
+        "--",
+        *stdio_command,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -1506,8 +1542,7 @@ def install_claude_code(
 
     verb = "Updated" if replaced else "Registered"
     console.print(f"[green]{verb} {name!r} in Claude Code ({scope} scope).[/green]")
-    console.print(f"  URL: {url}")
-    console.print("  Make sure the daemon is running (`persome start`) so the server is reachable.")
+    console.print(f"  command: {' '.join(stdio_command)}")
 
 
 def _claude_desktop_config_path() -> Path:
@@ -1554,14 +1589,7 @@ def install_claude_desktop(
     Every invocation is idempotent — existing entries with the same name are
     overwritten with the current absolute path.
     """
-    persome_bin = shutil.which("persome")
-    if not persome_bin:
-        console.print(
-            "[red]`persome` not found on PATH.[/red]\n"
-            "Install it globally first with [cyan]uv tool install .[/cyan] "
-            "(from the repo), then rerun this command."
-        )
-        raise typer.Exit(1)
+    stdio_command = _stdio_mcp_command()
 
     cfg_path = _claude_desktop_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1574,16 +1602,20 @@ def install_claude_desktop(
 
     replaced = name in servers
     servers[name] = {
-        "command": persome_bin,
-        "args": ["mcp"],
+        "command": stdio_command[0],
+        "args": stdio_command[1:],
     }
 
-    cfg_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    try:
+        _write_private_json(cfg_path, data)
+    except (OSError, RuntimeError) as exc:
+        console.print(f"[red]Could not write {cfg_path}:[/red] {exc}")
+        raise typer.Exit(1) from exc
 
     verb = "Updated" if replaced else "Registered"
     console.print(f"[green]{verb} {name!r} in Claude Desktop config.[/green]")
     console.print(f"  file: {cfg_path}")
-    console.print(f"  command: {persome_bin} mcp")
+    console.print(f"  command: {' '.join(stdio_command)}")
     _restart_reminder("pick up the new entry")
 
 
@@ -1591,27 +1623,8 @@ def install_claude_desktop(
 def install_codex(
     name: str = typer.Option("persome", help="MCP server name shown to the client."),
 ) -> None:
-    """Add (or refresh) Persome's entry in Codex CLI's MCP config.
-
-    Codex CLI supports streamable-HTTP MCP servers via ``codex mcp add <name> --url <URL>``,
-    so we register the daemon's always-on endpoint. The CLI and the IDE extension
-    share this config, so a single install covers both clients.
-
-    Every invocation is idempotent — if an entry named ``name`` already exists,
-    it is removed and re-registered with the current URL.
-    """
-    cfg = _init()
-    from .mcp import server as mcp_server
-
-    if cfg.mcp.transport not in ("sse", "streamable-http"):
-        console.print(
-            f"[red]MCP transport is {cfg.mcp.transport!r}; install requires sse or streamable-http.[/red]"
-        )
-        raise typer.Exit(1)
-    if not cfg.mcp.auto_start:
-        console.print(
-            "[yellow]Warning: mcp.auto_start is false — the daemon won't host the server.[/yellow]"
-        )
+    """Add Persome to Codex as an owner-local stdio MCP subprocess."""
+    _init()
 
     codex_bin = shutil.which("codex")
     if not codex_bin:
@@ -1622,7 +1635,7 @@ def install_codex(
         )
         raise typer.Exit(1)
 
-    url = mcp_server.endpoint_url(cfg)
+    stdio_command = _stdio_mcp_command()
 
     remove = subprocess.run(
         [codex_bin, "mcp", "remove", name],
@@ -1632,7 +1645,7 @@ def install_codex(
     )
     replaced = remove.returncode == 0
 
-    cmd = [codex_bin, "mcp", "add", name, "--url", url]
+    cmd = [codex_bin, "mcp", "add", name, "--", *stdio_command]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         console.print(f"[red]codex mcp add failed:[/red]\n{result.stderr or result.stdout}")
@@ -1640,8 +1653,7 @@ def install_codex(
 
     verb = "Updated" if replaced else "Registered"
     console.print(f"[green]{verb} {name!r} in Codex CLI.[/green]")
-    console.print(f"  URL: {url}")
-    console.print("  Make sure the daemon is running (`persome start`) so the server is reachable.")
+    console.print(f"  command: {' '.join(stdio_command)}")
 
 
 def _opencode_config_path() -> Path:
@@ -1669,36 +1681,21 @@ def _load_opencode_config(path: Path) -> dict:
 def install_opencode(
     name: str = typer.Option("persome", help="MCP server name shown to the client."),
 ) -> None:
-    """Add (or refresh) Persome's entry in opencode's MCP config.
-
-    opencode (https://opencode.ai) reads ``~/.config/opencode/opencode.json``
-    and supports remote streamable-HTTP MCP servers natively, so we register
-    the daemon's always-on endpoint.
-
-    Every invocation is idempotent — an existing entry named ``name`` is
-    overwritten with the current URL; other `mcp` entries are preserved.
-    """
-    cfg = _init()
-    from .mcp import server as mcp_server
-
-    if cfg.mcp.transport not in ("sse", "streamable-http"):
-        console.print(
-            f"[red]MCP transport is {cfg.mcp.transport!r}; install requires sse or streamable-http.[/red]"
-        )
-        raise typer.Exit(1)
-    if not cfg.mcp.auto_start:
-        console.print(
-            "[yellow]Warning: mcp.auto_start is false — the daemon won't host the server.[/yellow]"
-        )
+    """Add Persome to opencode as an owner-local stdio MCP subprocess."""
+    _init()
+    stdio_command = _stdio_mcp_command()
 
     cfg_path = _opencode_config_path()
     jsonc_path = cfg_path.with_suffix(".jsonc")
     if jsonc_path.exists():
-        url = mcp_server.endpoint_url(cfg)
+        manual_entry = json.dumps(
+            {"type": "local", "command": stdio_command, "enabled": True},
+            ensure_ascii=False,
+        )
         console.print(
             f"[red]Found {jsonc_path} — can't safely edit JSONC (comments would be lost).[/red]\n"
             "Add this entry under the `mcp` key manually:\n"
-            f'  "{name}": {{"type": "remote", "url": "{url}", "enabled": true}}'
+            f'  "{name}": {manual_entry}'
         )
         raise typer.Exit(1)
 
@@ -1713,20 +1710,22 @@ def install_opencode(
         console.print(f"[red]`mcp` in {cfg_path} is not an object.[/red]")
         raise typer.Exit(1)
 
-    url = mcp_server.endpoint_url(cfg)
     replaced = name in servers
     servers[name] = {
-        "type": "remote",
-        "url": url,
+        "type": "local",
+        "command": stdio_command,
         "enabled": True,
     }
 
-    cfg_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    try:
+        _write_private_json(cfg_path, data)
+    except (OSError, RuntimeError) as exc:
+        console.print(f"[red]Could not write {cfg_path}:[/red] {exc}")
+        raise typer.Exit(1) from exc
 
     verb = "Updated" if replaced else "Registered"
     console.print(f"[green]{verb} {name!r} in opencode config.[/green]")
-    console.print(f"  URL: {url}")
-    console.print("  Make sure the daemon is running (`persome start`) so the server is reachable.")
+    console.print(f"  command: {' '.join(stdio_command)}")
 
 
 @install_app.command("mcp-json")
@@ -1755,6 +1754,7 @@ def install_mcp_json(
 
     if http:
         from .mcp import server as mcp_server
+        from .security.auth import auth_headers
 
         if cfg.mcp.transport not in ("sse", "streamable-http"):
             console.print(
@@ -1764,15 +1764,29 @@ def install_mcp_json(
             raise typer.Exit(1)
         url = mcp_server.endpoint_url(cfg)
         transport_label = "sse" if cfg.mcp.transport == "sse" else "http"
-        entry: dict[str, object] = {"url": url, "transport": transport_label}
+        env_file_mod.load_env_file(paths.env_file())
+        try:
+            headers = auth_headers()
+        except RuntimeError as exc:
+            console.print(f"[red]Cannot create authenticated HTTP config:[/red] {exc}")
+            raise typer.Exit(1) from exc
+        entry: dict[str, object] = {
+            "url": url,
+            "transport": transport_label,
+            "headers": headers,
+        }
         summary = f"{transport_label} → {url}"
     else:
-        persome_bin = shutil.which("persome") or "persome"
-        entry = {"command": persome_bin, "args": ["mcp"]}
-        summary = f"stdio → {persome_bin} mcp"
+        stdio_command = _stdio_mcp_command()
+        entry = {"command": stdio_command[0], "args": stdio_command[1:]}
+        summary = f"stdio → {' '.join(stdio_command)}"
 
     payload = {"mcpServers": {name: entry}}
-    out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    try:
+        _write_private_json(out_path, payload)
+    except (OSError, RuntimeError) as exc:
+        console.print(f"[red]Could not write {out_path}:[/red] {exc}")
+        raise typer.Exit(1) from exc
 
     console.print(f"[green]Wrote {out_path}[/green]")
     console.print(f"  server: {name} ({summary})")
@@ -1780,6 +1794,11 @@ def install_mcp_json(
         "[dim]Point your agent framework at this file, or merge `mcpServers` "
         "into its existing MCP config.[/dim]"
     )
+    if http:
+        console.print(
+            "[yellow]This owner-only file contains the local API bearer token; "
+            "do not commit or share it.[/yellow]"
+        )
 
 
 @uninstall_app.command("claude-code")
@@ -1875,7 +1894,11 @@ def uninstall_opencode(
         return
 
     del servers[name]
-    cfg_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    try:
+        _write_private_json(cfg_path, data)
+    except (OSError, RuntimeError) as exc:
+        console.print(f"[red]Could not write {cfg_path}:[/red] {exc}")
+        raise typer.Exit(1) from exc
 
     console.print(f"[green]Removed {name!r} from opencode config.[/green]")
 
@@ -1905,7 +1928,11 @@ def uninstall_claude_desktop(
         return
 
     del servers[name]
-    cfg_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    try:
+        _write_private_json(cfg_path, data)
+    except (OSError, RuntimeError) as exc:
+        console.print(f"[red]Could not write {cfg_path}:[/red] {exc}")
+        raise typer.Exit(1) from exc
 
     console.print(f"[green]Removed {name!r} from Claude Desktop config.[/green]")
     _restart_reminder("finalize the removal")
@@ -1954,6 +1981,13 @@ app.add_typer(writer_app, name="writer")
 
 model_app = typer.Typer(help="Build, inspect, and export the personal model.")
 app.add_typer(model_app, name="model")
+
+
+def _local_viewer_base_url(cfg: config_mod.Config) -> str:
+    """Return a loopback URL for the daemon viewer, never a LAN HTTP origin."""
+    from .security.auth import loopback_http_url
+
+    return loopback_http_url(cfg.mcp.host, cfg.mcp.port)
 
 
 @model_app.command("build")
@@ -2023,6 +2057,65 @@ def model_status_cmd() -> None:
     if status["issues"]:
         console.print(f"issues: {', '.join(status['issues'])}")
     console.print(f"last build: {last.get('build_id') if last else 'none'}")
+
+
+@model_app.command("open")
+def model_open() -> None:
+    """Open the local model viewer through a short-lived browser capability."""
+    import webbrowser
+
+    import httpx
+
+    cfg = _init()
+    if cfg.mcp.transport not in {"sse", "streamable-http"}:
+        console.print("[red]The model viewer requires the daemon HTTP transport.[/red]")
+        raise typer.Exit(1)
+    env_file_mod.load_env_file(paths.env_file())
+
+    from .security.auth import BROWSER_BOOTSTRAP_PATH, auth_headers
+
+    try:
+        base_url = _local_viewer_base_url(cfg)
+        headers = auth_headers()
+        response = httpx.post(
+            f"{base_url}{BROWSER_BOOTSTRAP_PATH}",
+            headers=headers,
+            timeout=5.0,
+            trust_env=False,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (RuntimeError, ValueError, httpx.HTTPError) as exc:
+        console.print(
+            "[red]Could not authorize the local model viewer.[/red] "
+            "Confirm the daemon is running with `persome status`, then retry."
+        )
+        raise typer.Exit(1) from exc
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+    relative_url = data.get("bootstrap_url") if isinstance(data, dict) else None
+    parsed = urlparse(relative_url) if isinstance(relative_url, str) else None
+    try:
+        query = parse_qs(parsed.query, strict_parsing=True) if parsed is not None else {}
+    except ValueError:
+        query = {}
+    if (
+        parsed is None
+        or parsed.scheme
+        or parsed.netloc
+        or parsed.path != BROWSER_BOOTSTRAP_PATH
+        or parsed.fragment
+        or set(query) != {"nonce"}
+        or len(query["nonce"]) != 1
+    ):
+        console.print("[red]The daemon returned an invalid browser capability.[/red]")
+        raise typer.Exit(1)
+
+    bootstrap_url = urljoin(f"{base_url}/", relative_url)
+    if not webbrowser.open(bootstrap_url, new=2):
+        console.print("[red]The system browser could not be opened.[/red]")
+        raise typer.Exit(1)
+    console.print("[green]Opened the authenticated local model viewer.[/green]")
 
 
 @writer_app.command("run")
@@ -2286,29 +2379,24 @@ def evomem_import_markdown(
 
 @app.command("rebuild-captures-index")
 def rebuild_captures_index() -> None:
-    """Backfill captures_fts from capture-buffer/*.json on disk.
+    """Reconcile captures_fts exactly from capture-buffer/*.json on disk.
 
-    Re-runnable: existing rows are upserted via INSERT OR REPLACE, so this
-    is safe to invoke any time the captures index has fallen out of sync
-    (e.g. fresh upgrade onto a populated buffer, or an FTS write the
-    capture worker logged but didn't commit).
+    Re-runnable: stale rows are cleared before every surviving JSON is indexed,
+    so this is safe whenever the captures index has fallen out of sync (for
+    example after an interrupted filesystem/SQLite cleanup).
     """
     import json
 
     _init()
     buf = paths.capture_buffer_dir()
-    if not buf.exists():
-        console.print("[yellow]No capture-buffer directory; nothing to rebuild.[/yellow]")
-        return
-
     files = sorted(p for p in buf.iterdir() if p.is_file() and p.suffix == ".json")
-    if not files:
-        console.print("[yellow]capture-buffer is empty; nothing to rebuild.[/yellow]")
-        return
 
     indexed = 0
     skipped = 0
     with fts.cursor() as conn:
+        # Rebuild is reconciliation, not just an upsert pass. Rows whose source
+        # JSON was removed during a previous failed retention pass must vanish.
+        conn.execute("DELETE FROM captures")
         for p in files:
             try:
                 data = json.loads(p.read_text())
@@ -2373,33 +2461,76 @@ def _confirm(prompt: str, yes: bool) -> bool:
     return typer.confirm(prompt, default=False)
 
 
-def _warn_if_running() -> None:
+def _require_stopped_for_clean() -> None:
     pid = _read_pid()
     if pid:
         console.print(
-            f"[yellow]Warning: daemon is running (pid {pid}). "
-            "Consider `persome stop` first — new data may arrive mid-clean.[/yellow]"
+            f"[red]Refusing to clean while the daemon is running (pid {pid}). "
+            "Run `persome stop` first so no writer can retain or recreate deleted data.[/red]"
         )
+        raise typer.Exit(1)
+
+
+def _quarantined_index_db_artifacts() -> tuple[Path, ...]:
+    """Return integrity-quarantine copies that may retain personal DB pages."""
+    return tuple(sorted(paths.root().glob(f"{paths.index_db().name}.corrupt.*")))
+
+
+def _quarantined_index_db_mains() -> tuple[Path, ...]:
+    sidecar_suffixes = ("-wal", "-shm", "-journal", ".wal", ".shm", ".journal")
+    return tuple(
+        artifact
+        for artifact in _quarantined_index_db_artifacts()
+        if not artifact.name.endswith(sidecar_suffixes)
+    )
+
+
+def _remove_quarantined_index_sidecars() -> None:
+    mains = set(_quarantined_index_db_mains())
+    for artifact in _quarantined_index_db_artifacts():
+        if artifact not in mains:
+            artifact.unlink(missing_ok=True)
+
+
+def _private_atomic_crash_artifacts(*targets: Path) -> tuple[Path, ...]:
+    """Find known private temp inodes that a SIGKILL may strand."""
+    found: set[Path] = set()
+    for target in targets:
+        found.update(target.parent.glob(f".{target.name}.*"))
+        # Also cover the pre-helper spelling for dot-prefixed state files.
+        found.update(target.parent.glob(f".{target.name.lstrip('.')}.*"))
+    return tuple(sorted(found))
 
 
 def _clean_captures() -> tuple[int, int]:
+    from .evomem import backup as evo_backup
+
+    # Recovery copies are part of the deletion boundary too.
+    evo_backup.scrub_snapshots(("captures",))
+    evo_backup.scrub_database_copies(("captures",), _quarantined_index_db_mains())
+    _remove_quarantined_index_sidecars()
     buf = paths.capture_buffer_dir()
-    files = 0
-    if buf.exists():
-        for p in buf.iterdir():
-            if p.suffix == ".json" and p.is_file():
-                p.unlink()
-                files += 1
     with fts.cursor() as conn:
         rows = int(conn.execute("SELECT COUNT(*) FROM captures").fetchone()[0])
         conn.execute("DELETE FROM captures")
+        fts.purge_deleted_content(conn)
+    files = 0
+    if buf.exists():
+        for p in tuple(buf.iterdir()):
+            files += _remove_path(p)
     return files, rows
 
 
 def _clean_timeline() -> int:
+    from .evomem import backup as evo_backup
+
+    evo_backup.scrub_snapshots(("timeline_blocks",))
+    evo_backup.scrub_database_copies(("timeline_blocks",), _quarantined_index_db_mains())
+    _remove_quarantined_index_sidecars()
     with fts.cursor() as conn:
         n: int = conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0]
         conn.execute("DELETE FROM timeline_blocks")
+        fts.purge_deleted_content(conn)
     return n
 
 
@@ -2422,6 +2553,9 @@ _MODEL_TABLES = (
 
 def _remove_path(path: Path) -> int:
     """Remove one data artifact and return the number of files it contained."""
+    if path.is_symlink():
+        path.unlink(missing_ok=True)
+        return 1
     if not path.exists():
         return 0
     if path.is_dir():
@@ -2435,12 +2569,8 @@ def _remove_path(path: Path) -> int:
 def _clean_memory() -> tuple[int, int, int, int]:
     """Delete all personal-model projections, canonical state, and exports."""
     mem = paths.memory_dir()
-    files = 0
-    if mem.exists():
-        for p in mem.rglob("*.md"):
-            if p.is_file():
-                p.unlink()
-                files += 1
+    files = _remove_path(mem)
+    paths.ensure_private_dir(mem)
     with fts.cursor() as conn:
         entries = int(conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0])
         model_rows = 0
@@ -2454,6 +2584,7 @@ def _clean_memory() -> tuple[int, int, int, int]:
             if table not in {"entries", "files"}:
                 model_rows += int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
             conn.execute(f"DELETE FROM {table}")
+        fts.purge_deleted_content(conn)
     artifacts = sum(
         _remove_path(path)
         for path in (
@@ -2463,8 +2594,20 @@ def _clean_memory() -> tuple[int, int, int, int]:
             paths.model_build_manifest(),
             paths.model_build_lock(),
             paths.session_model_lock(),
+            paths.integrity_recovery_marker(),
         )
     )
+    artifacts += sum(
+        _remove_path(path)
+        for path in _private_atomic_crash_artifacts(
+            paths.model_build_manifest(),
+            paths.integrity_recovery_marker(),
+        )
+    )
+    # Integrity-quarantine copies live beside the active DB, outside backup/.
+    # They are not trustworthy enough to preserve selectively once the user
+    # explicitly erases the model, so remove every database page/journal copy.
+    artifacts += sum(_remove_path(path) for path in _quarantined_index_db_artifacts())
     return files, entries, model_rows, artifacts
 
 
@@ -2473,11 +2616,11 @@ def clean_captures(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
 ) -> None:
     """Delete all files in the capture buffer."""
+    _require_stopped_for_clean()
     _init()
     buf = paths.capture_buffer_dir()
     count = sum(1 for p in buf.iterdir() if p.suffix == ".json") if buf.exists() else 0
     console.print(f"About to delete {count} capture file(s) under {buf}")
-    _warn_if_running()
     if not _confirm("Proceed?", yes):
         console.print("[yellow]Aborted.[/yellow]")
         raise typer.Exit(1)
@@ -2492,6 +2635,7 @@ def clean_timeline(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
 ) -> None:
     """Delete all timeline blocks (short-window activity summaries)."""
+    _require_stopped_for_clean()
     _init()
     with fts.cursor() as conn:
         count = conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0]
@@ -2507,10 +2651,11 @@ def clean_timeline(
 def clean_memory(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
 ) -> None:
-    """Delete all memory Markdown files and reset the FTS index."""
+    """Delete all memory files and reset the FTS index."""
+    _require_stopped_for_clean()
     _init()
     mem = paths.memory_dir()
-    md_count = sum(1 for _ in mem.rglob("*.md")) if mem.exists() else 0
+    memory_count = sum(1 for p in mem.rglob("*") if p.is_file()) if mem.exists() else 0
     with fts.cursor() as conn:
         entry_count = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
         file_count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
@@ -2520,17 +2665,16 @@ def clean_memory(
             if table not in {"entries", "files"}
         )
     console.print(
-        f"About to delete {md_count} Markdown file(s) under {mem} "
+        f"About to delete {memory_count} memory file(s) under {mem} "
         f"and reset {entry_count} entries / {file_count} files / "
         f"{model_count} canonical model row(s), plus exports and backups."
     )
-    _warn_if_running()
     if not _confirm("Proceed?", yes):
         console.print("[yellow]Aborted.[/yellow]")
         raise typer.Exit(1)
     files, entries, model_rows, artifacts = _clean_memory()
     console.print(
-        f"[green]Deleted {files} Markdown file(s), {entries} index entries, "
+        f"[green]Deleted {files} memory file(s), {entries} index entries, "
         f"{model_rows} canonical model row(s), and {artifacts} export/backup artifact(s).[/green]"
     )
 
@@ -2540,11 +2684,12 @@ def clean_all(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
 ) -> None:
     """Delete all personal data while keeping config, env, venv, and custom skills."""
+    _require_stopped_for_clean()
     _init()
     buf = paths.capture_buffer_dir()
     mem = paths.memory_dir()
     capture_count = sum(1 for p in buf.iterdir() if p.suffix == ".json") if buf.exists() else 0
-    md_count = sum(1 for _ in mem.rglob("*.md")) if mem.exists() else 0
+    memory_count = sum(1 for p in mem.rglob("*") if p.is_file()) if mem.exists() else 0
     with fts.cursor() as conn:
         entry_count = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
         tlb_count = conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0]
@@ -2553,11 +2698,10 @@ def clean_all(
         "[bold red]This will delete:[/bold red]\n"
         f"  - {capture_count} capture file(s)\n"
         f"  - {tlb_count} timeline block(s)\n"
-        f"  - {md_count} memory Markdown file(s) and {entry_count} index entries\n"
+        f"  - {memory_count} memory file(s) and {entry_count} index entries\n"
         "  - canonical model, exports, backups, Chat history, and logs\n"
         "[bold]Config, env, installed venv, and custom skills are kept.[/bold]"
     )
-    _warn_if_running()
     if not _confirm("Proceed with full wipe?", yes):
         console.print("[yellow]Aborted.[/yellow]")
         raise typer.Exit(1)
@@ -2573,6 +2717,7 @@ def clean_all(
         paths.index_db(),
         paths.index_db().with_name(f"{paths.index_db().name}-wal"),
         paths.index_db().with_name(f"{paths.index_db().name}-shm"),
+        paths.index_db().with_name(f"{paths.index_db().name}-journal"),
         paths.writer_state(),
         paths.model_build_manifest(),
         paths.model_build_lock(),
@@ -2581,7 +2726,18 @@ def clean_all(
         paths.integrity_recovery_marker(),
         paths.pid_file(),
     )
-    removed = sum(_remove_path(path) for path in known_personal_data)
+    quarantined_personal_data = tuple(paths.root().glob("*.corrupt.*"))
+    atomic_crash_data = _private_atomic_crash_artifacts(
+        paths.model_build_manifest(),
+        paths.integrity_recovery_marker(),
+        paths.pid_file(),
+        paths.paused_flag(),
+        paths.writer_state(),
+    )
+    removed = sum(
+        _remove_path(path)
+        for path in (*known_personal_data, *quarantined_personal_data, *atomic_crash_data)
+    )
     console.print(
         f"[green]Done. Removed {removed} personal data artifact(s). "
         "Config, env, venv, and custom skills were kept.[/green]"

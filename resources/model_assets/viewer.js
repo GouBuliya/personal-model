@@ -599,7 +599,7 @@ function showDetails(kind, item) {
   detailEl.hidden = false;
 
   if (kind === "point") {
-    fetch(`/model/node?id=${encodeURIComponent(item.id)}`)
+    fetch(`./node?id=${encodeURIComponent(item.id)}`)
       .then((response) => response.ok ? response.json() : null)
       .then((data) => {
         if (!data || !selected || selected.kind !== kind || selected.id !== item.id) return;
@@ -655,7 +655,7 @@ function fingerprint(nextModel) {
 
 async function loadModel(force = false) {
   try {
-    const response = await fetch("/model/graph", { cache: "no-store" });
+    const response = await fetch("./graph", { cache: "no-store" });
     if (!response.ok) throw new Error(`Model endpoint returned HTTP ${response.status}`);
     const payload = await response.json();
     if (!payload.model || !Array.isArray(payload.model.points)) {

@@ -43,6 +43,16 @@ _SEND_MESSAGE_EVENT_SCHEMA: dict[str, Any] = TypeAdapter(SendMessageEvent).json_
 
 logger = get("persome.api.chat")
 
+SessionId = Annotated[
+    str,
+    FastPath(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_-]+$",
+        description="Bounded URL-safe session identifier",
+    ),
+]
+
 _cfg: Config | None = None
 
 
@@ -56,9 +66,7 @@ def _get_cfg() -> Config:
 
 
 def _history_dir() -> Path:
-    d = paths.root() / "chat-history"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    return paths.ensure_private_dir(paths.root() / "chat-history")
 
 
 def _session_path(session_id: str) -> Path:
@@ -86,6 +94,29 @@ class ChatSession:
 _sessions: dict[str, ChatSession] = {}
 _sessions_lock = threading.Lock()
 
+# Provider calls are the most expensive HTTP operation in the runtime.  Reject
+# overlapping turns for one session (which would also race its mutable history)
+# and cap total in-flight turns across clients.
+MAX_CONCURRENT_CHAT_TURNS = 4
+_active_turns: set[str] = set()
+_active_turns_lock = threading.Lock()
+
+
+def _reserve_chat_turn(session_id: str) -> str | None:
+    """Reserve one provider turn; return a stable rejection reason on failure."""
+    with _active_turns_lock:
+        if session_id in _active_turns:
+            return "session_busy"
+        if len(_active_turns) >= MAX_CONCURRENT_CHAT_TURNS:
+            return "server_busy"
+        _active_turns.add(session_id)
+    return None
+
+
+def _release_chat_turn(session_id: str) -> None:
+    with _active_turns_lock:
+        _active_turns.discard(session_id)
+
 
 def _save_session(session: ChatSession) -> None:
     """Persist non-system messages to disk."""
@@ -96,8 +127,10 @@ def _save_session(session: ChatSession) -> None:
         "messages": saveable,
         "title": session.title,
     }
-    _session_path(session.id).write_text(
-        json.dumps(data, ensure_ascii=False, default=str, indent=2)
+    target = _session_path(session.id)
+    paths.atomic_write_private_text(
+        target,
+        json.dumps(data, ensure_ascii=False, default=str, indent=2),
     )
 
 
@@ -451,7 +484,7 @@ def list_sessions() -> ApiResponse:
 
 @router.get("/chat/sessions/{session_id}", response_model=ApiResponse, tags=["chat"])
 def get_session(
-    session_id: Annotated[str, FastPath(description="Eight-character session UUID")],
+    session_id: SessionId,
 ) -> ApiResponse:
     """Return session metadata and message history."""
     with _sessions_lock:
@@ -484,7 +517,7 @@ def get_session(
 
 @router.get("/chat/sessions/{session_id}/messages", response_model=ApiResponse, tags=["chat"])
 def get_session_messages(
-    session_id: Annotated[str, FastPath(description="Eight-character session UUID")],
+    session_id: SessionId,
 ) -> ApiResponse:
     """Return the session message history without the system message."""
     with _sessions_lock:
@@ -528,7 +561,7 @@ def get_session_messages(
     },
 )
 async def send_message(
-    session_id: Annotated[str, FastPath(description="Eight-character session UUID")],
+    session_id: SessionId,
     body: SendMessageRequest,
 ) -> EventSourceResponse:
     """Send a message and stream assistant tokens and tool events over SSE.
@@ -549,6 +582,12 @@ async def send_message(
             raise HTTPException(status_code=404, detail="session not found")
         with _sessions_lock:
             _sessions[session_id] = session
+
+    reservation_error = _reserve_chat_turn(session_id)
+    if reservation_error == "session_busy":
+        raise HTTPException(status_code=409, detail="a turn is already running for this session")
+    if reservation_error == "server_busy":
+        raise HTTPException(status_code=429, detail="too many concurrent chat turns")
 
     # Bound the queue so a slow client can't let LLM tokens balloon in memory.
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue(maxsize=256)
@@ -643,6 +682,7 @@ async def send_message(
             logger.exception("send_message failed for session %s", session_id)
             await queue.put({"type": "error", "message": str(exc)})
         finally:
+            _release_chat_turn(session_id)
             await queue.put(None)  # sentinel
 
     runner = asyncio.create_task(_run_and_persist())
@@ -667,7 +707,7 @@ async def send_message(
 
 @router.delete("/chat/sessions/{session_id}", response_model=ApiResponse, tags=["chat"])
 def delete_session(
-    session_id: Annotated[str, FastPath(description="Eight-character session UUID")],
+    session_id: SessionId,
 ) -> ApiResponse:
     """Delete a session and its persisted file."""
     with _sessions_lock:

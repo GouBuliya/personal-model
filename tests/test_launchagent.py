@@ -42,6 +42,7 @@ def test_build_plist_core_fields(ac_root: Path) -> None:
     assert pl["ProgramArguments"] == [binary, "start", "--foreground"]
     assert pl["KeepAlive"] is True
     assert pl["RunAtLoad"] is True
+    assert pl["Umask"] == 0o077
     # Logs route under the data root so the diagnostic bundle collects them.
     assert pl["StandardOutPath"] == str(paths.launchd_stdout_log())
     assert pl["StandardErrorPath"] == str(paths.launchd_stderr_log())
@@ -75,6 +76,7 @@ def test_write_plist_roundtrips(
         loaded = plistlib.load(fh)
     assert loaded["ProgramArguments"][0] == binary
     assert loaded["KeepAlive"] is True
+    assert loaded["Umask"] == 0o077
 
 
 def test_install_writes_and_bootstraps(

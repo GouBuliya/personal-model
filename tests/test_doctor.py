@@ -24,7 +24,12 @@ from persome.providers import PROVIDERS
 
 @pytest.fixture
 def clean_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    variables = {"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "PERSOME_SCREENSHOT_KEY"}
+    variables = {
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "PERSOME_SCREENSHOT_KEY",
+        "PERSOME_LOCAL_API_TOKEN",
+    }
     for spec in PROVIDERS:
         variables.add(spec.api_key_env)
         if spec.resolved_base_url_env:
@@ -99,6 +104,32 @@ def test_screenshot_key_missing_warns(clean_llm_env: None) -> None:
     c = doctor.check_screenshot_key()
     assert c.status == "warn"
     assert "rerun install.sh" in c.detail
+
+
+def test_local_api_token_set_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    token = "local-token-" + "a" * 40
+    monkeypatch.setenv("PERSOME_LOCAL_API_TOKEN", token)
+    c = doctor.check_local_api_token()
+    assert c.status == "ok"
+    assert token not in c.detail
+
+
+def test_local_api_token_missing_or_invalid_fails(clean_llm_env: None) -> None:
+    assert doctor.check_local_api_token().status == "fail"
+
+
+def test_sqlite_secure_fts_supported() -> None:
+    assert doctor.check_sqlite_secure_fts().status == "ok"
+
+
+def test_sqlite_secure_fts_rejects_old_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(doctor.sqlite3, "sqlite_version_info", (3, 41, 2))
+    monkeypatch.setattr(doctor.sqlite3, "sqlite_version", "3.41.2")
+
+    check = doctor.check_sqlite_secure_fts()
+
+    assert check.status == "fail"
+    assert "3.42+" in check.detail
 
 
 # ── base URL (warn-only) ──────────────────────────────────────────────────────
@@ -259,11 +290,23 @@ def test_root_writable_ok(ac_root: Path) -> None:
 
 
 def test_root_unwritable_fails(ac_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def boom(self: Path, *a: object, **kw: object) -> None:
+    def boom(*a: object, **kw: object) -> None:
         raise OSError(13, "Permission denied")
 
-    monkeypatch.setattr(Path, "write_text", boom)
+    monkeypatch.setattr(paths, "atomic_write_private_text", boom)
     assert doctor.check_root_writable().status == "fail"
+
+
+def test_root_writable_probe_does_not_follow_symlink(ac_root: Path) -> None:
+    victim = ac_root.parent / "doctor-victim.txt"
+    victim.write_text("ORIGINAL", encoding="utf-8")
+    victim.chmod(0o644)
+    probe = paths.root() / ".doctor-write-probe"
+    probe.symlink_to(victim)
+
+    assert doctor.check_root_writable().status == "ok"
+    assert victim.read_text(encoding="utf-8") == "ORIGINAL"
+    assert victim.stat().st_mode & 0o777 == 0o644
 
 
 # ── port ──────────────────────────────────────────────────────────────────────
@@ -317,13 +360,18 @@ def test_run_checks_merges_env_file_first(
     import httpx
 
     p = paths.env_file()
-    p.write_text("ANTHROPIC_API_KEY=sk-test-synthetic\n")
+    p.write_text(
+        "ANTHROPIC_API_KEY=sk-test-synthetic\n"
+        "PERSOME_LOCAL_API_TOKEN=local-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+    )
     p.chmod(0o600)
     monkeypatch.setattr(httpx, "head", lambda url, **kw: object())
     checks = doctor.run_checks("127.0.0.1", 0)
     by_name = {c.name: c for c in checks}
     assert by_name["env file"].status == "ok"
     assert by_name["LLM credential"].status == "ok"
+    assert by_name["PERSOME_LOCAL_API_TOKEN"].status == "ok"
+    assert by_name["SQLite secure FTS"].status == "ok"
     assert by_name["PERSOME_SCREENSHOT_KEY"].status == "warn"
 
 

@@ -11,16 +11,10 @@ privacy guardrails (spec E7):
   AX collection for that window so a password (or the screen around it) never
   lands in the buffer.
 
-Both are deliberately small, side-effect-free, and **fail-safe in opposite
-directions** so a flaky probe never silently leaks OR silently blinds the
-daemon:
-
-* Lock detection is **fail-OPEN** — any error / "don't know" → ``False``
-  (treated as *unlocked*), so a broken probe never wedges capture and the user
-  simply keeps getting captures (the status quo before this gate existed).
-* Secure-input detection is **fail-CLOSED / conservative** — a "looks secure"
-  signal wins, because the cost of one missed capture is nothing next to the
-  cost of buffering a password.
+Both are deliberately small, side-effect-free, and privacy-conservative. Lock
+detection is **fail-CLOSED** — an error / "don't know" is treated as locked.
+Secure-input detection likewise lets a positive "looks secure" signal win. A
+missed frame is recoverable; buffering a lock screen or password is not.
 
 The macOS lock probe is monkeypatch-friendly: the Quartz call is isolated in
 :func:`_quartz_screen_is_locked` and the subprocess fallbacks in
@@ -30,6 +24,7 @@ than depending on a real lock screen.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from typing import Any
 
@@ -39,10 +34,22 @@ logger = get("persome.capture.screen_state")
 
 _SECURE_TEXT_SUBROLE = "AXSecureTextField"
 _SECURE_TEXT_ROLE = "AXTextField"
+_LOCK_VALUE = r"(Yes|No|true|false|1|0)"
+_IOREG_CONSOLE_LOCK = re.compile(
+    rf'"IOConsoleLocked"\s*=\s*{_LOCK_VALUE}\b',
+    re.IGNORECASE,
+)
+_IOREG_SESSION_BLOCK = re.compile(r"\{([^{}]*)\}")
+_IOREG_ON_CONSOLE = re.compile(rf'"kCGSSessionOnConsoleKey"\s*=\s*{_LOCK_VALUE}\b', re.I)
+_IOREG_SESSION_LOCK = re.compile(rf'"CGSSessionScreenIsLocked"\s*=\s*{_LOCK_VALUE}\b', re.I)
+
+
+def _lock_value(value: str) -> bool:
+    return value.lower() in {"yes", "true", "1"}
 
 
 # --------------------------------------------------------------------------- #
-# Lock / sleep detection (fail-open)
+# Lock / sleep detection (fail-closed)
 # --------------------------------------------------------------------------- #
 def _quartz_screen_is_locked() -> bool | None:
     """Read ``CGSSessionScreenIsLocked`` via Quartz (pyobjc).
@@ -59,26 +66,25 @@ def _quartz_screen_is_locked() -> bool | None:
         session = CGSessionCopyCurrentDictionary()
         if not session:
             return None
-        # Present and truthy only while the screen is locked; absent otherwise.
-        return bool(session.get("CGSSessionScreenIsLocked", 0))
+        if "CGSSessionScreenIsLocked" not in session:
+            return None
+        return bool(session["CGSSessionScreenIsLocked"])
     except Exception as exc:  # noqa: BLE001
         logger.debug("Quartz lock probe failed: %s", exc)
         return None
 
 
 def _ioreg_says_locked() -> bool | None:
-    """Subprocess fallback: infer display-sleep / lock from ``ioreg``.
+    """Subprocess fallback: read explicit console/session lock flags from ``ioreg``.
 
-    Uses the IODisplayWrangler power state — ``CurrentPowerState`` of 4 means the
-    display is fully on; anything lower means it has dimmed/slept, which on a
-    Mac coincides with the lock screen for the password-on-wake default. This is
-    a *best-effort* fallback only used when Quartz is unavailable; returns
-    ``None`` (→ fail-open) on any error so a missing/odd ``ioreg`` never wedges
-    capture.
+    Modern macOS no longer reliably exposes ``IODisplayWrangler`` power state,
+    but the Root registry includes ``IOConsoleLocked`` and the active session's
+    ``CGSSessionScreenIsLocked``. Any explicit true wins conservatively; all
+    explicit false values mean unlocked; missing/malformed output stays unknown.
     """
     try:
         out = subprocess.run(
-            ["ioreg", "-n", "IODisplayWrangler", "-r", "-d", "1"],
+            ["/usr/sbin/ioreg", "-n", "Root", "-d", "1"],
             capture_output=True,
             text=True,
             timeout=2.0,
@@ -88,23 +94,32 @@ def _ioreg_says_locked() -> bool | None:
         return None
     if out.returncode != 0:
         return None
-    for line in out.stdout.splitlines():
-        if "CurrentPowerState" in line:
-            try:
-                state = int(line.rsplit("=", 1)[1].strip())
-            except (ValueError, IndexError):
-                return None
-            # 4 == display fully on. Lower == dimmed/asleep.
-            return state < 4
-    return None
+    # Root's top-level flag describes the current console and is authoritative.
+    # Do not let a locked, inactive fast-user-switching session override it.
+    console = _IOREG_CONSOLE_LOCK.search(out.stdout)
+    if console is not None:
+        return _lock_value(console.group(1))
+
+    active_values: list[bool] = []
+    for block in _IOREG_SESSION_BLOCK.findall(out.stdout):
+        on_console = _IOREG_ON_CONSOLE.search(block)
+        if on_console is None or not _lock_value(on_console.group(1)):
+            continue
+        locked = _IOREG_SESSION_LOCK.search(block)
+        if locked is not None:
+            active_values.append(_lock_value(locked.group(1)))
+    if not active_values:
+        return None
+    # Conflicting signals for the active console stay fail-closed.
+    return any(active_values)
 
 
 def is_screen_locked() -> bool:
-    """True when the screen is locked / the machine is asleep. **Fail-open.**
+    """True when the screen is locked, asleep, or cannot be established.
 
-    Order: Quartz ``CGSSessionScreenIsLocked`` (authoritative) → ``ioreg``
-    display-power fallback. If neither yields a definite answer, returns
-    ``False`` (treated as unlocked) so a broken probe never blinds the daemon.
+    Order: Quartz ``CGSSessionScreenIsLocked`` (authoritative) → explicit
+    ``ioreg`` Root session flags. If neither yields a definite answer, returns True
+    (fail-closed) so a broken probe cannot collect private lock-screen context.
     Never raises.
     """
     try:
@@ -114,9 +129,9 @@ def is_screen_locked() -> bool:
         ioreg = _ioreg_says_locked()
         if ioreg is not None:
             return ioreg
-    except Exception as exc:  # noqa: BLE001 — fail-open belt-and-suspenders
-        logger.debug("lock detection errored, treating as unlocked: %s", exc)
-    return False
+    except Exception as exc:  # noqa: BLE001 — fail-closed belt-and-suspenders
+        logger.warning("lock detection errored; suppressing capture: %s", exc)
+    return True
 
 
 # --------------------------------------------------------------------------- #

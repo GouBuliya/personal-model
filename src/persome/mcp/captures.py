@@ -2,9 +2,9 @@
 
 Reads JSON files straight out of ``~/.persome/capture-buffer/`` and
 returns the closest match to an optional timestamp with optional app / title
-filters. Filenames are ISO timestamps (``:`` → ``-``, ``+`` → ``p``,
-``-`` → ``m`` in the offset), which is enough to pre-filter by name before
-opening the JSON — critical because each JSON is ~160 KB.
+filters. Filenames are ISO timestamps (``:`` → ``-``, ``+`` → ``p``, with
+legacy local-offset variants). Readers parse the actual instant before ordering
+so a populated buffer remains correct across upgrades and DST.
 """
 
 from __future__ import annotations
@@ -12,12 +12,17 @@ from __future__ import annotations
 import base64
 import json
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from .. import paths
 from ..capture import screenshot_crypto
+from ..capture.timestamps import (
+    parse_capture_path_timestamp,
+    parse_capture_stem,
+    parse_capture_timestamp,
+)
 from ..store import fts as fts_store
 
 # Agent-Native firewall: captures are THIRD-PARTY screen content, so every capture/context tool
@@ -28,39 +33,24 @@ CAPTURE_PROVENANCE = "observed"
 
 def _parse_stem(stem: str) -> datetime | None:
     """Invert ``scheduler._safe_filename``. Returns None on malformed input."""
-    try:
-        date_part, _, rest = stem.partition("T")
-        if not rest:
-            return None
-        for sign, marker in (("+", "p"), ("-", "m")):
-            if marker in rest:
-                time_part, _, offset = rest.partition(marker)
-                h, m, s = time_part.split("-")
-                oh, om = offset.split("-")
-                return datetime.fromisoformat(f"{date_part}T{h}:{m}:{s}{sign}{oh}:{om}")
-        return None
-    except (ValueError, IndexError):
-        return None
+    return parse_capture_stem(stem)
 
 
 def _parse_at(text: str) -> datetime:
     """Accept ISO timestamps or bare ``HH:MM[:SS]``. Bare times use today (local)."""
     s = text.strip()
-    try:
-        dt = datetime.fromisoformat(s)
-    except ValueError:
-        now = datetime.now().astimezone()
-        today = now.date()
-        for fmt in ("%H:%M:%S", "%H:%M"):
-            try:
-                t = datetime.strptime(s, fmt).time()
-                return datetime.combine(today, t, tzinfo=now.tzinfo)
-            except ValueError:
-                continue
-        raise ValueError(f"cannot parse time: {text!r}") from None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
-    return dt
+    parsed = parse_capture_timestamp(s)
+    if parsed is not None:
+        return parsed
+    now = datetime.now().astimezone()
+    today = now.date()
+    for fmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            value = datetime.strptime(s, fmt).time()
+            return datetime.combine(today, value, tzinfo=now.tzinfo).astimezone(UTC)
+        except (OverflowError, ValueError):
+            continue
+    raise ValueError(f"cannot parse time: {text!r}") from None
 
 
 def _matches(
@@ -244,7 +234,7 @@ def read_recent_capture(
 
     if at and "/" not in at and "\\" not in at and ".." not in at:
         exact = buf / f"{at}.json"
-        if exact.is_file() and _parse_stem(at) is not None:
+        if exact.is_file() and parse_capture_path_timestamp(exact) is not None:
             data = _load_capture(exact)
             if data is None or not _matches(data, app_name, window_title_substring):
                 return None
@@ -256,19 +246,20 @@ def read_recent_capture(
 
     target: datetime | None = _parse_at(at) if at else None
 
-    # Filenames sort lexicographically by wall-clock time; pre-filter by name
-    # range so we don't open hundreds of JSONs we don't need.
-    stems = sorted(
-        (p for p in buf.iterdir() if p.is_file() and p.suffix == ".json"),
-        reverse=target is None,  # newest-first when no anchor time
-    )
+    # Upgrades can mix legacy local-offset filenames with current UTC names.
+    # Parse first so "newest" follows the real instant across offsets and DST.
+    stems = [
+        (timestamp, path)
+        for path in buf.iterdir()
+        if path.is_file()
+        and path.suffix == ".json"
+        and (timestamp := parse_capture_path_timestamp(path)) is not None
+    ]
+    stems.sort(key=lambda item: item[0], reverse=target is None)
 
     best: tuple[float, Path, dict[str, Any]] | None = None
 
-    for path in stems:
-        ts = _parse_stem(path.stem)
-        if ts is None:
-            continue
+    for ts, path in stems:
         if target is not None:
             delta = abs((ts - target).total_seconds())
             if delta > max_age_minutes * 60:
@@ -366,9 +357,9 @@ def _recent_timeline_blocks(
 ) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
-        SELECT start_time, end_time, entries, apps_used, capture_count
+         SELECT start_time, end_time, entries, apps_used, capture_count
           FROM timeline_blocks
-         ORDER BY end_time DESC
+         ORDER BY persome_epoch(end_time) DESC
          LIMIT ?
         """,
         (limit,),
@@ -446,7 +437,12 @@ def current_context(
 
     headlines: list[dict[str, Any]] = []
     for r in rows[:headline_limit]:
-        ts_short = (r.timestamp or "")[11:16]  # HH:MM from ISO
+        parsed_timestamp = parse_capture_timestamp(r.timestamp or "")
+        ts_short = (
+            parsed_timestamp.astimezone().strftime("%H:%M")
+            if parsed_timestamp is not None
+            else (r.timestamp or "")[11:16]
+        )
         vt = head_text.get(r.id, "")
         preview = " ".join(vt.split())[:120]
         headlines.append(

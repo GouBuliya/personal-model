@@ -14,6 +14,10 @@ persome start
 persome mcp
 ```
 
+The daemon endpoint requires `Authorization: Bearer <PERSOME_LOCAL_API_TOKEN>`.
+The token is provisioned in the owner-only Runtime env file. Stdio does not
+need or copy that bearer.
+
 Example stdio client configuration:
 
 ```json
@@ -70,6 +74,8 @@ port = 8742
 ## Security and privacy
 
 - The HTTP transport is loopback-only by default.
+- HTTP MCP uses the same required bearer boundary as REST and Chat; only
+  canonical `GET /health` is public.
 - MCP returns local personal data, including raw screen text from capture tools;
   only connect trusted clients.
 - The MCP server does not forward results to a model provider by itself. A
@@ -80,5 +86,6 @@ port = 8742
 - Write tools are explicit and auditable; the removed computer-use tools are
   not part of this server.
 
-The same loopback ASGI app serves `/model` and the Chat REST routes. The Runtime
+The same loopback ASGI app serves `/model` and the authenticated Chat REST
+routes. Use `persome model open` for a one-time browser bootstrap. The Runtime
 does not ship a browser Chat page; `persome chat` is its interactive client.

@@ -85,6 +85,16 @@ _IMAGE_FIELD = re.compile(r'"image_base64"\s*:\s*"([A-Za-z0-9+/=_-]{64,})"')
 # canonical fake CN phone number). Exact-string matches only — anything else still flags.
 SYNTHETIC_ALLOW = {
     "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+    # Reviewed, public artifact digests used by the reproducible build and uv
+    # bootstrap. Keep these exact so an unrelated 64-hex identifier still trips
+    # the privacy gate.
+    "aac80bec8b6fe35e8480f1c335be8910fa210a0e6f735a139be205dadcacb544",
+    "5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e",
+    "a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189",
+    "e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746",
+    "ab4c4ec93cc4a4e7815fa759906e05e6bb3f2fbd92ea0f897288c6a43efd15b3",
+    "a92f61e9ac9b0f29668c15f56152e4a60143fca148ff5bfadb86718472c3f376",
+    "9cc2de7d195fa157f98b306a8a1cb151ded93f488939b93363cebc8b9d598c28",
     "13800138000",
     "git@github.com",  # SSH remote URL shape, not an email
 }

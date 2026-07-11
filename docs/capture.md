@@ -99,7 +99,7 @@ A 10×+ ratio means there's content past depth 30 you'd miss.
 
 ```json
 {
-  "timestamp": "2026-04-21T17:07:32+08:00",
+  "timestamp": "2026-04-21T09:07:32.123456+00:00",
   "schema_version": 2,
   "trigger": { "event_type": "window_focus_changed", "app": "Claude", ... },
   "window_meta": {
@@ -150,13 +150,25 @@ still take an ephemeral focused screenshot when enabled.
 
 ## Buffer hygiene — tiered retention
 
-Captures are pruned by the timeline tick, not the writer. After each timeline scan, `capture_scheduler.cleanup_buffer` applies three passes (oldest-safe-first), all gated on "this file has already been absorbed by a closed timeline block" so un-absorbed trailing captures are never touched:
+Captures are pruned by the timeline tick, not the writer. After each timeline scan, `capture_scheduler.cleanup_buffer` applies three age-based passes (oldest-safe-first), gated on "this file has already been absorbed by a closed timeline block":
 
 | Pass | Condition | Action |
 |---|---|---|
 | **Delete** | mtime older than `buffer_retention_hours` (default **168** = 7 days) | Whole JSON removed |
 | **Strip screenshot** | mtime older than `screenshot_retention_hours` (default **24**) | Rewrite JSON without `screenshot` field; sets `screenshot_stripped: true`. The AX tree, `visible_text`, `focused_element`, and `url` stay |
-| **Evict by size** | Total buffer > `buffer_max_mb` (default **2000**, i.e. 2 GB; `0` disables) | Delete oldest absorbed files until under the cap |
+| **Evict by size** | Total buffer > `buffer_max_mb` (default **2000**, i.e. 2 GB; `0` disables) | Delete oldest files until under the cap |
+
+The separate `buffer_max_mb` limit is a hard disk-safety boundary. It evicts
+oldest captures even when the reducer watermark has stalled; this can sacrifice
+an unabsorbed trailing frame, but prevents an ingest or reducer failure from
+growing the buffer without bound. Ingest timestamps more than five minutes in
+the future are replaced with the server clock so they cannot evade ordering and
+retention. Accepted timestamps are normalized to UTC with fixed-width
+microseconds, preventing same-second ID collisions. Upgrade paths can still
+contain older local-offset filenames, so search, timeline, and retention compare
+their parsed instants rather than raw strings; daylight-saving fall-back cannot
+reverse processing order. Atomic-write remnants from a crashed process have no
+recovery contract and are removed after a five-minute race-safety grace period.
 
 Why tiered: the screenshot base64 is ~77% of each capture's bytes and is not
 needed to build the durable model. Stripping it at 24h drops each stale capture
@@ -177,16 +189,16 @@ Every successful capture write is also indexed into an FTS5 virtual table (`capt
 | Event | Effect on index |
 |---|---|
 | `_write_capture` (write-through) | Upsert one row into `captures` (`INSERT OR REPLACE` on the file stem). Triggers keep `captures_fts` in sync. |
-| `cleanup_buffer` time-based delete | Each removed JSON file → `delete_capture(stem)` → trigger drops the FTS row. |
-| `cleanup_buffer` size-based eviction | Same — each evicted file is also removed from FTS. |
+| `cleanup_buffer` time-based delete | FTS deletion is attempted before each JSON deletion; filesystem erasure remains authoritative if SQLite is temporarily unavailable, and the final reconciliation removes stale searchable rows after recovery. |
+| `cleanup_buffer` size-based eviction | Same, including hard-cap eviction of unabsorbed files when necessary and continued eviction after one unlink failure. |
 | Screenshot strip | **Untouched.** Strip only removes the base64 image; the indexed text (`visible_text`, `focused_value`, `window_title`, `app_name`, `url`) is unchanged. |
-| `persome rebuild-captures-index` | Backfill from `~/.persome/capture-buffer/*.json`. Idempotent (`INSERT OR REPLACE`). Run once after upgrading onto a populated buffer, or any time the index drifts. |
+| `persome rebuild-captures-index` | Clear stale rows, then index every surviving `~/.persome/capture-buffer/*.json`. Idempotent and safe whenever the index drifts. |
 
 **Indexed columns.** Only the searchable text is in FTS: `app_name`, `window_title`, `focused_value`, `visible_text`, `url`. Filterable metadata (timestamp, bundle_id, focused_role) lives on the `captures` table for `WHERE`-clause filtering. Screenshots are deliberately not duplicated — the JSON file on disk stays the authoritative copy of the raw image bytes.
 
 **Tokenizer.** `unicode61 remove_diacritics 2` — case-insensitive, accent-folded, Unicode-aware. Same setup as the compressed-memory `entries` index.
 
-If `captures_fts` falls out of sync (e.g. capture worker crashed mid-write, or the daemon was killed during cleanup), the index is recoverable in one shot:
+If `captures_fts` falls out of sync (e.g. capture worker crashed mid-write, or the daemon was killed during cleanup), the index is recoverable in one shot. Rebuild first clears stale rows, then indexes every surviving JSON file:
 
 ```bash
 persome rebuild-captures-index

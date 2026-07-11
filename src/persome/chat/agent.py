@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, TypeAlias
 
 import anthropic
+import httpx
 from anthropic import AsyncAnthropic
 from anthropic.lib.tools import BetaAsyncFunctionTool
 from mcp import ClientSession
@@ -20,7 +21,13 @@ from mcp.client.streamable_http import streamable_http_client
 from .. import config as config_mod
 from ..logger import get as _get_logger
 from ..providers import ResolvedLLMProfile, resolve_profile
+from ..security.auth import auth_headers as local_api_auth_headers
 from ..trace import get_trace_id
+from .approvals import (
+    ToolApprovalContext,
+    approval_required_result,
+    execute_tool_handler,
+)
 from .tools import to_anthropic_tools
 
 _logger = _get_logger("persome.chat")
@@ -28,6 +35,28 @@ _logger = _get_logger("persome.chat")
 # Per-tool-call result size cap. Truncation happens before the result is
 # sent back to the model, so the cap also bounds context growth.
 _MAX_TOOL_RESULT_BYTES = 50_000
+
+# Chat's implicit connection to the co-resident Persome daemon is a read-only
+# capability.  Write tools stay available to explicitly configured MCP clients,
+# but observed/model text cannot make default Chat mutate durable memory.
+_DAEMON_CHAT_READ_ONLY_TOOLS = frozenset(
+    {
+        "attention_trajectory",
+        "behavior_patterns",
+        "current_context",
+        "entity_graph",
+        "get_model_snapshot",
+        "get_schema",
+        "list_memories",
+        "read_memory",
+        "read_receipt",
+        "read_recent_capture",
+        "recent_activity",
+        "search",
+        "search_captures",
+        "verify_fact",
+    }
+)
 
 _OnTokenT: TypeAlias = Callable[[str], Awaitable[None]]
 _OnToolCallT: TypeAlias = Callable[[str, dict[str, Any], str, float], Awaitable[None]]
@@ -274,6 +303,8 @@ def _make_mcp_tracking_tool(
     session: ClientSession,
     on_tool_call: _OnToolCallT | None = None,
     *,
+    approval_required: bool = False,
+    approval_context: ToolApprovalContext | None = None,
     cache_control: dict[str, Any] | None = None,
 ) -> BetaAsyncFunctionTool:
     """Wrap an MCP tool as a BetaAsyncFunctionTool, calling session.call_tool directly."""
@@ -282,12 +313,20 @@ def _make_mcp_tracking_tool(
     async def executor(**kwargs: Any) -> str:
         t0 = time.monotonic()
         try:
-            call_result = await session.call_tool(name=tool_name, arguments=kwargs or {})
-            if call_result.isError:
-                result_str = json.dumps({"error": str(call_result.content)})
+            if approval_required and (
+                approval_context is None or not approval_context.consume(tool_name, kwargs)
+            ):
+                result_str = json.dumps(
+                    approval_required_result(tool_name, kwargs),
+                    ensure_ascii=False,
+                )
             else:
-                parts = [item.text for item in call_result.content if hasattr(item, "text")]
-                result_str = "\n".join(parts)
+                call_result = await session.call_tool(name=tool_name, arguments=kwargs or {})
+                if call_result.isError:
+                    result_str = json.dumps({"error": str(call_result.content)})
+                else:
+                    parts = [item.text for item in call_result.content if hasattr(item, "text")]
+                    result_str = "\n".join(parts)
         except Exception as exc:
             result_str = json.dumps({"error": f"{type(exc).__name__}: {exc}"})
         if len(result_str) > _MAX_TOOL_RESULT_BYTES:
@@ -341,6 +380,7 @@ class ChatAgent:
         all_handlers: dict[str, Callable[[dict[str, Any]], Any]],
         *,
         daemon_mcp_url: str = "",
+        approval_required_tools: set[str] | frozenset[str] | None = None,
     ) -> None:
         self._profile: ResolvedLLMProfile = resolve_profile(cfg)
         if self._profile.protocol == "anthropic":
@@ -360,7 +400,9 @@ class ChatAgent:
         self._openai_schemas = [dict(schema) for schema in all_schemas]
         self._sdk_schemas = to_anthropic_tools(all_schemas)
         self._handlers = all_handlers
+        self._approval_required_tools = frozenset(approval_required_tools or ())
         self._daemon_mcp_url = daemon_mcp_url
+        self._daemon_mcp_session: ClientSession | None = None
         self._mcp_sessions: list[ClientSession] = []
         self._exit_stacks: list[AsyncExitStack] = []
         # Cached (tool_spec, session) pairs populated by aopen(); avoids
@@ -373,10 +415,27 @@ class ChatAgent:
         self._exit_stacks.append(stack)
         return session
 
-    async def _open_http_session(self, url: str) -> ClientSession:
+    async def _open_http_session(self, url: str, *, local_daemon: bool = False) -> ClientSession:
         stack = AsyncExitStack()
         try:
-            read, write, _ = await stack.enter_async_context(streamable_http_client(url))
+            http_client: httpx.AsyncClient | None = None
+            if local_daemon:
+                # The token remains outside prompts/tool schemas and is attached
+                # only to the co-resident daemon endpoint.  Never forward this
+                # credential to configured third-party MCP servers.
+                http_client = await stack.enter_async_context(
+                    httpx.AsyncClient(
+                        headers=local_api_auth_headers(),
+                        # Never let a redirect move the daemon credential to a
+                        # different endpoint.  The canonical local URL is exact.
+                        follow_redirects=False,
+                        trust_env=False,
+                        timeout=httpx.Timeout(30.0, read=300.0),
+                    )
+                )
+            read, write, _ = await stack.enter_async_context(
+                streamable_http_client(url, http_client=http_client)
+            )
             return await self._connect_session(stack, read, write)
         except Exception:
             await stack.aclose()
@@ -396,7 +455,11 @@ class ChatAgent:
         """Connect to all configured MCP servers and cache their tool listings."""
         if self._daemon_mcp_url:
             try:
-                session = await self._open_http_session(self._daemon_mcp_url)
+                session = await self._open_http_session(
+                    self._daemon_mcp_url,
+                    local_daemon=True,
+                )
+                self._daemon_mcp_session = session
                 self._mcp_sessions.append(session)
                 _logger.info("connected to daemon MCP at %s", self._daemon_mcp_url)
             except Exception:
@@ -421,6 +484,12 @@ class ChatAgent:
             try:
                 res = await session.list_tools()
                 for t in res.tools:
+                    if (
+                        session is self._daemon_mcp_session
+                        and t.name not in _DAEMON_CHAT_READ_ONLY_TOOLS
+                    ):
+                        _logger.info("excluding daemon MCP write/unknown tool %s from Chat", t.name)
+                        continue
                     self._mcp_tool_specs.append((t, session))
             except Exception:
                 _logger.warning("MCP list_tools failed", exc_info=True)
@@ -433,6 +502,7 @@ class ChatAgent:
             except Exception:
                 _logger.warning("error closing MCP exit stack", exc_info=True)
         self._mcp_sessions.clear()
+        self._daemon_mcp_session = None
         self._exit_stacks.clear()
         self._mcp_tool_specs.clear()
         await self.client.close()
@@ -445,6 +515,7 @@ class ChatAgent:
         on_token: _OnTokenT | None = None,
         on_thinking: _OnTokenT | None = None,
         on_tool_call: _OnToolCallT | None = None,
+        approval_context: ToolApprovalContext | None = None,
         max_tokens: int = 8192,
         thinking_budget: int = 0,
     ) -> AgentTurnResult:
@@ -454,6 +525,7 @@ class ChatAgent:
                 system,
                 on_token=on_token,
                 on_tool_call=on_tool_call,
+                approval_context=approval_context,
                 max_tokens=max_tokens,
             )
         return await self._run_anthropic_turn(
@@ -462,6 +534,7 @@ class ChatAgent:
             on_token=on_token,
             on_thinking=on_thinking,
             on_tool_call=on_tool_call,
+            approval_context=approval_context,
             max_tokens=max_tokens,
             thinking_budget=thinking_budget,
         )
@@ -474,6 +547,7 @@ class ChatAgent:
         on_token: _OnTokenT | None = None,
         on_thinking: _OnTokenT | None = None,
         on_tool_call: _OnToolCallT | None = None,
+        approval_context: ToolApprovalContext | None = None,
         max_tokens: int = 8192,
         thinking_budget: int = 0,
     ) -> AgentTurnResult:
@@ -522,12 +596,27 @@ class ChatAgent:
             cache_ctl = {"type": "ephemeral"} if idx == len(deduped) - 1 else None
             if kind == "static":
                 s = payload
+
+                def guarded_handler(
+                    arguments: dict[str, Any],
+                    *,
+                    tool_name: str = s["name"],
+                    handler: Callable[[dict[str, Any]], Any] = self._handlers[s["name"]],
+                ) -> Any:
+                    return execute_tool_handler(
+                        tool_name,
+                        arguments,
+                        handler,
+                        approval_required=tool_name in self._approval_required_tools,
+                        approval_context=approval_context,
+                    )
+
                 combined_tools.append(
                     _make_async_sdk_tool(
                         s["name"],
                         s.get("description", ""),
                         s.get("input_schema", {}),
-                        self._handlers[s["name"]],
+                        guarded_handler,
                         _tracked_on_tool,
                         cache_control=cache_ctl,
                     )
@@ -535,7 +624,14 @@ class ChatAgent:
             else:
                 t, session = payload
                 combined_tools.append(
-                    _make_mcp_tracking_tool(t, session, _tracked_on_tool, cache_control=cache_ctl)
+                    _make_mcp_tracking_tool(
+                        t,
+                        session,
+                        _tracked_on_tool,
+                        approval_required=session is not self._daemon_mcp_session,
+                        approval_context=approval_context,
+                        cache_control=cache_ctl,
+                    )
                 )
 
         initial_anthropic_messages = _to_anthropic_messages(messages)
@@ -686,6 +782,7 @@ class ChatAgent:
         *,
         on_token: _OnTokenT | None,
         on_tool_call: _OnToolCallT | None,
+        approval_context: ToolApprovalContext | None,
         max_tokens: int,
     ) -> AgentTurnResult:
         """Run a streaming OpenAI-compatible tool loop."""
@@ -732,14 +829,29 @@ class ChatAgent:
                 if target is None:
                     result: Any = {"error": f"Unknown tool: {name}"}
                 elif target[0] == "static":
-                    result = await asyncio.to_thread(target[1], arguments)
+                    result = await asyncio.to_thread(
+                        execute_tool_handler,
+                        name,
+                        arguments,
+                        target[1],
+                        approval_required=name in self._approval_required_tools,
+                        approval_context=approval_context,
+                    )
                 else:
-                    call_result = await target[1].call_tool(name=name, arguments=arguments)
-                    if call_result.isError:
-                        result = {"error": str(call_result.content)}
+                    session = target[1]
+                    if session is not self._daemon_mcp_session and (
+                        approval_context is None or not approval_context.consume(name, arguments)
+                    ):
+                        result = approval_required_result(name, arguments)
                     else:
-                        parts = [item.text for item in call_result.content if hasattr(item, "text")]
-                        result = "\n".join(parts)
+                        call_result = await session.call_tool(name=name, arguments=arguments)
+                        if call_result.isError:
+                            result = {"error": str(call_result.content)}
+                        else:
+                            parts = [
+                                item.text for item in call_result.content if hasattr(item, "text")
+                            ]
+                            result = "\n".join(parts)
             except Exception as exc:  # noqa: BLE001
                 result = {"error": f"{type(exc).__name__}: {exc}"}
             result_str = (

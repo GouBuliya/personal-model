@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -19,6 +20,7 @@ from .. import config as config_mod
 from ..logger import get as _get_logger
 from . import history as chat_history
 from .agent import AgentTurnResult, ChatAgent, _OnTokenT, _OnToolCallT, complete_sync
+from .approvals import ToolApprovalContext, ToolApprovalRequest
 from .memory_extractor import maybe_extract as maybe_extract_memories
 from .skills import LoadedSkills, load_all_skills
 from .tool_handlers import TOOL_HANDLERS
@@ -31,6 +33,21 @@ logging.getLogger("httpx").setLevel(logging.ERROR)
 
 
 console = Console()
+
+
+def _terminal_safe_json(value: Any, *, indent: int | None = None) -> str:
+    """Render untrusted approval data without terminal direction/control spoofing."""
+    rendered = json.dumps(value, ensure_ascii=False, indent=indent, default=str)
+    out: list[str] = []
+    for character in rendered:
+        category = unicodedata.category(character)
+        if category in {"Cc", "Cf", "Zl", "Zp"}:
+            codepoint = ord(character)
+            escape = f"\\u{codepoint:04x}" if codepoint <= 0xFFFF else f"\\U{codepoint:08x}"
+            out.append(escape)
+        else:
+            out.append(character)
+    return "".join(out)
 
 
 def _load_skills(*, allow_executable_tools: bool = False) -> LoadedSkills:
@@ -479,10 +496,26 @@ def _build_agent(cfg: config_mod.Config) -> ChatAgent:
     }
     all_schemas = built_in_schemas + loaded.schemas
     all_handlers = {**built_in_handlers, **loaded.handlers}
+    approval_required_tools = set(CHAT_SCHEMA_NAMES - SAFE_CHAT_SCHEMA_NAMES)
+    # Executable skill handlers are arbitrary local Python and therefore use
+    # the same per-call approval boundary.  ``load_skill`` only returns trusted
+    # Markdown instructions and has no local side effect.
+    approval_required_tools.update(set(loaded.handlers) - {"load_skill"})
     daemon_url = ""
     if cfg.chat.mcp_connect_daemon:
-        daemon_url = f"http://{cfg.mcp.host}:{cfg.mcp.port}/mcp"
-    return ChatAgent(cfg.chat, all_schemas, all_handlers, daemon_mcp_url=daemon_url)
+        from ..security.auth import LocalAPIConfigurationError, loopback_http_url
+
+        try:
+            daemon_url = loopback_http_url(cfg.mcp.host, cfg.mcp.port, "/mcp")
+        except LocalAPIConfigurationError as exc:
+            _logger.warning("disabling implicit daemon MCP connection: %s", exc)
+    return ChatAgent(
+        cfg.chat,
+        all_schemas,
+        all_handlers,
+        daemon_mcp_url=daemon_url,
+        approval_required_tools=approval_required_tools,
+    )
 
 
 def _wrap_agent_result(
@@ -519,6 +552,7 @@ async def _run_turn(
     on_token: _OnTokenT | None = None,
     on_thinking: _OnTokenT | None = None,
     on_tool_call: _OnToolCallT | None = None,
+    approval_context: ToolApprovalContext | None = None,
     agent: ChatAgent | None = None,
 ) -> TurnResult:
     """Execute one user turn via :class:`ChatAgent` with compression around it.
@@ -554,6 +588,7 @@ async def _run_turn(
             on_token=on_token,
             on_thinking=on_thinking,
             on_tool_call=on_tool_call,
+            approval_context=approval_context,
             max_tokens=max_tokens,
             thinking_budget=cfg.chat.thinking_budget,
         )
@@ -615,6 +650,24 @@ async def run_chat(cfg: config_mod.Config) -> None:
 
     agent = _build_agent(cfg)
     await agent.aopen()
+
+    def _confirm_unsafe_tool(request: ToolApprovalRequest) -> bool:
+        rendered_name = _terminal_safe_json(request.tool_name)
+        rendered_args = _terminal_safe_json(request.arguments, indent=2)
+        # Treat both the external tool name and its arguments as untrusted UI
+        # data. JSON plus category escaping neutralizes C0, bidi/isolate, and
+        # Unicode line controls; Rich markup stays disabled too.
+        console.print(
+            f"\nApproval required: {rendered_name}",
+            style="yellow",
+            highlight=False,
+            markup=False,
+        )
+        console.print(rendered_args, highlight=False, markup=False)
+        answer = console.input("[bold yellow]Allow this exact call once? [y/N]:[/bold yellow] ")
+        return answer.strip().lower() in {"y", "yes"}
+
+    approval_context = ToolApprovalContext.with_callback(_confirm_unsafe_tool)
 
     last_usage: dict[str, int] | None = None
     consecutive_compact_failures = 0
@@ -690,6 +743,7 @@ async def run_chat(cfg: config_mod.Config) -> None:
                     last_assistant_time=last_assistant_time,
                     on_token=_on_token,
                     on_tool_call=_on_tool,
+                    approval_context=approval_context,
                     agent=agent,
                 )
 

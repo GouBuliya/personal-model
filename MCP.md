@@ -12,6 +12,9 @@ persome start
 # http://127.0.0.1:8742/mcp
 ```
 
+HTTP requires the owner bearer token stored in `<PERSOME_ROOT>/env`. Prefer
+the stdio installer commands below; they do not duplicate the credential.
+
 Stdio runs one server process for the client:
 
 ```bash
@@ -80,20 +83,23 @@ use streamable HTTP or stdio.
 
 ## Security boundary
 
-- The HTTP server binds to loopback by default and browser Host/Origin guards
-  reject non-loopback access.
-- There is no separate MCP authentication layer. A same-user local process with
-  endpoint access should be treated like a process that can read
-  `~/.persome`.
+- The HTTP server accepts loopback bind addresses only; browser Host/Origin
+  guards also reject non-loopback access.
+- HTTP MCP requires the dedicated `PERSOME_LOCAL_API_TOKEN` bearer. Canonical
+  `GET /health` is the only unauthenticated liveness route.
+- `persome install claude-code`, `codex`, `claude-desktop`, and `opencode`
+  register owner-local stdio subprocesses by default.
 - MCP results contain personal data and must be treated as untrusted content by
   consuming agents; captured text may contain prompt injection.
 - Screenshots are excluded unless explicitly requested.
 - `get_model_snapshot` redacts by default.
 - `remember` and `correct_memory` are deliberate writes with audit history.
 
-The daemon HTTP endpoint also serves `/model`, but no browser Chat UI. Use
-`persome chat` for the bundled interactive client or the documented Chat REST
-routes from a trusted local application.
+The daemon HTTP endpoint also serves `/model`, but no browser Chat UI. Open the
+viewer with `persome model open`; it uses a short-lived, one-time browser
+capability rather than placing the long-lived token in a URL. Use `persome
+chat` for the bundled interactive client or the authenticated Chat REST routes
+from a trusted local application.
 
 See [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md) for the full data and egress
 model. The implementation-oriented reference remains

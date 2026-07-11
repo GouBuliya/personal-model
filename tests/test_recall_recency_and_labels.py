@@ -270,7 +270,7 @@ def test_build_server_wires_the_full_read_path(ac_root, _restore_fts_gates, monk
     calls: list[object] = []
     monkeypatch.setattr(fts, "wire_read_path", lambda cfg: calls.append(cfg))
     cfg = Config()
-    mcp_server.build_server(cfg)
+    mcp_server.build_server(cfg, auth_enabled=False)
     assert calls == [cfg]
 
 

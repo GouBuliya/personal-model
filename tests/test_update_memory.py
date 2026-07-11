@@ -189,5 +189,6 @@ def test_update_logged_as_feedback_signal(ac_root):
         )
     log = Path(ac_root) / "logs" / "memory-updates.jsonl"
     assert log.exists()
+    assert log.stat().st_mode & 0o777 == 0o600
     row = json.loads(log.read_text(encoding="utf-8").splitlines()[-1])
     assert row["source"] == "user" and row["kind"] == "update"

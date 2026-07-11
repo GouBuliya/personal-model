@@ -69,8 +69,19 @@ Issues = "https://github.com/Persome-ai/persome-core/issues"
 Documentation = "https://github.com/Persome-ai/persome-core/tree/main/docs"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.31.0"]
 build-backend = "hatchling.build"
+
+[tool.uv]
+# Lock the complete PEP 517 backend closure for `uv sync`/`uv run`. Release
+# builds additionally verify the wheel hashes in build-constraints.txt.
+build-constraint-dependencies = [
+    "hatchling==1.31.0",
+    "packaging==26.2",
+    "pathspec==1.1.1",
+    "pluggy==1.6.0",
+    "trove-classifiers==2026.6.1.19",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/persome"]
@@ -86,6 +97,7 @@ packages = ["src/persome"]
 
 [dependency-groups]
 dev = [
+    "pip-audit==2.10.1",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-cov>=7.1.0",

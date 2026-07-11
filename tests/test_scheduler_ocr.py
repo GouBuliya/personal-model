@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from PIL import Image
 
-from persome.capture import ax_models, window_meta
+from persome.capture import ax_models, screen_state, window_meta
 from persome.capture import scheduler as sched_mod
 from persome.config import CaptureConfig
 
@@ -47,6 +47,7 @@ def _common_patches(
     monkeypatch.setattr(sched_mod.paths, "ensure_dirs", lambda: None)
     monkeypatch.setattr(sched_mod.paths, "paused_flag", lambda: _MockPath())
     monkeypatch.setattr(sched_mod, "_last_ocr_ts", {})
+    monkeypatch.setattr(screen_state, "is_screen_locked", lambda: False)
     monkeypatch.setattr(
         window_meta,
         "active_window",

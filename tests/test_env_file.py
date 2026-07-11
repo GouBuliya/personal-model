@@ -128,3 +128,62 @@ def test_ensure_screenshot_key_replaces_invalid_duplicates(tmp_path: Path) -> No
     ]
     assert len(canonical) == 1
     assert env_file.is_valid_screenshot_key(canonical[0])
+
+
+def test_ensure_local_api_token_generates_owner_only_secret(tmp_path: Path) -> None:
+    path = tmp_path / "env"
+    path.write_text("KEEP=yes\n", encoding="utf-8")
+
+    assert env_file.ensure_local_api_token(path) == "generated"
+
+    token = next(
+        line.partition("=")[2]
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.startswith(f"{env_file.LOCAL_API_TOKEN_ENV}=")
+    )
+    assert env_file.is_valid_local_api_token(token)
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert "KEEP=yes" in path.read_text(encoding="utf-8")
+
+
+def test_ensure_local_api_token_preserves_valid_value(tmp_path: Path) -> None:
+    path = tmp_path / "env"
+    original = "local-token-" + "a" * 40
+    path.write_text(f"{env_file.LOCAL_API_TOKEN_ENV}={original}\n", encoding="utf-8")
+
+    assert env_file.ensure_local_api_token(path) == "existing"
+    assert env_file.ensure_local_api_token(path) == "existing"
+    assert path.read_text(encoding="utf-8").count(f"{env_file.LOCAL_API_TOKEN_ENV}=") == 1
+    assert original in path.read_text(encoding="utf-8")
+
+
+def test_ensure_local_api_token_replaces_invalid_duplicates(tmp_path: Path) -> None:
+    path = tmp_path / "env"
+    path.write_text(
+        f"{env_file.LOCAL_API_TOKEN_ENV}=short\n{env_file.LOCAL_API_TOKEN_ENV}=also-short\n",
+        encoding="utf-8",
+    )
+
+    assert env_file.ensure_local_api_token(path) == "generated"
+    values = [
+        line.partition("=")[2]
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.startswith(f"{env_file.LOCAL_API_TOKEN_ENV}=")
+    ]
+    assert len(values) == 1
+    assert env_file.is_valid_local_api_token(values[0])
+
+
+def test_ensure_local_api_token_preserves_shell_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "env"
+    file_token = "file-token-" + "f" * 40
+    shell_token = "shell-token-" + "s" * 40
+    path.write_text(f"{env_file.LOCAL_API_TOKEN_ENV}={file_token}\n", encoding="utf-8")
+    monkeypatch.setenv(env_file.LOCAL_API_TOKEN_ENV, shell_token)
+
+    assert env_file.ensure_local_api_token(path) == "existing"
+
+    assert os.environ[env_file.LOCAL_API_TOKEN_ENV] == shell_token
+    assert file_token in path.read_text(encoding="utf-8")

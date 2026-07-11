@@ -6,6 +6,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+# A single Chat request is forwarded to a paid model endpoint and persisted in
+# the local history.  Keep the limit comfortably above a large pasted source
+# file while preventing an unauthenticated/buggy client from turning one JSON
+# field into an unbounded allocation.
+MAX_CHAT_MESSAGE_CHARS = 100_000
+
 # ─── Session ───────────────────────────────────────────────────────────────
 
 
@@ -97,7 +103,12 @@ class CreateSessionResponse(BaseModel):
 
 
 class SendMessageRequest(BaseModel):
-    content: str = Field(..., description="User message content")
+    content: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_CHAT_MESSAGE_CHARS,
+        description="User message content",
+    )
 
 
 class ChatSessionDetail(BaseModel):

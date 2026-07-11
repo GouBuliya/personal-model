@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import fcntl
 import json
-import os
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -61,9 +60,7 @@ class ModelBuildCoordinator:
     @contextmanager
     def acquire(self, *, wait_seconds: float = DEFAULT_WAIT_SECONDS) -> Iterator[None]:
         wait = max(0.0, float(wait_seconds))
-        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
-        handle = self.lock_path.open("a+b")
-        os.chmod(self.lock_path, 0o600)
+        handle = paths.open_private_lock_file(self.lock_path)
         deadline = time.monotonic() + wait
         try:
             while True:
@@ -229,11 +226,18 @@ def _input_window() -> dict[str, str | None]:
     with fts.cursor() as conn:
         row = conn.execute(
             """
-            SELECT MIN(value), MAX(value) FROM (
+            WITH input_values(value) AS (
                 SELECT timestamp AS value FROM captures
                 UNION ALL SELECT start_time AS value FROM sessions
                 UNION ALL SELECT end_time AS value FROM sessions WHERE end_time IS NOT NULL
             )
+            SELECT
+                (SELECT value FROM input_values
+                  WHERE persome_epoch(value) IS NOT NULL
+                  ORDER BY persome_epoch(value) ASC LIMIT 1),
+                (SELECT value FROM input_values
+                  WHERE persome_epoch(value) IS NOT NULL
+                  ORDER BY persome_epoch(value) DESC LIMIT 1)
             """
         ).fetchone()
     return {"start": row[0] if row else None, "end": row[1] if row else None}
@@ -244,18 +248,10 @@ def _models(cfg: Any) -> dict[str, str]:
 
 
 def _write_json_owner_only(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        temporary.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        os.chmod(temporary, 0o600)
-        temporary.replace(path)
-        os.chmod(path, 0o600)
-    finally:
-        temporary.unlink(missing_ok=True)
+    paths.atomic_write_private_text(
+        path,
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    )
 
 
 def load_last_manifest() -> dict[str, Any] | None:

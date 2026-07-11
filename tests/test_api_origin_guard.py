@@ -18,7 +18,7 @@ from persome.config import Config
 
 def _local_client(cfg: Config | None = None) -> TestClient:
     """A client whose default Host header is a local one (passes the guard)."""
-    return TestClient(build_api_app(cfg), headers={"host": "127.0.0.1:8773"})
+    return TestClient(build_api_app(cfg, auth_enabled=False), headers={"host": "127.0.0.1:8773"})
 
 
 def test_browser_origin_is_rejected() -> None:
@@ -30,7 +30,7 @@ def test_browser_origin_is_rejected() -> None:
 
 def test_non_local_host_is_rejected() -> None:
     """A non-local Host header (DNS-rebinding) → 403, even with no Origin."""
-    client = TestClient(build_api_app())
+    client = TestClient(build_api_app(auth_enabled=False))
     response = client.get("/config", headers={"host": "attacker.com"})
     assert response.status_code == 403
 
@@ -62,21 +62,21 @@ def test_null_origin_is_rejected() -> None:
 
 def test_localhost_host_passes() -> None:
     """``localhost`` (and its port form) counts as local."""
-    client = TestClient(build_api_app(), headers={"host": "localhost:8773"})
+    client = TestClient(build_api_app(auth_enabled=False), headers={"host": "localhost:8773"})
     response = client.get("/config")
     assert response.status_code != 403
 
 
 def test_ipv6_loopback_host_passes() -> None:
     """The bracketed IPv6 loopback ``[::1]`` is treated as local."""
-    client = TestClient(build_api_app(), headers={"host": "[::1]:8773"})
+    client = TestClient(build_api_app(auth_enabled=False), headers={"host": "[::1]:8773"})
     response = client.get("/config")
     assert response.status_code != 403
 
 
 def test_health_allowed_despite_malicious_origin() -> None:
     """``/health`` is always allowed — a hostile Origin can't trip liveness."""
-    client = TestClient(build_api_app())
+    client = TestClient(build_api_app(auth_enabled=False))
     response = client.get(
         "/health",
         headers={"origin": "https://evil.com", "host": "attacker.com"},
@@ -91,7 +91,7 @@ def test_disabled_guard_does_not_block() -> None:
     # The field isn't on Config yet (caller adds it later); the middleware reads
     # it via getattr, so an extra attribute exercises the disabled path.
     cfg.api_require_local_origin = False  # type: ignore[attr-defined]
-    client = TestClient(build_api_app(cfg))
+    client = TestClient(build_api_app(cfg, auth_enabled=False))
     response = client.get(
         "/config",
         headers={"origin": "https://evil.com", "host": "attacker.com"},

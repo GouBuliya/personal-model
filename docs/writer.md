@@ -16,7 +16,7 @@ Root.
 | schema miner | repeated durable facts | level-1 Face candidates |
 | cross-domain sweeper | stable topic-distinct Faces | level-2 Volumes |
 | root synthesis | active Face/Volume/profile evidence | at most one level-3 Root |
-| Chat/MCP correction | explicit user/agent request | audited append, supersede, retype, merge, or revoke |
+| CLI/MCP correction | explicit user/agent request | audited append, supersede, retype, merge, or revoke |
 
 No writer owns product tasks, notifications, actuation, or evaluation labels.
 

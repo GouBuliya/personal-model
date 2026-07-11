@@ -50,8 +50,8 @@ class CaptureConfig:
     #   * screenshot (base64) is stripped from JSONs older than
     #     `screenshot_retention_hours` — it's 77% of the bytes and nothing
     #     downstream currently consumes it
-    #   * `buffer_max_mb` is a hard ceiling; when exceeded the oldest
-    #     already-absorbed files are deleted first (0 disables the cap)
+    #   * `buffer_max_mb` is a hard ceiling; when exceeded the oldest files are
+    #     deleted even if the timeline watermark is stalled (0 disables)
     buffer_retention_hours: int = 168
     screenshot_retention_hours: int = 24
     #   * pixel-axis graded forgetting (memory-rebuild spec §2.1): screenshots in
@@ -579,6 +579,8 @@ def _build_capture(raw: dict) -> CaptureConfig:
 
 def load(path: Path | None = None) -> Config:
     path = path or paths.config_file()
+    if path.is_symlink():
+        raise RuntimeError(f"config file must not be a symlink: {path}")
     raw: dict = {}
     if path.exists():
         with open(path, "rb") as f:
@@ -682,7 +684,7 @@ same_window_dedup_seconds = 5.0  # don't re-capture the same bundle+window unles
 buffer_retention_hours = 168           # 7 days; stale absorbed captures past this are deleted
 screenshot_retention_hours = 24        # after 24h, strip screenshot (77% of bytes) but keep AX+text
 screenshot_thumbnail_hours = 0         # Downsample older screenshots to <=480px thumbnails; 0 disables
-buffer_max_mb = 2000                   # hard ceiling; oldest absorbed files evicted first (0 to disable)
+buffer_max_mb = 2000                   # hard ceiling; oldest files evicted even if unabsorbed (0 to disable)
 include_screenshot = true
 screenshot_max_width = 1920
 screenshot_jpeg_quality = 80
@@ -776,7 +778,7 @@ auto_start = true                 # run an always-on MCP server inside the daemo
 read_receipt_enabled = true       # Register receipt dereference with capture breadcrumbs
 entity_graph_enabled = true       # Register direct entity-graph reads
 transport = "streamable-http"     # "streamable-http" | "sse" (deprecated 2026-04-01) | "stdio"
-host = "127.0.0.1"                # bind address; keep localhost-only by default
+host = "127.0.0.1"                # bind address; loopback only (non-loopback is rejected)
 port = 8742
 
 [chat]
@@ -817,8 +819,9 @@ root_token_budget = 1500
 
 def write_default_if_missing(path: Path | None = None) -> bool:
     path = path or paths.config_file()
+    if path.is_symlink():
+        raise RuntimeError(f"config file must not be a symlink: {path}")
     if path.exists():
         return False
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(DEFAULT_CONFIG_TEMPLATE)
+    paths.atomic_write_private_text(path, DEFAULT_CONFIG_TEMPLATE)
     return True

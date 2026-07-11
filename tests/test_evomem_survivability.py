@@ -389,6 +389,48 @@ def test_structural_only_snapshot_tolerates_alert_only_findings(
     assert dest.read_bytes() == before  # good snapshot preserved
 
 
+def test_same_day_snapshot_refresh_cannot_replay_stale_destination_wal(ac_root: Path) -> None:
+    now = datetime(2026, 6, 10, 12, 0)
+    with fts.cursor() as conn:
+        conn.execute(
+            "INSERT INTO files(path,prefix,status,entry_count,created,updated) "
+            "VALUES('project-new.md','project-','active',0,'2026','2026')"
+        )
+    dest = backup.create_snapshot(now=now)
+    assert dest is not None
+
+    stale_wal = dest.with_name(dest.name + "-wal")
+    stale_shm = dest.with_name(dest.name + "-shm")
+    with sqlite3.connect(dest) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA wal_autocheckpoint=0")
+        conn.execute("CREATE TABLE stale_probe(value TEXT)")
+        conn.commit()
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.execute("INSERT INTO stale_probe VALUES('OLD_SECRET')")
+        conn.commit()
+        wal_bytes = stale_wal.read_bytes()
+        shm_bytes = stale_shm.read_bytes()
+
+    # Closing checkpoints the old snapshot; restore the captured hot sidecars
+    # to model a crash remnant immediately before a same-day refresh.
+    stale_wal.write_bytes(wal_bytes)
+    stale_shm.write_bytes(shm_bytes)
+
+    assert backup.create_snapshot(now=now) == dest
+    assert not stale_wal.exists()
+    assert not stale_shm.exists()
+    assert not dest.with_name(dest.name + "-journal").exists()
+    assert not dest.with_name(dest.name + ".tmp-wal").exists()
+    with sqlite3.connect(dest) as conn:
+        assert (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stale_probe'"
+            ).fetchone()
+            is None
+        )
+
+
 def test_retention_policy(ac_root: Path) -> None:
     now = datetime(2026, 6, 10, 23, 55)
     today = now.date()
@@ -423,6 +465,51 @@ def test_retention_policy(ac_root: Path) -> None:
     for p in [*keep_expected, future]:
         assert p.exists(), p.name
     assert unrelated.exists()
+
+
+def test_retention_removes_expired_snapshot_sidecars(ac_root: Path) -> None:
+    now = datetime(2026, 6, 10, 23, 55)
+    expired = paths.backup_dir() / "evo-20200101.db"
+    paths.backup_dir().mkdir(parents=True, exist_ok=True)
+    artifacts = [
+        expired,
+        expired.with_name(expired.name + "-wal"),
+        expired.with_name(expired.name + "-shm"),
+        expired.with_name(expired.name + "-journal"),
+        expired.with_name(expired.name + ".wal"),
+        expired.with_name(expired.name + ".shm"),
+        expired.with_name(expired.name + ".journal"),
+    ]
+    for artifact in artifacts:
+        artifact.write_bytes(b"PRIVATE_PAGE")
+
+    assert backup.apply_retention(keep_daily=7, keep_weekly=4, now=now) == [expired]
+    assert all(not artifact.exists() for artifact in artifacts)
+
+
+def test_retention_sidecar_failure_keeps_main_for_retry(
+    ac_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime(2026, 6, 10, 23, 55)
+    expired = paths.backup_dir() / "evo-20200101.db"
+    paths.backup_dir().mkdir(parents=True, exist_ok=True)
+    wal = expired.with_name(expired.name + "-wal")
+    expired.write_bytes(b"main")
+    wal.write_bytes(b"PRIVATE_PAGE")
+    real_unlink = Path.unlink
+
+    def fail_wal(path: Path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if path == wal:
+            raise OSError("synthetic failure")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_wal)
+    assert backup.apply_retention(keep_daily=7, keep_weekly=4, now=now) == []
+    assert expired.exists() and wal.exists()
+
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+    assert backup.apply_retention(keep_daily=7, keep_weekly=4, now=now) == [expired]
+    assert not expired.exists() and not wal.exists()
 
 
 class _FakeManager:

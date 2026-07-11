@@ -1,17 +1,24 @@
 """Offline HTML shell for the canonical personal-model snapshot viewer."""
 
-MEMORY_VIEW_HTML = """<!doctype html>
+from __future__ import annotations
+
+import re
+
+_MODEL_BASE_RE = re.compile(r"^/model(?:/[A-Za-z0-9_-]{32,128})?/$")
+
+_MEMORY_VIEW_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Persome Personal Model</title>
+  <base href="__PERSOME_MODEL_BASE__">
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/model/assets/viewer.css">
+  <link rel="stylesheet" href="assets/viewer.css">
   <script type="importmap">
   {"imports": {
-    "three": "/model/assets/three.module.js",
-    "three/addons/": "/model/assets/jsm/"
+    "three": "./assets/three.module.js",
+    "three/addons/": "./assets/jsm/"
   }}
   </script>
 </head>
@@ -70,7 +77,17 @@ MEMORY_VIEW_HTML = """<!doctype html>
       <output id="as-of-label" for="as-of">Now</output>
     </footer>
   </main>
-  <script type="module" src="/model/assets/viewer.js"></script>
+  <script type="module" src="assets/viewer.js"></script>
 </body>
 </html>
 """
+
+
+def render_memory_view(base_path: str = "/model/") -> str:
+    """Render the viewer with a strict same-session base URL."""
+    if _MODEL_BASE_RE.fullmatch(base_path) is None:
+        raise ValueError("invalid model viewer base path")
+    return _MEMORY_VIEW_TEMPLATE.replace("__PERSOME_MODEL_BASE__", base_path)
+
+
+MEMORY_VIEW_HTML = render_memory_view()

@@ -112,8 +112,7 @@ def _log_update(signal: str, kind: str, applied: list[str], reason: str, source:
     try:
         from .. import paths
 
-        log_dir = paths.logs_dir()
-        log_dir.mkdir(parents=True, exist_ok=True)
+        log_dir = paths.ensure_private_dir(paths.logs_dir())
         row = {
             "ts": datetime.now(UTC).isoformat(),
             "signal": signal[:500],
@@ -122,8 +121,8 @@ def _log_update(signal: str, kind: str, applied: list[str], reason: str, source:
             "reason": reason[:300],
             "source": source,  # user (supervised) | agent | observation
         }
-        with (log_dir / "memory-updates.jsonl").open("a", encoding="utf-8") as f:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        target = log_dir / "memory-updates.jsonl"
+        paths.append_private_text(target, json.dumps(row, ensure_ascii=False) + "\n")
     except Exception:  # noqa: BLE001 — logging never blocks the update
         logger.debug("update log write failed", exc_info=True)
 

@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import stat
+from pathlib import Path
+
+import pytest
 
 from persome import logger as logger_mod
 from persome import trace
@@ -129,3 +133,39 @@ def test_setup_debug_env_falls_back_to_human_format(ac_root, monkeypatch) -> Non
     # Human format is NOT valid JSON and contains the bracketed level.
     assert "[INFO]" in last
     assert "human readable" in last
+
+
+def test_rotated_logs_remain_owner_only(ac_root) -> None:
+    from persome import paths
+
+    target = paths.logs_dir() / "rotation-test.log"
+    handler = logger_mod._PrivateRotatingFileHandler(
+        target,
+        maxBytes=1,
+        backupCount=1,
+        encoding="utf-8",
+    )
+    try:
+        handler.emit(_record(logging.INFO, "first"))
+        handler.emit(_record(logging.INFO, "second"))
+    finally:
+        handler.close()
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert stat.S_IMODE(target.with_suffix(".log.1").stat().st_mode) == 0o600
+
+
+def test_log_handler_rejects_symlink_without_touching_victim(ac_root: Path) -> None:
+    from persome import paths
+
+    victim = ac_root.parent / "victim.log"
+    victim.write_text("ORIGINAL\n", encoding="utf-8")
+    victim.chmod(0o644)
+    link = paths.logs_dir() / "attacker.log"
+    link.symlink_to(victim)
+
+    with pytest.raises(OSError):
+        logger_mod._PrivateRotatingFileHandler(link, maxBytes=100, backupCount=1)
+
+    assert victim.read_text(encoding="utf-8") == "ORIGINAL\n"
+    assert stat.S_IMODE(victim.stat().st_mode) == 0o644

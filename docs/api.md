@@ -19,9 +19,10 @@ runtime schema.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health` | Liveness probe. |
+| POST | `/auth/browser-bootstrap` | Exchange the bearer for a 60-second, one-use viewer URL. |
 | GET | `/permissions` | macOS Accessibility state. |
 | GET | `/status` | Daemon, capture, session, memory, and provider status. |
-| POST | `/captures/ingest` | Ingest one capture from a trusted local producer. |
+| POST | `/captures/ingest` | Ingest one bearer-authenticated capture from a trusted local producer. |
 | GET | `/model` | Open the offline Point/Line/Face/Volume/Root explorer. |
 | GET | `/model/graph` | Read the canonical versioned model snapshot. |
 | GET | `/model/node?id=...` | Resolve a snapshot Point ID or relation endpoint to receipts and its relation tree. |
@@ -33,7 +34,8 @@ intentionally omitted from OpenAPI.
 
 `/status.data.llm_profile` reports the effective provider, protocol, model,
 endpoint, key variable name, credential presence, and legacy-migration state.
-It never returns the credential value.
+It never returns the credential value. Provider network probes run only for
+the explicit `GET /status?check_models=true` request and are cached briefly.
 
 ## Chat routes
 
@@ -45,10 +47,12 @@ It never returns the credential value.
 
 Chat consumes the same memory and provenance interfaces as MCP. It is not a
 second model store. Shell, arbitrary filesystem, and Web tools are omitted by
-default and require `[chat] unsafe_local_tools_enabled = true`. Skill Markdown
-loads as model guidance in either mode, but executable
-`memory/skills/*/tools.py` is gated by the same unsafe opt-in. Configured
-external MCP servers are separate explicit trust grants.
+default. The terminal client requires `[chat] unsafe_local_tools_enabled =
+true` plus exact one-shot approval for each call. HTTP Chat has no trusted
+approval channel and refuses these calls. Only user-installed skill Markdown
+can load as guidance; model-generated `memory/skills` content is excluded.
+Configured external MCP servers are separate explicit trust grants and their
+calls also need approval.
 
 There is no browser Chat page in this repository. `persome chat` is the shipped
 interactive client; the routes above support trusted local product clients.
@@ -74,9 +78,19 @@ is not a publication endpoint.
 
 ## Security boundary
 
-- The server defaults to `127.0.0.1`.
+- The server is restricted to loopback and defaults to `127.0.0.1`; wildcard
+  and LAN binds are rejected even with a bearer because the server has no TLS.
 - Origin and host guards reject non-loopback browser access.
-- `/captures/ingest` assumes a trusted local producer; it is not a public upload API.
+- Every API/MCP route except canonical `GET /health` requires the dedicated
+  local bearer. The generated OpenAPI contract declares `LocalBearer` globally;
+  the browser viewer may instead use the bearer-derived capability below.
+- Use `persome model open`; the viewer bootstrap never puts the long-lived
+  bearer in a URL. It exchanges the one-use nonce for an HttpOnly cookie scoped
+  to a fresh unguessable viewer path (localhost cookies have no port boundary),
+  and protected responses are not cacheable.
+- `/captures/ingest` assumes a trusted local producer that obtains the owner
+  token through an approved local secret channel and sends the bearer header;
+  it is not a public upload API.
 - Model assets and graph data load from the same loopback server with no CDN dependency.
 - LLM and embedding egress only use endpoints configured by the user.
 - Unknown and removed product/admin routes return `404`.

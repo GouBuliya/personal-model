@@ -103,7 +103,14 @@ def _discover_external_skills(skills_dir: Path) -> list[SkillEntry]:
 
 
 def _discover_memory_skills() -> list[SkillEntry]:
-    """Scan ~/.persome/memory/skills/skill-*.md for model-generated skills."""
+    """Read model-generated skill-shaped memories as untrusted data.
+
+    These files are produced from observed screen content by a model.  They
+    must never be returned from :func:`load_all_skills` or made available to
+    ``load_skill``: doing so would persistently promote observed text into
+    system-level instructions.  This reader remains only for migration and
+    diagnostics outside Chat's instruction registry.
+    """
     results: list[SkillEntry] = []
     memory_skills_dir = paths.memory_dir() / "skills"
     if not memory_skills_dir.is_dir():
@@ -213,9 +220,11 @@ def load_all_skills(
     - handlers: merged tool handlers from all skills (+ the built-in load_skill handler)
     - entries: full registry keyed by skill name, for load_skill lookups
     """
-    external = _discover_external_skills(paths.skills_dir())
-    memory_skills = _discover_memory_skills()
-    all_skills = external + memory_skills
+    # Only the explicit user-installed skill directory is an instruction
+    # trust boundary.  ``memory/skills/skill-*.md`` is model-generated from
+    # observed data and is intentionally excluded even if its frontmatter
+    # claims ``trusted: true``; data cannot self-promote into system control.
+    all_skills = _discover_external_skills(paths.skills_dir())
 
     if not all_skills:
         return LoadedSkills(entries={}, index_prompt="", schemas=[], handlers={})

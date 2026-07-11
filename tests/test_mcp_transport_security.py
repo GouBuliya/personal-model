@@ -17,7 +17,7 @@ from persome.mcp.server import build_server
 
 
 def _middleware() -> TransportSecurityMiddleware:
-    server = build_server(Config())
+    server = build_server(Config(), auth_enabled=False)
     sec = server.settings.transport_security
     assert sec is not None and sec.enable_dns_rebinding_protection is True
     return TransportSecurityMiddleware(sec)

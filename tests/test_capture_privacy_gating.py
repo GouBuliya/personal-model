@@ -13,7 +13,10 @@ screen / password box needed. Covers:
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -201,21 +204,21 @@ def test_non_secure_field_not_suppressed(ac_root: Path, monkeypatch: pytest.Monk
 
 
 # --------------------------------------------------------------------------- #
-# Fail-safe: a raising probe never crashes the build, and lock fails OPEN
+# Fail-safe: a raising lock probe never crashes the build and fails CLOSED
 # --------------------------------------------------------------------------- #
-def test_lock_probe_raises_fails_open(ac_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_lock_probe_raises_fails_closed(ac_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom() -> bool:
         raise RuntimeError("probe blew up")
 
     # Patch the *internal* probes so the public is_screen_locked exercises its
-    # own try/except fail-open path rather than us patching the public function.
+    # own try/except fail-closed path rather than us patching the public function.
     monkeypatch.setattr(screen_state, "_quartz_screen_is_locked", _boom)
     monkeypatch.setattr(screen_state, "_ioreg_says_locked", _boom)
-    # is_screen_locked must swallow and return False (fail-open → capture runs).
-    assert screen_state.is_screen_locked() is False
+    # Unknown lock state must suppress capture; leaking behind a lock screen is
+    # worse than missing a frame until the next successful probe.
+    assert screen_state.is_screen_locked() is True
     out = scheduler_mod._build_capture(_Cfg(), _FakeProvider(), None)
-    assert out is not None
-    assert "screenshot" in out
+    assert out is None
 
 
 def test_secure_probe_raises_does_not_crash(ac_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -254,13 +257,80 @@ def test_lock_quartz_takes_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
     assert screen_state.is_screen_locked() is True
 
 
+def test_quartz_missing_lock_key_is_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "Quartz",
+        SimpleNamespace(CGSessionCopyCurrentDictionary=lambda: {"kCGSessionUserNameKey": "user"}),
+    )
+
+    assert screen_state._quartz_screen_is_locked() is None
+
+
+def test_quartz_explicit_unlocked_is_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "Quartz",
+        SimpleNamespace(CGSessionCopyCurrentDictionary=lambda: {"CGSSessionScreenIsLocked": 0}),
+    )
+
+    assert screen_state._quartz_screen_is_locked() is False
+
+
 def test_lock_falls_back_to_ioreg(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(screen_state, "_quartz_screen_is_locked", lambda: None)
     monkeypatch.setattr(screen_state, "_ioreg_says_locked", lambda: True)
     assert screen_state.is_screen_locked() is True
 
 
-def test_lock_none_everywhere_fails_open(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_lock_none_everywhere_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(screen_state, "_quartz_screen_is_locked", lambda: None)
     monkeypatch.setattr(screen_state, "_ioreg_says_locked", lambda: None)
-    assert screen_state.is_screen_locked() is False
+    assert screen_state.is_screen_locked() is True
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [
+        ('    "IOConsoleLocked" = Yes\n', True),
+        (
+            '    "IOConsoleLocked" = No\n'
+            '    "IOConsoleUsers" = ({"CGSSessionScreenIsLocked"=No})\n',
+            False,
+        ),
+        (
+            '    "IOConsoleLocked" = No\n'
+            '    "IOConsoleUsers" = ({"CGSSessionScreenIsLocked"=Yes})\n',
+            False,
+        ),
+        (
+            '    "IOConsoleUsers" = ('
+            '{"kCGSSessionOnConsoleKey"=No,"CGSSessionScreenIsLocked"=Yes},'
+            '{"kCGSSessionOnConsoleKey"=Yes,"CGSSessionScreenIsLocked"=No})\n',
+            False,
+        ),
+        (
+            '    "IOConsoleUsers" = ('
+            '{"kCGSSessionOnConsoleKey"=No,"CGSSessionScreenIsLocked"=No},'
+            '{"kCGSSessionOnConsoleKey"=Yes,"CGSSessionScreenIsLocked"=Yes})\n',
+            True,
+        ),
+        ('    "Unrelated" = 1\n', None),
+    ],
+)
+def test_ioreg_root_lock_flags(
+    monkeypatch: pytest.MonkeyPatch, output: str, expected: bool | None
+) -> None:
+    command: list[str] = []
+
+    def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        command.extend(args[0])
+        return subprocess.CompletedProcess(args[0], 0, output, "")
+
+    monkeypatch.setattr(
+        screen_state.subprocess,
+        "run",
+        fake_run,
+    )
+    assert screen_state._ioreg_says_locked() is expected
+    assert command[0] == "/usr/sbin/ioreg"

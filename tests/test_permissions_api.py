@@ -17,7 +17,7 @@ from persome.capture import ax_capture
 
 
 def _make_client() -> TestClient:
-    return TestClient(build_api_app())
+    return TestClient(build_api_app(auth_enabled=False))
 
 
 def test_permissions_reports_granted(monkeypatch) -> None:

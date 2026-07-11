@@ -69,6 +69,10 @@ def build_plist(binary: str) -> dict[str, object]:
         "ProgramArguments": [binary, "start", "--foreground"],
         "RunAtLoad": True,
         "KeepAlive": True,
+        # launchd otherwise inherits the user session's commonly permissive
+        # 022 umask. Runtime state contains raw screen context and must be born
+        # owner-only even before the explicit chmod defense runs.
+        "Umask": 0o077,
         "ProcessType": "Background",
         "StandardOutPath": str(paths.launchd_stdout_log()),
         "StandardErrorPath": str(paths.launchd_stderr_log()),
@@ -83,7 +87,7 @@ def write_plist(binary: str) -> Path:
     path written."""
     target = plist_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    paths.logs_dir().mkdir(parents=True, exist_ok=True)
+    paths.ensure_private_dir(paths.logs_dir())
     with target.open("wb") as fh:
         plistlib.dump(build_plist(binary), fh)
     return target
