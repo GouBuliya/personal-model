@@ -266,4 +266,5 @@ def test_update_mode_skips_setup_prompts_but_keeps_runtime_proof() -> None:
     assert "update mode: preserving the existing LLM profile and credentials" in script
     assert "non-interactive update: verifying existing permissions and Runtime health" in script
     assert "onboard --tier tiny --no-gui" in script
-    assert "run_onboarding\n  print_summary" in script
+    assert script.index("run_onboarding\n") < script.rindex("commit_install\n")
+    assert "restoring the previous virtualenv" in script

@@ -95,6 +95,8 @@ the owner LaunchAgent, invokes the same locked wheel installer with existing
 LLM/MCP setup preserved, reruns onboarding and its fresh-capture proof, and
 restores prior LaunchAgent ownership. Configuration, secrets, capture history,
 memory, model state, and logs under `PERSOME_ROOT` are not replaced.
+Update-mode installation keeps the previous virtualenv until onboarding passes;
+a failed proof stops the replacement daemon and restores the prior Runtime.
 
 `persome update --source /path/to/checkout` is the explicit developer/offline
 path. The supplied tree must have the complete Persome source layout; the

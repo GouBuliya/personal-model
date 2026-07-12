@@ -24,6 +24,21 @@ rollback_uncommitted_install() {
   trap - EXIT
   if [[ ${status} -ne 0 && ${INSTALL_TRANSACTION_ACTIVE} -eq 1 ]]; then
     warn "installation failed; restoring the previous virtualenv"
+    # Update-mode onboarding can start the replacement daemon before its final
+    # capture proof. Stop that process before replacing its on-disk virtualenv;
+    # the outer `persome update` command restarts the restored Runtime.
+    if [[ ${UPDATE_MODE} -eq 1 && -f "${INSTALL_HOME}/.pid" ]]; then
+      local update_pid=""
+      update_pid="$(tr -d '[:space:]' < "${INSTALL_HOME}/.pid" 2>/dev/null || true)"
+      if [[ "${update_pid}" =~ ^[0-9]+$ ]] && kill -0 "${update_pid}" 2>/dev/null; then
+        kill -TERM "${update_pid}" 2>/dev/null || true
+        local attempts=50
+        while (( attempts > 0 )) && kill -0 "${update_pid}" 2>/dev/null; do
+          sleep 0.1
+          attempts=$((attempts - 1))
+        done
+      fi
+    fi
     rm -rf "${VENV_DIR}"
     if [[ -n "${OLD_VENV_BACKUP}" && -d "${OLD_VENV_BACKUP}" ]]; then
       mv "${OLD_VENV_BACKUP}" "${VENV_DIR}"
@@ -691,11 +706,19 @@ main() {
   ensure_local_api_token
   compile_bundled_binaries
   verify_install
-  commit_install
+  # Fresh installs keep the established commit point. Updates remain
+  # transactional through onboarding so a failed health/capture proof can
+  # restore the previous venv.
+  if [[ ${UPDATE_MODE} -eq 0 ]]; then
+    commit_install
+  fi
   install_shim
   inject_detected_clients
   maybe_configure_llm
   run_onboarding
+  if [[ ${UPDATE_MODE} -eq 1 ]]; then
+    commit_install
+  fi
   print_summary
 }
 
