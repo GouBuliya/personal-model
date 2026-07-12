@@ -18,6 +18,7 @@ CONTRIBUTION_LABELS = {
     "data": ("🔣", "Data"),
     "design": ("🎨", "Design"),
     "doc": ("📖", "Documentation"),
+    "growth": ("📈", "Growth"),
     "ideas": ("🤔", "Ideas and feedback"),
     "infra": ("🚇", "Infrastructure"),
     "maintenance": ("🚧", "Maintenance"),
@@ -54,7 +55,10 @@ def render_contributors(config: dict[str, object]) -> str:
     if not isinstance(contributors, list):
         raise ValueError("contributors must be a list")
 
+    per_line = int(config.get("contributorsPerLine", 3))
     image_size = int(config.get("imageSize", 56))
+    if per_line < 1:
+        raise ValueError("contributorsPerLine must be at least 1")
     if image_size < 1:
         raise ValueError("imageSize must be at least 1")
 
@@ -74,17 +78,20 @@ def render_contributors(config: dict[str, object]) -> str:
         cards.append(
             "\n".join(
                 (
-                    "<p>",
-                    f'  <a href="{profile}"><img src="{avatar}" width="{image_size}" align="left" alt="{name}" /></a>',
-                    f'  &nbsp;&nbsp;<strong><a href="{profile}">{name}</a></strong><br />',
-                    f"  &nbsp;&nbsp;<sub>{labels}</sub>",
-                    "</p>",
-                    '<br clear="left" />',
+                    '      <td valign="middle">',
+                    f'        <a href="{profile}"><img src="{avatar}" width="{image_size}" align="left" alt="{name}" /></a>',
+                    f'        &nbsp;&nbsp;<strong><a href="{profile}">{name}</a></strong><br />',
+                    f"        &nbsp;&nbsp;<sub>{labels}</sub>",
+                    "      </td>",
                 )
             )
         )
 
-    return "\n".join(cards)
+    rows = [
+        "\n".join(("    <tr>", *cards[index : index + per_line], "    </tr>"))
+        for index in range(0, len(cards), per_line)
+    ]
+    return "\n".join(("<table>", "  <tbody>", *rows, "  </tbody>", "</table>"))
 
 
 def update_readme(readme: str, rendered: str) -> str:

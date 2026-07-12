@@ -25,19 +25,39 @@ def test_compact_cards_escape_profile_data_and_wrap_rows() -> None:
     rendered = render_contributors(
         {
             "contributors": [contributor, contributor, contributor],
-            "contributorsPerLine": 2,
+            "contributorsPerLine": 3,
             "imageSize": 56,
         }
     )
 
-    assert "<table" not in rendered
-    assert rendered.count("<p>") == 3
-    assert rendered.count('<br clear="left" />') == 3
+    assert rendered.count("<tr>") == 1
+    assert rendered.count('<td valign="middle">') == 3
     assert "Example &lt;Person&gt;" in rendered
     assert "&quot;profile&quot;" in rendered
     assert "version=1&amp;size=112" in rendered
     assert "💻&nbsp;Code" in rendered
     assert "🤔&nbsp;Ideas and feedback" in rendered
+
+
+def test_compact_cards_start_a_new_row_after_three_people() -> None:
+    contributor = {
+        "login": "example",
+        "name": "Example",
+        "avatar_url": "https://example.com/avatar.png",
+        "profile": "https://example.com/",
+        "contributions": ["growth"],
+    }
+
+    rendered = render_contributors(
+        {
+            "contributors": [contributor, contributor, contributor, contributor],
+            "contributorsPerLine": 3,
+            "imageSize": 56,
+        }
+    )
+
+    assert rendered.count("<tr>") == 2
+    assert "📈&nbsp;Growth" in rendered
 
 
 def test_contributor_without_assigned_types_gets_neutral_label() -> None:
