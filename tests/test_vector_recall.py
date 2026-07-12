@@ -327,3 +327,54 @@ def test_mmr_overselects_the_vector_pool_so_diversity_has_material(monkeypatch) 
     )
     # Without pool over-selection the tea memory would never reach MMR.
     assert [h["node_id"] for h in diverse] == ["n-coffee-1", "n-tea"]
+
+
+def test_openai_compatible_contract_validation() -> None:
+    import pytest
+
+    embedder = vector_recall.OpenAICompatibleEmbedder(expected_dimension=3)
+    good = {
+        "data": [
+            {"index": 1, "embedding": [0.0, 1.0, 0.0]},
+            {"index": 0, "embedding": [1.0, 0.0, 0.0]},
+        ]
+    }
+    # Rows are re-ordered by index before validation.
+    assert embedder._vectors(good, expected_count=2) == [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+    with pytest.raises(vector_recall.EmbeddingContractError):
+        embedder._vectors({"data": [{"index": 0, "embedding": [1.0, 0.0]}]}, expected_count=1)
+    with pytest.raises(vector_recall.EmbeddingContractError):
+        embedder._vectors({"data": []}, expected_count=1)
+    with pytest.raises(vector_recall.EmbeddingContractError):
+        embedder._vectors({"error": {"message": "arrears"}}, expected_count=1)
+
+
+def test_openai_backend_requires_key_and_fails_open(monkeypatch) -> None:
+    monkeypatch.delenv("MISSING_TEST_KEY", raising=False)
+    vector_recall._EMBED_CACHE.clear()
+    lexical = [{"node_id": "a", "score": 1.0, "node": _node("a", "text")}]
+    out = vector_recall.fuse(
+        "query",
+        lexical,
+        top_k=5,
+        candidates_provider=lambda: [_node("b", "coffee")],
+        cfg=_dense_cfg(
+            vector_recall_backend="openai",
+            vector_recall_api_key_env="MISSING_TEST_KEY",
+        ),
+    )
+    assert out is lexical
+
+
+def test_openai_backend_dispatches_through_dense_ranking(monkeypatch) -> None:
+    fake = _FakeEmbedder()
+    monkeypatch.setattr(vector_recall, "_make_embedder", lambda _evomem: fake)
+    vector_recall._EMBED_CACHE.clear()
+    out = vector_recall.fuse(
+        "coffee",
+        [],
+        top_k=1,
+        candidates_provider=lambda: [_node("n-tea", "tea"), _node("n-coffee", "coffee")],
+        cfg=_dense_cfg(vector_recall_backend="openai"),
+    )
+    assert [h["node_id"] for h in out] == ["n-coffee"]

@@ -374,6 +374,10 @@ class EvomemConfig:
     vector_recall_model: str = "bge-m3"
     vector_recall_ollama_url: str = "http://127.0.0.1:11434"
     vector_recall_dimension: int = 1024
+    # OpenAI-compatible cloud embeddings (vector_recall_backend = "openai"):
+    # endpoint and key VARIABLE NAME only; the key value stays in env.
+    vector_recall_openai_url: str = "https://api.openai.com/v1"
+    vector_recall_api_key_env: str = "OPENAI_API_KEY"
     # Weighted RRF head weights, greedy-MMR diversity (0 disables), and the
     # LLM statement+keyword query rewrite (needs a configured LLM credential;
     # failures fall back to the raw query).
@@ -748,7 +752,7 @@ freeze_writes_on_failure = false   # when a STRUCTURAL check fails, freeze memor
 shadow_write_enabled = true        # Mirror Markdown writes into evo_nodes; failures never block the primary write
 write_authority = "markdown"       # "markdown" is the default truth; "evomem" makes Markdown a projection
 vector_recall_enabled = false      # Fuse local hashed n-gram vector recall into memory search (personal-fork extension)
-vector_recall_backend = "hash"     # "hash" (offline n-grams) or "ollama" (local dense embeddings, needs an Ollama server)
+vector_recall_backend = "hash"     # "hash" (offline n-grams), "ollama" (local dense), or "openai" (OpenAI-compatible cloud embeddings)
 vector_recall_diversity_lambda = 0.0  # >0 enables greedy-MMR diversity over fused results (e.g. 0.3)
 vector_recall_query_rewrite = false   # Prepend LLM statement+keyword retrieval views to every memory query
 contradiction_check_enabled = false # Nightly LLM-assisted contradiction marking; never auto-supersedes

@@ -142,6 +142,78 @@ class OllamaEmbedder:
         return self.embed_batch([text])[0]
 
 
+@dataclass(frozen=True)
+class OpenAICompatibleEmbedder:
+    """OpenAI-protocol /embeddings client (OpenAI, DashScope, aggregators).
+
+    Mirrors the legacy runtime's cloud-embedding route: the endpoint and model
+    live in config, the key VALUE lives only in the environment (loaded from
+    ``<PERSOME_ROOT>/env`` by the daemon) under ``api_key_env``.
+    """
+
+    base_url: str = "https://api.openai.com/v1"
+    model: str = "text-embedding-3-large"
+    expected_dimension: int = 3072
+    api_key_env: str = "OPENAI_API_KEY"
+    timeout_seconds: float = 60.0
+
+    def _request(self, texts: list[str]) -> dict[str, Any]:
+        import os
+
+        key = (os.environ.get(self.api_key_env) or "").strip()
+        if not key:
+            raise EmbeddingContractError(f"{self.api_key_env} is not set in the environment")
+        request = urllib.request.Request(
+            f"{self.base_url.rstrip('/')}/embeddings",
+            data=json.dumps({"model": self.model, "input": texts}).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {key}",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:  # noqa: S310 - owner-configured endpoint
+            return json.load(response)
+
+    def _vectors(self, payload: dict[str, Any], *, expected_count: int) -> list[list[float]]:
+        rows = payload.get("data")
+        if not isinstance(rows, list) or len(rows) != expected_count:
+            raise EmbeddingContractError(
+                f"endpoint returned {len(rows) if isinstance(rows, list) else 'invalid'} "
+                f"embeddings for {expected_count} inputs"
+            )
+        ordered = sorted(rows, key=lambda item: int(item.get("index", 0)))
+        vectors: list[list[float]] = []
+        for index, row in enumerate(ordered):
+            vector = row.get("embedding") if isinstance(row, dict) else None
+            if not isinstance(vector, list) or len(vector) != self.expected_dimension:
+                raise EmbeddingContractError(
+                    f"embedding {index} dimension is "
+                    f"{len(vector) if isinstance(vector, list) else 'invalid'}, "
+                    f"expected {self.expected_dimension}"
+                )
+            try:
+                vectors.append([float(value) for value in vector])
+            except (TypeError, ValueError) as exc:
+                raise EmbeddingContractError(
+                    f"embedding {index} contains a non-numeric value"
+                ) from exc
+        return vectors
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        vectors: list[list[float]] = []
+        # Conservative chunking: some compatible vendors cap batches at 10.
+        for start in range(0, len(texts), 10):
+            chunk = texts[start : start + 10]
+            vectors.extend(self._vectors(self._request(chunk), expected_count=len(chunk)))
+        return vectors
+
+    def embed(self, text: str) -> list[float]:
+        return self.embed_batch([text])[0]
+
+
 def _cosine_dense(a: list[float], b: list[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b, strict=False))
     norm_a = math.sqrt(sum(x * x for x in a))
@@ -161,7 +233,15 @@ def _content_digest(text: str) -> str:
     return hashlib.blake2b(text.encode("utf-8"), digest_size=16).hexdigest()
 
 
-def _make_embedder(evomem: Any) -> OllamaEmbedder:
+def _make_embedder(evomem: Any) -> Any:
+    backend = str(getattr(evomem, "vector_recall_backend", "hash")).strip().lower()
+    if backend == "openai":
+        return OpenAICompatibleEmbedder(
+            base_url=str(getattr(evomem, "vector_recall_openai_url", "https://api.openai.com/v1")),
+            model=str(getattr(evomem, "vector_recall_model", "text-embedding-3-large")),
+            expected_dimension=int(getattr(evomem, "vector_recall_dimension", 3072)),
+            api_key_env=str(getattr(evomem, "vector_recall_api_key_env", "OPENAI_API_KEY")),
+        )
     return OllamaEmbedder(
         base_url=str(getattr(evomem, "vector_recall_ollama_url", "http://127.0.0.1:11434")),
         model=str(getattr(evomem, "vector_recall_model", "bge-m3")),
@@ -353,7 +433,7 @@ def _evomem_cfg(cfg: Any) -> Any:
 
 def _vector_ranking(query: str, candidates: list[Any], *, top_k: int, evomem: Any) -> list[Any]:
     backend = str(getattr(evomem, "vector_recall_backend", "hash")).strip().lower()
-    if backend == "ollama":
+    if backend in ("ollama", "openai"):
         return _dense_ranking(query, candidates, top_k=top_k, evomem=evomem)
     return _hash_ranking(query, candidates, top_k=top_k)
 
