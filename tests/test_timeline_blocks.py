@@ -785,7 +785,7 @@ def test_placeholder_replay_keeps_ocr_fallback_available(ac_root: Path) -> None:
             window_title="Conversation",
             focused_role="AXTextArea",
             focused_value="",
-            visible_text="recognized body",
+            visible_text=f"{phrase}\nrecognized body",
             url="",
         )
 

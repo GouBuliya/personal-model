@@ -130,6 +130,7 @@ def _resolve_text(result: dict[str, Any], data: dict[str, Any], capture_id: str)
         try:
             with fts_store.cursor() as conn:
                 ocr_text = fts_store.get_ocr_result_for_capture(conn, capture_id) or ""
+                ocr_text = s1_parser.sanitize_ocr_text(data, ocr_text)
         except Exception:  # noqa: BLE001
             ocr_text = ""
 
@@ -328,16 +329,26 @@ def search_captures(
         meta = data.get("window_meta") or {}
         focused = data.get("focused_element") or {}
         safe_visible = str(data.get("visible_text") or "")
+        safe_focused_value = str(focused.get("value") or "")
         db_ocr_authoritative = bool(data.get("ocr_submitted")) and not safe_visible
-        stale_text = projection is not None and (
-            not db_ocr_authoritative and safe_visible != indexed_text.get(h.id, "")
+        indexed_visible = indexed_text.get(h.id, "")
+        safe_db_ocr = (
+            s1_parser.sanitize_ocr_text(data, indexed_visible) if db_ocr_authoritative else ""
+        )
+        stale_projection = projection is not None and (
+            (not db_ocr_authoritative and safe_visible != indexed_visible)
+            or (db_ocr_authoritative and safe_db_ocr != indexed_visible)
+            or safe_focused_value != h.focused_value
         )
         # Preserve FTS highlighting for clean rows. A pre-upgrade row whose S1
-        # projection repairs differently is rendered only from the safe JSON
-        # projection so a stale index cannot echo placeholder text.
+        # text or focused value repairs differently is rendered only from the
+        # safe JSON projection so a stale index cannot echo placeholder text.
         safe_snippet = h.snippet
-        if stale_text:
-            safe_snippet = " ".join(safe_visible.split())[:300]
+        if stale_projection:
+            # OCR backfills exist only in SQLite, not in the raw JSON. Keep
+            # that authoritative text while discarding a stale focused value.
+            snippet_source = safe_db_ocr if db_ocr_authoritative else safe_visible
+            safe_snippet = " ".join(snippet_source.split())[:300]
         out.append(
             {
                 "provenance": CAPTURE_PROVENANCE,
@@ -445,11 +456,13 @@ def current_context(
             focused = data.get("focused_element") or {}
             safe_visible = str(data.get("visible_text") or "")
             db_ocr_authoritative = bool(data.get("ocr_submitted")) and not safe_visible
-            visible = (
-                safe_visible
-                if projection is not None and not db_ocr_authoritative
-                else fts_store.get_capture_visible_text(conn, r.id)
-            )
+            indexed_visible = fts_store.get_capture_visible_text(conn, r.id)
+            if projection is not None and not db_ocr_authoritative:
+                visible = safe_visible
+            elif projection is not None:
+                visible = s1_parser.sanitize_ocr_text(data, indexed_visible)
+            else:
+                visible = indexed_visible
             full.append(
                 {
                     "timestamp": r.timestamp,
@@ -483,7 +496,12 @@ def current_context(
                 head_text[r.id] = safe_visible
                 headline_focus[r.id] = str((data.get("focused_element") or {}).get("role") or "")
             else:
-                head_text[r.id] = fts_store.get_capture_visible_text(conn, r.id) or ""
+                indexed_visible = fts_store.get_capture_visible_text(conn, r.id) or ""
+                head_text[r.id] = (
+                    s1_parser.sanitize_ocr_text(data, indexed_visible)
+                    if projection is not None
+                    else indexed_visible
+                )
                 headline_focus[r.id] = (
                     str((data.get("focused_element") or {}).get("role") or "")
                     if projection is not None

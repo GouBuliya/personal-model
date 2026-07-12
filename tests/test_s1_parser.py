@@ -470,6 +470,87 @@ def test_enrich_does_not_globally_remove_same_text_outside_editable_control() ->
     assert capture["trigger"]["details"]["element"].get("value", "") == ""
 
 
+def test_ocr_placeholder_filter_fails_open_for_ambiguous_exact_occurrences() -> None:
+    capture = _composer_capture(_chromium_composer(_COMPOSER_PLACEHOLDER))
+    assert s1_parser.sanitize_ocr_text(capture, _COMPOSER_PLACEHOLDER) == ""
+
+    ocr = "\n".join(
+        (
+            _COMPOSER_PLACEHOLDER,
+            _COMPOSER_PLACEHOLDER,
+            f"Conversation quoted: {_COMPOSER_PLACEHOLDER}",
+        )
+    )
+
+    clean = s1_parser.sanitize_ocr_text(capture, ocr)
+
+    assert clean.splitlines() == [
+        _COMPOSER_PLACEHOLDER,
+        _COMPOSER_PLACEHOLDER,
+        f"Conversation quoted: {_COMPOSER_PLACEHOLDER}",
+    ]
+
+
+def test_ocr_placeholder_filter_removes_exact_field_and_keeps_mixed_content() -> None:
+    capture = _composer_capture(_chromium_composer(_COMPOSER_PLACEHOLDER))
+    ocr = "\n".join(
+        (
+            "## [Message pane]",
+            f"- [self] {_COMPOSER_PLACEHOLDER}",
+            "- [self] legitimate OCR body",
+        )
+    )
+
+    clean = s1_parser.sanitize_ocr_text(capture, ocr)
+
+    assert _COMPOSER_PLACEHOLDER not in clean
+    assert clean.splitlines() == ["## [Message pane]", "- [self] legitimate OCR body"]
+
+
+def test_ocr_placeholder_filter_keeps_phrase_inside_normal_sentence() -> None:
+    capture = _composer_capture(_chromium_composer(_COMPOSER_PLACEHOLDER))
+    sentence = f"Alice said: {_COMPOSER_PLACEHOLDER}"
+
+    assert s1_parser.sanitize_ocr_text(capture, sentence) == sentence
+
+
+def test_ocr_placeholder_evidence_is_scoped_to_frontmost_focused_window() -> None:
+    background = _composer_capture(_chromium_composer(_COMPOSER_PLACEHOLDER))["ax_tree"]["apps"][0]
+    background["is_frontmost"] = False
+    unfocused_placeholder_window = copy.deepcopy(background["windows"][0])
+    unfocused_placeholder_window["focused"] = False
+    foreground = {
+        "name": "Foreground",
+        "bundle_id": "com.example.foreground",
+        "is_frontmost": True,
+        "windows": [
+            unfocused_placeholder_window,
+            {
+                "title": "Focused",
+                "focused": True,
+                "elements": [{"role": "AXStaticText", "value": "real content"}],
+            },
+        ],
+    }
+    capture = {"ax_tree": _ax_tree(background, foreground)}
+
+    assert s1_parser.sanitize_ocr_text(capture, _COMPOSER_PLACEHOLDER) == _COMPOSER_PLACEHOLDER
+
+
+def test_ocr_placeholder_filter_ignores_hidden_standard_hint_on_filled_control() -> None:
+    hint = "Search"
+    textarea = {
+        "role": "AXTextField",
+        "value": "typed query",
+        "AXPlaceholderValue": hint,
+    }
+    capture = _composer_capture(textarea)
+    ocr = f"{hint}\nlegitimate OCR body"
+
+    assert s1_parser.ocr_placeholder_values(capture) == ()
+    assert s1_parser.sanitize_ocr_text(capture, ocr) == ocr
+
+
 def test_enrich_requires_exact_placeholder_dom_class_token() -> None:
     styled = "placeholder:text-token-input-placeholder-foreground"
     capture = _composer_capture(_chromium_composer(_COMPOSER_PLACEHOLDER, placeholder_class=styled))

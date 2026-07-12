@@ -3258,6 +3258,10 @@ def rebuild_captures_index(
                 data.get("visible_text") or ""
             )
             data = s1_parser.sanitize_capture(data)
+            preserved_ocr = s1_parser.sanitize_ocr_text(
+                data,
+                ocr_backfills.get(p.stem, ""),
+            )
             meta = data.get("window_meta") or {}
             focused = data.get("focused_element") or {}
             try:
@@ -3271,7 +3275,7 @@ def rebuild_captures_index(
                     focused_role=focused.get("role") or "",
                     focused_value=focused.get("value") or "",
                     visible_text=(
-                        ocr_backfills.get(p.stem, "")
+                        preserved_ocr
                         if preserve_ocr and not data.get("visible_text")
                         else data.get("visible_text") or ""
                     ),

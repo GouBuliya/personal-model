@@ -25,6 +25,7 @@ from . import (
     cmux_source,
     ocr_local,
     ocr_structure,
+    placeholder,
     s1_parser,
     screen_state,
     screenshot,
@@ -102,6 +103,7 @@ def _submit_ocr_async(
     tier: str,
     window_meta: dict[str, str] | None = None,
     structured: bool = False,
+    placeholder_values: tuple[str, ...] = (),
 ) -> None:
     """Fire-and-forget local OCR + geometry structuring. Runs on a daemon thread.
 
@@ -136,6 +138,7 @@ def _submit_ocr_async(
     backfill_text = ocr_structure.to_markdown(struct) if struct else ""
     if not backfill_text:
         backfill_text = raw
+    backfill_text = placeholder.sanitize_ocr_text(backfill_text, placeholder_values)
     if not backfill_text:
         return
 
@@ -483,6 +486,7 @@ def _write_capture(out: dict[str, Any]) -> Path:
     ocr_jpeg = out.pop("_ocr_pending_jpeg", None)
     ocr_tier = out.pop("_ocr_tier", "tiny")
     ocr_structured = out.pop("_ocr_structured", False)
+    ocr_placeholder_values = s1_parser.ocr_placeholder_values(out) if ocr_jpeg is not None else ()
     if ocr_jpeg is not None:
         out["ocr_submitted"] = True
 
@@ -505,7 +509,14 @@ def _write_capture(out: dict[str, Any]) -> Path:
     if ocr_jpeg is not None:
         thread = threading.Thread(
             target=_submit_ocr_async,
-            args=(ocr_jpeg, path.stem, ocr_tier, meta, ocr_structured),
+            args=(
+                ocr_jpeg,
+                path.stem,
+                ocr_tier,
+                meta,
+                ocr_structured,
+                ocr_placeholder_values,
+            ),
             name=f"ocr-submit-{path.stem}",
             daemon=True,
         )

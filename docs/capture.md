@@ -191,8 +191,13 @@ and broad CSS classes that merely contain the word `placeholder` remain intact.
 Historical timeline/MCP
 reads and `rebuild-captures-index` apply the same sanitizer, so replaying an old
 buffer cannot turn input hints into authored text; index rebuilds also preserve
-DB-only OCR backfills. Explicit `--raw` native captures retain the diagnostic AX
-structure.
+DB-only OCR backfills. When an AX-empty surface falls back to screenshot OCR,
+the same frontmost/focused-window evidence removes exact OCR lines/fields only
+for controls whose placeholder can currently be visible (the control is empty
+or exposes that same hint as its value). It never performs substring
+replacement. If identical OCR units outnumber the proven placeholder controls,
+the value is ambiguous and every occurrence is preserved. Explicit `--raw`
+native captures retain the diagnostic AX structure.
 
 Persisted screenshots are **not** passed to timeline, reducer, memory-delta, or
 schema prompts. They support optional local provenance drill-down and debugging.

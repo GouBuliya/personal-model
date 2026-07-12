@@ -352,7 +352,7 @@ def _format_events(
                 with fts_store.cursor() as conn:
                     ocr_text = fts_store.get_ocr_result_for_capture(conn, p.stem)
                     if ocr_text:
-                        visible_text = ocr_text.strip()
+                        visible_text = s1_parser.sanitize_ocr_text(data, ocr_text).strip()
             except Exception:  # noqa: BLE001
                 pass
 

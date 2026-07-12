@@ -5,6 +5,7 @@ from pathlib import Path
 
 from persome import __version__, paths
 from persome import model as model_mod
+from persome.capture import s1_parser
 from persome.mcp import captures as captures_mod
 from persome.mcp import server as mcp_server
 from persome.model import ModelBuildCoordinator, create_build_manifest
@@ -351,6 +352,36 @@ def test_capture_reads_prefer_clean_raw_projection_over_stale_fts(ac_root: Path)
     assert recent["visible_text"] == "Existing conversation"
 
 
+def test_search_captures_repairs_stale_focused_value_when_visible_text_matches(
+    ac_root: Path,
+) -> None:
+    phrase = "Ask for follow-up changes"
+    stem = "2026-07-12T23-01-30p08-00"
+    raw = _write_legacy_placeholder_capture(stem=stem, phrase=phrase)
+    raw["timestamp"] = "2026-07-12T23:01:30+08:00"
+    # Model a partially repaired index: the persisted/indexed visible text is
+    # already identical to the safe projection, but focused_value is stale.
+    raw["visible_text"] = s1_parser.sanitize_capture(raw)["visible_text"]
+    (paths.capture_buffer_dir() / f"{stem}.json").write_text(json.dumps(raw), encoding="utf-8")
+    with fts.cursor() as conn:
+        _seed_capture(
+            conn,
+            id=stem,
+            ts=raw["timestamp"],
+            app="Chat",
+            title="Conversation",
+            value=phrase,
+            text=raw["visible_text"],
+        )
+
+    hits = captures_mod.search_captures(query='"Ask for follow-up changes"')
+
+    assert hits
+    assert phrase not in json.dumps(hits)
+    assert hits[0]["focused_value_preview"] == ""
+    assert hits[0]["snippet"] == " ".join(raw["visible_text"].split())[:300]
+
+
 def test_placeholder_projection_keeps_db_ocr_visible_to_all_mcp_reads(ac_root: Path) -> None:
     phrase = "Ask for follow-up changes"
     stem = "2026-07-12T23-02-00p08-00"
@@ -366,15 +397,18 @@ def test_placeholder_projection_keeps_db_ocr_visible_to_all_mcp_reads(ac_root: P
             ts=raw["timestamp"],
             app="Chat",
             title="Conversation",
-            value="",
-            text="recognized OCR body",
+            value=phrase,
+            text=f"{phrase}\nrecognized OCR body",
         )
 
     hits = captures_mod.search_captures(query="recognized OCR body")
+    placeholder_hits = captures_mod.search_captures(query='"Ask for follow-up changes"')
     context = captures_mod.current_context(headline_limit=1, fulltext_limit=1)
     recent = captures_mod.read_recent_capture(at=stem)
 
     assert hits and "recognized" in hits[0]["snippet"]
+    assert placeholder_hits and phrase not in json.dumps(placeholder_hits)
+    assert placeholder_hits[0]["snippet"] == "recognized OCR body"
     assert context["recent_captures_headline"][0]["preview"] == "recognized OCR body"
     assert context["recent_captures_fulltext"][0]["visible_text"] == "recognized OCR body"
     assert context["recent_captures_fulltext"][0]["focused_value"] == ""

@@ -9,6 +9,9 @@ copy and never matches broad CSS class substrings.
 
 from __future__ import annotations
 
+import re
+from collections import Counter
+from collections.abc import Collection
 from typing import Any
 
 EDITABLE_ROLES = frozenset({"AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"})
@@ -22,6 +25,11 @@ _PLACEHOLDER_VALUE_KEYS = (
 _TEXT_KEYS = ("value", "title", "description")
 _MAX_PLACEHOLDER_SCAN_NODES = 256
 _MAX_PLACEHOLDER_SCAN_DEPTH = 12
+_MAX_PLACEHOLDER_TREE_NODES = 100_000
+
+_MARKDOWN_LIST_FIELD = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(?P<value>.*)$")
+_MARKDOWN_TAGGED_FIELD = re.compile(r"^\[[^]\r\n]{1,40}\]\s+(?P<value>.*)$")
+_MARKDOWN_NAMED_FIELD = re.compile(r"^(?P<label>\s*#{1,6}\s+[^:\r\n]{1,120}:)\s*(?P<value>.*)$")
 
 
 def _normalized(value: Any) -> str:
@@ -117,6 +125,180 @@ def _confirmed_placeholder_values(element: dict[str, Any]) -> set[str]:
     own_text = {text for key in _TEXT_KEYS if (text := _normalized(element.get(key)))}
     structural = _local_placeholder_values(element) - standard
     return standard | (structural & own_text)
+
+
+def _ocr_visible_placeholder_values(element: dict[str, Any]) -> set[str]:
+    """Return placeholder evidence that can actually be visible in pixels.
+
+    ``AXPlaceholderValue`` describes a control even while that control contains
+    real text.  In that state the hint is hidden and must not authorize removal
+    of matching OCR elsewhere in the window.  An empty value can display any
+    confirmed hint; a non-empty value can only be the Chromium failure mode
+    where AX exposes the visible placeholder itself as the control value.
+    """
+    confirmed = _confirmed_placeholder_values(element)
+    current_value = _normalized(element.get("value"))
+    if not current_value:
+        return confirmed
+    return {value for value in confirmed if value == current_value}
+
+
+def confirmed_placeholder_values(ax_tree: Any) -> tuple[str, ...]:
+    """Collect placeholder strings proven in the screenshot's focused surface.
+
+    OCR pixels cover the frontmost app's focused window, not background apps.
+    Keep one value occurrence per proven editable control so one empty composer
+    can consume at most one matching OCR field.  The walk is globally bounded
+    in addition to the per-editable subtree bounds above.
+    """
+    if not isinstance(ax_tree, dict):
+        return ()
+    apps = [app for app in ax_tree.get("apps") or [] if isinstance(app, dict)]
+    if not apps:
+        return ()
+    app = next((candidate for candidate in apps if candidate.get("is_frontmost")), apps[0])
+    windows = [window for window in app.get("windows") or [] if isinstance(window, dict)]
+    focused_windows = [window for window in windows if window.get("focused")]
+    selected_windows = focused_windows[:1] or windows[:1]
+
+    values: list[str] = []
+    stack: list[Any] = [
+        element
+        for window in reversed(selected_windows)
+        for element in reversed(window.get("elements") or [])
+        if isinstance(element, dict)
+    ]
+    seen = 0
+    while stack and seen < _MAX_PLACEHOLDER_TREE_NODES:
+        current = stack.pop()
+        seen += 1
+        if isinstance(current, dict):
+            if str(current.get("role") or "") in EDITABLE_ROLES:
+                values.extend(sorted(_ocr_visible_placeholder_values(current)))
+            stack.extend(
+                reversed(
+                    [child for child in current.get("children") or [] if isinstance(child, dict)]
+                )
+            )
+
+    # The app-level focused reference can carry the standard AX placeholder
+    # attribute even when the bounded window tree omitted the control. Avoid
+    # double-counting the same control when its value was already found there.
+    focused = app.get("focused_element")
+    if isinstance(focused, dict):
+        for value in sorted(_ocr_visible_placeholder_values(focused)):
+            if value not in values:
+                values.append(value)
+    return tuple(values)
+
+
+def _ocr_field_value(line: str) -> str | None:
+    """Return a Markdown field payload only when the whole field is isolated."""
+    stripped = line.strip()
+    match = _MARKDOWN_LIST_FIELD.fullmatch(stripped)
+    value = match.group("value").strip() if match else stripped
+    tagged = _MARKDOWN_TAGGED_FIELD.fullmatch(value)
+    if tagged:
+        return tagged.group("value").strip()
+    if match:
+        return value
+    named = _MARKDOWN_NAMED_FIELD.fullmatch(stripped)
+    if named:
+        return named.group("value").strip()
+    return None
+
+
+def _consume_exact(remaining: Counter[str], value: str) -> bool:
+    if not value or remaining[value] <= 0:
+        return False
+    remaining[value] -= 1
+    return True
+
+
+def _ocr_removable_values(line: str, candidates: Collection[str]) -> tuple[str, ...]:
+    """Identify exact removable units without deciding whether removal is safe."""
+    stripped = line.strip()
+    if stripped in candidates:
+        return (stripped,)
+    if stripped.startswith("|") and stripped.endswith("|"):
+        return tuple(
+            value for cell in stripped[1:-1].split("|") if (value := cell.strip()) in candidates
+        )
+    field_value = _ocr_field_value(line)
+    return (field_value,) if field_value in candidates else ()
+
+
+def _sanitize_ocr_table_line(line: str, remaining: Counter[str]) -> str | None:
+    """Clear exact placeholder cells in one simple Markdown table row."""
+    stripped = line.strip()
+    if not (stripped.startswith("|") and stripped.endswith("|")):
+        return line
+    cells = stripped[1:-1].split("|")
+    substantive = [cell.strip() for cell in cells if cell.strip()]
+    if not substantive or not any(remaining[cell] > 0 for cell in substantive):
+        return line
+    kept: list[str] = []
+    for cell in cells:
+        value = cell.strip()
+        kept.append("" if _consume_exact(remaining, value) else value)
+    if not any(kept):
+        return None
+    indent = line[: len(line) - len(line.lstrip())]
+    return indent + "| " + " | ".join(kept) + " |"
+
+
+def sanitize_ocr_text(text: str, placeholder_values: Collection[str]) -> str:
+    """Remove only exact OCR lines or fields backed by AX placeholder proof.
+
+    OCR is flat visual text, so it cannot safely use substring replacement: the
+    same words may also occur in a real conversation.  This helper therefore
+    removes a plain line, Markdown list payload, tagged list payload, named
+    field value, or table cell only when that entire unit exactly equals a
+    structurally confirmed placeholder.  All other OCR content is preserved.
+    """
+    proven = Counter(_normalized(value) for value in placeholder_values if _normalized(value))
+    if not text or not proven:
+        return text
+
+    # OCR has no persisted geometry, so multiple identical fields cannot be
+    # mapped safely back to one placeholder control.  Count candidates first;
+    # if a value occurs more often than its structural AX proof, preserve every
+    # occurrence of that value rather than guessing which one is UI chrome.
+    candidate_counts: Counter[str] = Counter()
+    for raw_line in text.splitlines():
+        candidate_counts.update(_ocr_removable_values(raw_line, proven))
+    remaining = Counter(
+        {value: count for value, count in proven.items() if candidate_counts[value] <= count}
+    )
+
+    clean_lines: list[str] = []
+    for raw_line in text.splitlines(keepends=True):
+        if raw_line.endswith("\r\n"):
+            line, ending = raw_line[:-2], "\r\n"
+        elif raw_line.endswith(("\r", "\n")):
+            line, ending = raw_line[:-1], raw_line[-1:]
+        else:
+            line, ending = raw_line, ""
+        stripped = line.strip()
+        if _consume_exact(remaining, stripped):
+            continue
+        table_line = _sanitize_ocr_table_line(line, remaining)
+        if table_line is None:
+            continue
+        if table_line != line:
+            clean_lines.append(table_line + ending)
+            continue
+        field_value = _ocr_field_value(line)
+        if field_value is None or not _consume_exact(remaining, field_value):
+            clean_lines.append(raw_line)
+            continue
+        named = _MARKDOWN_NAMED_FIELD.fullmatch(stripped)
+        if named:
+            indent = line[: len(line) - len(line.lstrip())]
+            clean_lines.append(indent + named.group("label") + ending)
+        # List fields consist only of the placeholder payload, so drop the
+        # entire line instead of retaining a meaningless bullet/tag.
+    return "".join(clean_lines)
 
 
 def _sanitize_element(

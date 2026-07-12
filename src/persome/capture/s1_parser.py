@@ -42,6 +42,7 @@ _VISIBLE_TEXT_MAX = 10_000
 _FOCUS_TITLE_MAX = 200
 _FOCUS_VALUE_MAX = 2_000
 _CMUX_TERMINAL_MARKER = "### [cmux terminal]"
+_OCR_PLACEHOLDER_VALUES = "_persome_ocr_placeholder_values"
 
 
 @dataclass
@@ -89,6 +90,21 @@ def enrich(capture: dict[str, Any]) -> None:
     capture["url"] = _extract_url(app_data)
 
 
+def ocr_placeholder_values(capture: dict[str, Any]) -> tuple[str, ...]:
+    """Return trusted placeholder evidence for this capture's OCR surface."""
+    cached = capture.get(_OCR_PLACEHOLDER_VALUES)
+    # JSON cannot encode tuples, so this type also distinguishes the internal
+    # replay cache below from an untrusted key in a persisted/ingested record.
+    if isinstance(cached, tuple) and all(isinstance(value, str) for value in cached):
+        return cached
+    return placeholder.confirmed_placeholder_values(capture.get("ax_tree"))
+
+
+def sanitize_ocr_text(capture: dict[str, Any], text: str) -> str:
+    """Filter OCR using only exact fields backed by this capture's raw AX."""
+    return placeholder.sanitize_ocr_text(text, ocr_placeholder_values(capture))
+
+
 def sanitize_capture(capture: dict[str, Any], *, replace_ax_tree: bool = False) -> dict[str, Any]:
     """Return a replay-safe capture without mutating the raw record.
 
@@ -99,6 +115,7 @@ def sanitize_capture(capture: dict[str, Any], *, replace_ax_tree: bool = False) 
     identity.
     """
     ax_tree = capture.get("ax_tree")
+    ocr_values = ocr_placeholder_values(capture) if replace_ax_tree else ()
     clean_ax_tree = placeholder.sanitize_ax_tree(ax_tree) if isinstance(ax_tree, dict) else ax_tree
     original_app = _frontmost_app(ax_tree) if isinstance(ax_tree, dict) else None
     trigger = capture.get("trigger")
@@ -109,11 +126,16 @@ def sanitize_capture(capture: dict[str, Any], *, replace_ax_tree: bool = False) 
     )
     projection_changed = clean_ax_tree is not ax_tree
     trigger_changed = clean_trigger is not trigger
-    if not projection_changed and not trigger_changed:
+    cache_changed = (
+        replace_ax_tree and bool(ocr_values) and ocr_values != capture.get(_OCR_PLACEHOLDER_VALUES)
+    )
+    if not projection_changed and not trigger_changed and not cache_changed:
         return capture
     clean = dict(capture)
     if replace_ax_tree and projection_changed:
         clean["ax_tree"] = clean_ax_tree
+    if replace_ax_tree and ocr_values:
+        clean[_OCR_PLACEHOLDER_VALUES] = ocr_values
     if trigger_changed:
         clean["trigger"] = clean_trigger
     if not projection_changed:
