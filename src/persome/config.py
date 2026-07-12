@@ -362,6 +362,11 @@ class EvomemConfig:
     #     evomem-project-markdown --live --force` first to flush inversion-era
     #     writes into markdown, then `rebuild-index`.
     write_authority: str = "markdown"
+    # Local vector recall (personal-fork extension): fuse hashed n-gram cosine
+    # similarity over active chain heads into EvoMemory recall via RRF. Fully
+    # offline and deterministic; OFF by default — disabled behavior is
+    # byte-identical to the lexical-only path.
+    vector_recall_enabled: bool = False
     # Nightly semantic-contradiction self-check (memory-rebuild spec §4.4,
     # writer/contradiction_check.py): at the 23:55 harvest, pair same-file live
     # facts deterministically (char-bigram band similarity — same subject,
@@ -728,6 +733,7 @@ integrity_check_enabled = true     # chain-invariant self-check at daemon startu
 freeze_writes_on_failure = false   # when a STRUCTURAL check fails, freeze memory write paths (reads stay available) until a human decides; off = alert-only by default
 shadow_write_enabled = true        # Mirror Markdown writes into evo_nodes; failures never block the primary write
 write_authority = "markdown"       # "markdown" is the default truth; "evomem" makes Markdown a projection
+vector_recall_enabled = false      # Fuse local hashed n-gram vector recall into memory search (personal-fork extension)
 contradiction_check_enabled = false # Nightly LLM-assisted contradiction marking; never auto-supersedes
 contradiction_max_pairs = 10       # Maximum candidate pairs judged per night
 

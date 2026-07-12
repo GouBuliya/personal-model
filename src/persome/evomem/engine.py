@@ -259,5 +259,10 @@ class EvoMemory:
         return ranked[:top_k]
 
     def _recall(self, query: str, *, top_k: int) -> list[dict]:
-        """Recall active nodes through the deterministic substring/token path."""
-        return self._lexical_recall(query, top_k=top_k)
+        """Deterministic lexical recall, optionally fused with local vector recall."""
+        from . import vector_recall
+
+        lexical = self._lexical_recall(query, top_k=top_k)
+        return vector_recall.fuse(
+            query, lexical, top_k=top_k, candidates_provider=self._store.all_latest
+        )
