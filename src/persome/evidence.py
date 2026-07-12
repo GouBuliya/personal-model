@@ -109,9 +109,7 @@ def _base(
     }
 
 
-def _nearby_capture_links(
-    conn: sqlite3.Connection, timestamp: str | None
-) -> list[dict[str, Any]]:
+def _nearby_capture_links(conn: sqlite3.Connection, timestamp: str | None) -> list[dict[str, Any]]:
     if not timestamp or not _table_exists(conn, "captures"):
         return []
     try:
@@ -455,15 +453,9 @@ def resolve_evidence(conn: sqlite3.Connection, reference: str) -> dict[str, Any]
     # checked before generic activities; bare ids use the same deterministic
     # order and then fall through to captures/model geometry.
     resolvers = (
-        lambda: _resolve_entry(
-            conn, original=original, identifier=identifier, receipt=receipt
-        ),
-        lambda: _resolve_evo_node(
-            conn, original=original, identifier=identifier, receipt=receipt
-        ),
-        lambda: _resolve_activity(
-            conn, original=original, identifier=identifier, receipt=receipt
-        ),
+        lambda: _resolve_entry(conn, original=original, identifier=identifier, receipt=receipt),
+        lambda: _resolve_evo_node(conn, original=original, identifier=identifier, receipt=receipt),
+        lambda: _resolve_activity(conn, original=original, identifier=identifier, receipt=receipt),
         lambda: _resolve_capture(conn, original=original, identifier=identifier),
         lambda: _resolve_geometry(conn, original=original, identifier=identifier),
     )
