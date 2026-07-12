@@ -262,7 +262,8 @@ class EvoMemory:
         """Deterministic lexical recall, optionally fused with local vector recall."""
         from . import vector_recall
 
-        lexical = self._lexical_recall(query, top_k=top_k)
+        expanded = vector_recall.expand_query(query)
+        lexical = self._lexical_recall(expanded, top_k=top_k)
         return vector_recall.fuse(
-            query, lexical, top_k=top_k, candidates_provider=self._store.all_latest
+            expanded, lexical, top_k=top_k, candidates_provider=self._store.all_latest
         )

@@ -200,3 +200,130 @@ def test_dense_backend_fails_open_when_service_unreachable() -> None:
         cfg=_dense_cfg(vector_recall_ollama_url="http://127.0.0.1:1"),
     )
     assert out is lexical
+
+
+def _cfg_full(**overrides):
+    base = {"vector_recall_enabled": True}
+    base.update(overrides)
+    return SimpleNamespace(evomem=SimpleNamespace(**base))
+
+
+def test_weighted_rrf_head_weights_flip_the_ranking() -> None:
+    lex_node = _node("n-lex", "afternoon tea break")
+    vec_node = _node("n-coffee", "\u559c\u6b22\u559d\u5496\u5561")
+    lexical = [{"node_id": "n-lex", "score": 1.0, "node": lex_node}]
+    provider = lambda: [lex_node, vec_node]  # noqa: E731
+
+    favor_lexical = vector_recall.fuse(
+        "\u5496\u5561\u7231\u597d",
+        lexical,
+        top_k=2,
+        candidates_provider=provider,
+        cfg=_cfg_full(vector_recall_lexical_weight=3.0, vector_recall_vector_weight=1.0),
+    )
+    assert favor_lexical[0]["node_id"] == "n-lex"
+
+    favor_vector = vector_recall.fuse(
+        "\u5496\u5561\u7231\u597d",
+        lexical,
+        top_k=2,
+        candidates_provider=provider,
+        cfg=_cfg_full(vector_recall_lexical_weight=1.0, vector_recall_vector_weight=3.0),
+    )
+    assert favor_vector[0]["node_id"] == "n-coffee"
+
+
+def test_invalid_weights_fall_back_to_neutral() -> None:
+    assert vector_recall._clean_weight("nan") == 1.0
+    assert vector_recall._clean_weight(-2.0) == 1.0
+    assert vector_recall._clean_weight(None) == 1.0
+    assert vector_recall._clean_weight(2.5) == 2.5
+    assert (
+        vector_recall._diversity_lambda(SimpleNamespace(vector_recall_diversity_lambda=1.5)) == 0.0
+    )
+    assert (
+        vector_recall._diversity_lambda(SimpleNamespace(vector_recall_diversity_lambda=0.3)) == 0.3
+    )
+
+
+def test_mmr_prefers_a_diverse_second_pick() -> None:
+    dup_a = {"node_id": "a", "score": 1.0, "node": _node("a", "morning espresso ritual daily")}
+    dup_b = {"node_id": "b", "score": 0.95, "node": _node("b", "daily morning espresso ritual")}
+    diverse = {"node_id": "c", "score": 0.9, "node": _node("c", "runs along the river at dawn")}
+    ranked = [dup_a, dup_b, diverse]
+    plain = vector_recall._mmr_select(ranked, top_k=2, diversity_lambda=0.0)
+    assert [h["node_id"] for h in plain] == ["a", "b"]
+    mmr = vector_recall._mmr_select(ranked, top_k=2, diversity_lambda=0.6)
+    assert [h["node_id"] for h in mmr] == ["a", "c"]
+
+
+def test_expand_query_disabled_returns_raw() -> None:
+    assert vector_recall.expand_query("who is alice", cfg=_cfg_full()) == "who is alice"
+    off = SimpleNamespace(evomem=SimpleNamespace(vector_recall_enabled=False))
+    assert vector_recall.expand_query("who is alice", cfg=off) == "who is alice"
+
+
+def test_expand_query_prepends_views_and_caches(monkeypatch) -> None:
+    from persome.writer import llm as llm_mod
+
+    calls: list[str] = []
+
+    def fake_call(cfg, stage, *, messages, **kwargs):
+        calls.append(stage)
+        content = "USER met Alice in Berlin.\nalice berlin conference"
+        message = SimpleNamespace(content=content)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    monkeypatch.setattr(llm_mod, "call_llm", fake_call)
+    vector_recall._REWRITE_CACHE.clear()
+    cfg = _cfg_full(vector_recall_query_rewrite=True)
+    expanded = vector_recall.expand_query("where did I meet alice?", cfg=cfg)
+    assert expanded == (
+        "USER met Alice in Berlin.\nalice berlin conference\nwhere did I meet alice?"
+    )
+    # Second call is served from the rewrite cache.
+    vector_recall.expand_query("where did I meet alice?", cfg=cfg)
+    assert calls == ["vector_recall_rewrite"]
+
+
+def test_expand_query_fails_open_on_llm_error(monkeypatch) -> None:
+    from persome.writer import llm as llm_mod
+
+    def broken(cfg, stage, *, messages, **kwargs):
+        raise RuntimeError("no credential")
+
+    monkeypatch.setattr(llm_mod, "call_llm", broken)
+    vector_recall._REWRITE_CACHE.clear()
+    cfg = _cfg_full(vector_recall_query_rewrite=True)
+    assert vector_recall.expand_query("where did I meet alice?", cfg=cfg) == (
+        "where did I meet alice?"
+    )
+
+
+def test_mmr_overselects_the_vector_pool_so_diversity_has_material(monkeypatch) -> None:
+    fake = _FakeEmbedder()
+    monkeypatch.setattr(vector_recall, "_make_embedder", lambda _evomem: fake)
+    vector_recall._EMBED_CACHE.clear()
+    candidates = [
+        _node("n-coffee-1", "morning coffee ritual daily"),
+        _node("n-coffee-2", "daily morning coffee ritual"),
+        _node("n-tea", "afternoon tea break"),
+    ]
+    plain = vector_recall.fuse(
+        "coffee",
+        [],
+        top_k=2,
+        candidates_provider=lambda: candidates,
+        cfg=_dense_cfg(vector_recall_diversity_lambda=0.0),
+    )
+    assert [h["node_id"] for h in plain] == ["n-coffee-1", "n-coffee-2"]
+    vector_recall._EMBED_CACHE.clear()
+    diverse = vector_recall.fuse(
+        "coffee",
+        [],
+        top_k=2,
+        candidates_provider=lambda: candidates,
+        cfg=_dense_cfg(vector_recall_diversity_lambda=0.6),
+    )
+    # Without pool over-selection the tea memory would never reach MMR.
+    assert [h["node_id"] for h in diverse] == ["n-coffee-1", "n-tea"]

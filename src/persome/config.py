@@ -371,9 +371,16 @@ class EvomemConfig:
     # (local dense embeddings via an Ollama server; unreachable or
     # contract-violating responses fall back to lexical hits).
     vector_recall_backend: str = "hash"
-    vector_recall_model: str = "nomic-embed-text"
+    vector_recall_model: str = "bge-m3"
     vector_recall_ollama_url: str = "http://127.0.0.1:11434"
-    vector_recall_dimension: int = 768
+    vector_recall_dimension: int = 1024
+    # Weighted RRF head weights, greedy-MMR diversity (0 disables), and the
+    # LLM statement+keyword query rewrite (needs a configured LLM credential;
+    # failures fall back to the raw query).
+    vector_recall_lexical_weight: float = 1.0
+    vector_recall_vector_weight: float = 1.0
+    vector_recall_diversity_lambda: float = 0.0
+    vector_recall_query_rewrite: bool = False
     # Nightly semantic-contradiction self-check (memory-rebuild spec §4.4,
     # writer/contradiction_check.py): at the 23:55 harvest, pair same-file live
     # facts deterministically (char-bigram band similarity — same subject,
@@ -742,6 +749,8 @@ shadow_write_enabled = true        # Mirror Markdown writes into evo_nodes; fail
 write_authority = "markdown"       # "markdown" is the default truth; "evomem" makes Markdown a projection
 vector_recall_enabled = false      # Fuse local hashed n-gram vector recall into memory search (personal-fork extension)
 vector_recall_backend = "hash"     # "hash" (offline n-grams) or "ollama" (local dense embeddings, needs an Ollama server)
+vector_recall_diversity_lambda = 0.0  # >0 enables greedy-MMR diversity over fused results (e.g. 0.3)
+vector_recall_query_rewrite = false   # Prepend LLM statement+keyword retrieval views to every memory query
 contradiction_check_enabled = false # Nightly LLM-assisted contradiction marking; never auto-supersedes
 contradiction_max_pairs = 10       # Maximum candidate pairs judged per night
 

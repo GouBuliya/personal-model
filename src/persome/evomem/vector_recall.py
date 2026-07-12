@@ -164,8 +164,8 @@ def _content_digest(text: str) -> str:
 def _make_embedder(evomem: Any) -> OllamaEmbedder:
     return OllamaEmbedder(
         base_url=str(getattr(evomem, "vector_recall_ollama_url", "http://127.0.0.1:11434")),
-        model=str(getattr(evomem, "vector_recall_model", "nomic-embed-text")),
-        expected_dimension=int(getattr(evomem, "vector_recall_dimension", 768)),
+        model=str(getattr(evomem, "vector_recall_model", "bge-m3")),
+        expected_dimension=int(getattr(evomem, "vector_recall_dimension", 1024)),
     )
 
 
@@ -209,6 +209,137 @@ def _dense_ranking(
     return [node for _, _, node in scored[:top_k]]
 
 
+# ── weighted fusion, diversity, and query expansion (persome-bench ports) ────
+
+
+def _clean_weight(value: Any) -> float:
+    try:
+        weight = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    return weight if math.isfinite(weight) and weight >= 0.0 else 1.0
+
+
+def _head_weights(evomem: Any) -> tuple[float, float]:
+    return (
+        _clean_weight(getattr(evomem, "vector_recall_lexical_weight", 1.0)),
+        _clean_weight(getattr(evomem, "vector_recall_vector_weight", 1.0)),
+    )
+
+
+def _diversity_lambda(evomem: Any) -> float:
+    try:
+        value = float(getattr(evomem, "vector_recall_diversity_lambda", 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+    return value if math.isfinite(value) and 0.0 <= value < 1.0 else 0.0
+
+
+def _mmr_select(ranked: list[dict], *, top_k: int, diversity_lambda: float) -> list[dict]:
+    """Deterministic greedy maximal-marginal-relevance selection.
+
+    Ported from persome-bench: relevance is the fused score normalized over
+    the pool; redundancy is the maximum feature-set Jaccard similarity against
+    already-selected hits. Ties fall back to the fused rank, so
+    diversity_lambda=0 degenerates to the plain rank-order prefix.
+    """
+    if not ranked or diversity_lambda <= 0.0:
+        return ranked[:top_k]
+    max_score = max(hit["score"] for hit in ranked) or 1.0
+    features = {
+        hit["node_id"]: set(_features(getattr(hit["node"], "content", "") or "")) for hit in ranked
+    }
+    order = {hit["node_id"]: index for index, hit in enumerate(ranked)}
+    selected: list[dict] = []
+    remaining = list(ranked)
+    while remaining and len(selected) < top_k:
+        best: dict | None = None
+        best_key: tuple[float, int] | None = None
+        for hit in remaining:
+            terms = features[hit["node_id"]]
+            redundancy = 0.0
+            for chosen in selected:
+                chosen_terms = features[chosen["node_id"]]
+                union = len(terms | chosen_terms)
+                if union:
+                    redundancy = max(redundancy, len(terms & chosen_terms) / union)
+            adjusted = hit["score"] / max_score - diversity_lambda * redundancy
+            key = (-adjusted, order[hit["node_id"]])
+            if best_key is None or key < best_key:
+                best = hit
+                best_key = key
+        assert best is not None
+        selected.append(best)
+        remaining.remove(best)
+    return selected
+
+
+# Ported verbatim from persome-bench: two retrieval views, one per line.
+_QUERY_REWRITE_PROMPT = (
+    "Rewrite the question as two retrieval views, one per line. Line 1: the "
+    "single declarative statement that would answer it, written about USER "
+    "in the third person, preserving every name, place, number, and date "
+    "from the question, resolving nothing new and not answering or "
+    "inventing facts - leave the unknown quantity implicit. Line 2: the "
+    "distinctive retrieval keywords of the question (names, places, "
+    "objects, activities, dates), space-separated, no generic words. "
+    "Return only these two lines."
+)
+_REWRITE_MAX_CHARS = 600
+_REWRITE_CACHE_MAX = 256
+_rewrite_lock = threading.Lock()
+_REWRITE_CACHE: dict[str, str] = {}
+
+
+def expand_query(query: str, cfg: Any | None = None) -> str:
+    """Prepend LLM statement+keyword retrieval views to the query.
+
+    Ported from persome-bench: the expanded text feeds BOTH the lexical and
+    vector paths, so the keyword view widens token recall while the statement
+    view sharpens dense similarity. Disabled (the default) or on any failure
+    the raw query is returned unchanged; rewrites are cached per query text.
+    """
+    try:
+        evomem = _evomem_cfg(cfg)
+        if not (
+            bool(getattr(evomem, "vector_recall_enabled", False))
+            and bool(getattr(evomem, "vector_recall_query_rewrite", False))
+        ):
+            return query
+        text = (query or "").strip()
+        if not text:
+            return query
+        with _rewrite_lock:
+            cached = _REWRITE_CACHE.get(text)
+        if cached is not None:
+            return cached
+
+        from .. import config as config_mod
+        from ..writer import llm as llm_mod
+
+        full_cfg = cfg if cfg is not None and hasattr(cfg, "model_for") else config_mod.load()
+        response = llm_mod.call_llm(
+            full_cfg,
+            "vector_recall_rewrite",
+            messages=[
+                {"role": "system", "content": _QUERY_REWRITE_PROMPT},
+                {"role": "user", "content": text},
+            ],
+        )
+        rewritten = (response.choices[0].message.content or "").strip()
+        expanded = query
+        if rewritten and len(rewritten) <= _REWRITE_MAX_CHARS:
+            expanded = f"{rewritten}\n{text}"
+        with _rewrite_lock:
+            if len(_REWRITE_CACHE) >= _REWRITE_CACHE_MAX:
+                _REWRITE_CACHE.pop(next(iter(_REWRITE_CACHE)))
+            _REWRITE_CACHE[text] = expanded
+        return expanded
+    except Exception:  # noqa: BLE001 - recall must never break on the rewrite side
+        _log.debug("vector_recall: query rewrite failed; using the raw query", exc_info=True)
+        return query
+
+
 # ── fusion ───────────────────────────────────────────────────────────────────
 
 
@@ -247,23 +378,30 @@ def fuse(
         evomem = _evomem_cfg(cfg)
         if not bool(getattr(evomem, "vector_recall_enabled", False)):
             return lexical_hits
-        vector_nodes = _vector_ranking(query, candidates_provider(), top_k=top_k, evomem=evomem)
+        # MMR can only trade a redundant hit for a diverse one that is still in
+        # the pool, so with diversity enabled the vector head over-selects and
+        # the final top_k cut happens after selection (persome-bench fuses the
+        # unfiltered candidate set the same way).
+        diversity_lambda = _diversity_lambda(evomem)
+        pool_k = top_k if diversity_lambda <= 0.0 else max(top_k * 4, top_k + 8)
+        vector_nodes = _vector_ranking(query, candidates_provider(), top_k=pool_k, evomem=evomem)
         if not vector_nodes:
             return lexical_hits
 
+        lexical_weight, vector_weight = _head_weights(evomem)
         fused: dict[str, dict] = {}
         for rank, hit in enumerate(lexical_hits):
             entry = {"node_id": hit["node_id"], "score": 0.0, "node": hit["node"]}
-            entry["score"] += 1.0 / (_RRF_K + rank + 1)
+            entry["score"] += lexical_weight / (_RRF_K + rank + 1)
             fused[hit["node_id"]] = entry
         for rank, node in enumerate(vector_nodes):
             entry = fused.setdefault(
                 node.node_id, {"node_id": node.node_id, "score": 0.0, "node": node}
             )
-            entry["score"] += 1.0 / (_RRF_K + rank + 1)
+            entry["score"] += vector_weight / (_RRF_K + rank + 1)
 
         ranked = sorted(fused.values(), key=lambda item: (-item["score"], item["node_id"]))
-        return ranked[:top_k]
+        return _mmr_select(ranked, top_k=top_k, diversity_lambda=diversity_lambda)
     except Exception:  # noqa: BLE001 — recall must never break on the vector side
         _log.debug("vector_recall: fuse failed; falling back to lexical hits", exc_info=True)
         return lexical_hits
