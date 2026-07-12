@@ -367,6 +367,13 @@ class EvomemConfig:
     # offline and deterministic; OFF by default — disabled behavior is
     # byte-identical to the lexical-only path.
     vector_recall_enabled: bool = False
+    # Vector backend: "hash" (zero-dependency hashed n-grams) or "ollama"
+    # (local dense embeddings via an Ollama server; unreachable or
+    # contract-violating responses fall back to lexical hits).
+    vector_recall_backend: str = "hash"
+    vector_recall_model: str = "nomic-embed-text"
+    vector_recall_ollama_url: str = "http://127.0.0.1:11434"
+    vector_recall_dimension: int = 768
     # Nightly semantic-contradiction self-check (memory-rebuild spec §4.4,
     # writer/contradiction_check.py): at the 23:55 harvest, pair same-file live
     # facts deterministically (char-bigram band similarity — same subject,
@@ -734,6 +741,7 @@ freeze_writes_on_failure = false   # when a STRUCTURAL check fails, freeze memor
 shadow_write_enabled = true        # Mirror Markdown writes into evo_nodes; failures never block the primary write
 write_authority = "markdown"       # "markdown" is the default truth; "evomem" makes Markdown a projection
 vector_recall_enabled = false      # Fuse local hashed n-gram vector recall into memory search (personal-fork extension)
+vector_recall_backend = "hash"     # "hash" (offline n-grams) or "ollama" (local dense embeddings, needs an Ollama server)
 contradiction_check_enabled = false # Nightly LLM-assisted contradiction marking; never auto-supersedes
 contradiction_max_pairs = 10       # Maximum candidate pairs judged per night
 

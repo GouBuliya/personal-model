@@ -105,3 +105,98 @@ def test_engine_search_fuses_when_enabled(ac_root, monkeypatch) -> None:
     # No full token overlap needed: the CJK bigram for "coffee" carries the hit.
     hits = mem.search("\u5496\u5561\u7231\u597d")
     assert coffee in [h["node"].content for h in hits]
+
+
+def _dense_cfg(**overrides):
+    base = {
+        "vector_recall_enabled": True,
+        "vector_recall_backend": "ollama",
+        "vector_recall_model": "fake-embed",
+        "vector_recall_dimension": 3,
+    }
+    base.update(overrides)
+    return SimpleNamespace(evomem=SimpleNamespace(**base))
+
+
+class _FakeEmbedder:
+    """Deterministic stand-in for OllamaEmbedder with call accounting."""
+
+    model = "fake-embed"
+
+    def __init__(self) -> None:
+        self.batch_calls: list[list[str]] = []
+
+    def _vector(self, text: str) -> list[float]:
+        if "coffee" in text:
+            return [1.0, 0.0, 0.0]
+        if "tea" in text:
+            return [0.0, 1.0, 0.0]
+        return [0.0, 0.0, 1.0]
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        self.batch_calls.append(list(texts))
+        return [self._vector(t) for t in texts]
+
+    def embed(self, text: str) -> list[float]:
+        return self._vector(text)
+
+
+def test_ollama_contract_validation_rejects_bad_payloads() -> None:
+    import pytest
+
+    embedder = vector_recall.OllamaEmbedder(expected_dimension=3)
+    good = {"embeddings": [[1.0, 0.0, 0.0]]}
+    assert embedder._vectors(good, expected_count=1) == [[1.0, 0.0, 0.0]]
+    with pytest.raises(vector_recall.EmbeddingContractError):
+        embedder._vectors({"embeddings": [[1.0, 0.0]]}, expected_count=1)
+    with pytest.raises(vector_recall.EmbeddingContractError):
+        embedder._vectors({"embeddings": []}, expected_count=1)
+    with pytest.raises(vector_recall.EmbeddingContractError):
+        embedder._vectors({"embeddings": [[1.0, "x", 0.0]]}, expected_count=1)
+
+
+def test_dense_backend_ranks_by_embedding_similarity(monkeypatch) -> None:
+    fake = _FakeEmbedder()
+    monkeypatch.setattr(vector_recall, "_make_embedder", lambda _evomem: fake)
+    vector_recall._EMBED_CACHE.clear()
+    coffee = _node("n-coffee", "morning coffee ritual")
+    tea = _node("n-tea", "afternoon tea break")
+    out = vector_recall.fuse(
+        "fresh coffee brew",
+        [],
+        top_k=1,
+        candidates_provider=lambda: [tea, coffee],
+        cfg=_dense_cfg(),
+    )
+    assert [hit["node_id"] for hit in out] == ["n-coffee"]
+
+
+def test_dense_backend_caches_unchanged_candidates(monkeypatch) -> None:
+    fake = _FakeEmbedder()
+    monkeypatch.setattr(vector_recall, "_make_embedder", lambda _evomem: fake)
+    vector_recall._EMBED_CACHE.clear()
+    nodes = [_node("n-coffee", "morning coffee ritual"), _node("n-tea", "afternoon tea break")]
+    for _ in range(2):
+        vector_recall.fuse(
+            "fresh coffee brew",
+            [],
+            top_k=2,
+            candidates_provider=lambda: nodes,
+            cfg=_dense_cfg(),
+        )
+    # Candidate embeddings were batched exactly once; the second query reused the cache.
+    assert len(fake.batch_calls) == 1
+    assert sorted(fake.batch_calls[0]) == ["afternoon tea break", "morning coffee ritual"]
+
+
+def test_dense_backend_fails_open_when_service_unreachable() -> None:
+    vector_recall._EMBED_CACHE.clear()
+    lexical = [{"node_id": "a", "score": 1.0, "node": _node("a", "text")}]
+    out = vector_recall.fuse(
+        "query",
+        lexical,
+        top_k=5,
+        candidates_provider=lambda: [_node("b", "coffee")],
+        cfg=_dense_cfg(vector_recall_ollama_url="http://127.0.0.1:1"),
+    )
+    assert out is lexical
