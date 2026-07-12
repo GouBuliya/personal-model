@@ -54,15 +54,11 @@ def render_contributors(config: dict[str, object]) -> str:
     if not isinstance(contributors, list):
         raise ValueError("contributors must be a list")
 
-    per_line = int(config.get("contributorsPerLine", 2))
     image_size = int(config.get("imageSize", 56))
-    if per_line < 1:
-        raise ValueError("contributorsPerLine must be at least 1")
     if image_size < 1:
         raise ValueError("imageSize must be at least 1")
 
     cards: list[str] = []
-    card_width = 100 / per_line
     for raw in contributors:
         if not isinstance(raw, dict):
             raise ValueError("each contributor must be an object")
@@ -76,20 +72,17 @@ def render_contributors(config: dict[str, object]) -> str:
         cards.append(
             "\n".join(
                 (
-                    f'      <td valign="middle" width="{card_width:.2f}%">',
-                    f'        <a href="{profile}"><img src="{avatar}" width="{image_size}" align="left" alt="{name}" /></a>',
-                    f'        &nbsp;<strong><a href="{profile}">{name}</a></strong><br />',
-                    f"        &nbsp;<sub>{labels}</sub>",
-                    "      </td>",
+                    "<p>",
+                    f'  <a href="{profile}"><img src="{avatar}" width="{image_size}" align="left" alt="{name}" /></a>',
+                    f'  &nbsp;&nbsp;<strong><a href="{profile}">{name}</a></strong><br />',
+                    f"  &nbsp;&nbsp;<sub>{labels}</sub>",
+                    "</p>",
+                    '<br clear="left" />',
                 )
             )
         )
 
-    rows = [
-        "\n".join(("    <tr>", *cards[index : index + per_line], "    </tr>"))
-        for index in range(0, len(cards), per_line)
-    ]
-    return "\n".join(('<table width="100%">', "  <tbody>", *rows, "  </tbody>", "</table>"))
+    return "\n".join(cards)
 
 
 def update_readme(readme: str, rendered: str) -> str:

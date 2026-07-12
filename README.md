@@ -434,17 +434,12 @@ and workflow permissions default to read-only.
 Persome is shaped by people across engineering, design, research, and community.
 
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
-<table width="100%">
-  <tbody>
-    <tr>
-      <td valign="middle" width="50.00%">
-        <a href="https://github.com/Singularity-tian"><img src="https://avatars.githubusercontent.com/u/113085728?v=4&amp;size=112" width="56" align="left" alt="Singularity" /></a>
-        &nbsp;<strong><a href="https://github.com/Singularity-tian">Singularity</a></strong><br />
-        &nbsp;<sub>💻&nbsp;Code &nbsp;·&nbsp; 🚧&nbsp;Maintenance</sub>
-      </td>
-    </tr>
-  </tbody>
-</table>
+<p>
+  <a href="https://github.com/Singularity-tian"><img src="https://avatars.githubusercontent.com/u/113085728?v=4&amp;size=112" width="56" align="left" alt="Singularity" /></a>
+  &nbsp;&nbsp;<strong><a href="https://github.com/Singularity-tian">Singularity</a></strong><br />
+  &nbsp;&nbsp;<sub>💻&nbsp;Code &nbsp;·&nbsp; 🚧&nbsp;Maintenance</sub>
+</p>
+<br clear="left" />
 <!-- ALL-CONTRIBUTORS-LIST:END -->
 
 <sub>Contribution labels follow the

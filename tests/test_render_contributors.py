@@ -30,9 +30,9 @@ def test_compact_cards_escape_profile_data_and_wrap_rows() -> None:
         }
     )
 
-    assert rendered.count("<tr>") == 2
-    assert '<table width="100%">' in rendered
-    assert rendered.count('<td valign="middle" width="50.00%">') == 3
+    assert "<table" not in rendered
+    assert rendered.count("<p>") == 3
+    assert rendered.count('<br clear="left" />') == 3
     assert "Example &lt;Person&gt;" in rendered
     assert "&quot;profile&quot;" in rendered
     assert "version=1&amp;size=112" in rendered
