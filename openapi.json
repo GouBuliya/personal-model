@@ -211,7 +211,7 @@
           "model"
         ],
         "summary": "Model Evidence",
-        "description": "Resolve one model receipt or object id into its evidence and nearby context.\n\nExplicit stored lineage is returned in ``sources``. Time-adjacent captures\nare returned separately in ``context`` and are never presented as direct\nprovenance. Unknown or expired references fail open with ``status=missing``\nso a historical receipt remains inspectable even after raw retention ends.",
+        "description": "Resolve one model receipt or object id into its evidence and nearby context.\n\nExplicit stored lineage is returned in ``sources``. Time-adjacent captures\nare returned separately in ``context`` and are never presented as direct\nprovenance. ``label`` is the human-readable display title; Point version\nlinks are returned separately in ``history``. Unknown or expired references\nfail open with ``status=missing`` so a historical receipt remains inspectable\neven after raw retention ends.",
         "operationId": "model_evidence_model_evidence_get",
         "parameters": [
           {

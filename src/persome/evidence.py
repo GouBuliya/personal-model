@@ -43,6 +43,16 @@ def _trim(value: Any, limit: int = _SUMMARY_LIMIT) -> str:
     return str(value or "").strip()[:limit]
 
 
+def _humanize_path(value: str | None) -> str:
+    name = str(value or "").rsplit("/", 1)[-1].removesuffix(".md").removesuffix(".json")
+    return " ".join(part.capitalize() for part in name.replace("_", "-").split("-") if part)
+
+
+def _short_label(value: Any, fallback: str, limit: int = 140) -> str:
+    text = " ".join(str(value or "").split())
+    return text[:limit] if text else fallback
+
+
 def parse_reference(reference: str) -> tuple[str, str | None, str | None]:
     """Return ``(identifier, path_hint, canonical_receipt)``.
 
@@ -87,12 +97,14 @@ def _base(
     kind: str,
     identifier: str,
     status: str,
+    label: str = "",
     summary: str = "",
     timestamp: str | None = None,
     path: str | None = None,
     metadata: dict[str, Any] | None = None,
     sources: list[dict[str, Any]] | None = None,
     context: list[dict[str, Any]] | None = None,
+    history: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "reference": reference,
@@ -100,13 +112,54 @@ def _base(
         "kind": kind,
         "id": identifier,
         "status": status,
+        "label": label or identifier,
         "summary": summary,
         "timestamp": timestamp,
         "path": path,
         "metadata": metadata or {},
         "sources": sources or [],
         "context": context or [],
+        "history": history or [],
     }
+
+
+def _evo_reference(conn: sqlite3.Connection, node_id: str) -> tuple[str, str]:
+    try:
+        row = conn.execute(
+            "SELECT file_name, content FROM evo_nodes"
+            " WHERE node_id=? ORDER BY is_latest DESC LIMIT 1",
+            (node_id,),
+        ).fetchone()
+    except sqlite3.Error:
+        row = None
+    if row is None:
+        return node_id, node_id
+    path = str(row[0] or "")
+    label = _short_label(row[1], _humanize_path(path) or node_id)
+    return f"⟨{node_id}:{path}⟩", label
+
+
+def _reference_label(conn: sqlite3.Connection, reference: str) -> str:
+    identifier, path_hint, _receipt = parse_reference(reference)
+    if _table_exists(conn, "entries"):
+        row = conn.execute("SELECT content, path FROM entries WHERE id=?", (identifier,)).fetchone()
+        if row is not None:
+            return _short_label(row[0], _humanize_path(str(row[1] or "")) or identifier)
+    if _table_exists(conn, "evo_nodes"):
+        row = conn.execute(
+            "SELECT content, file_name FROM evo_nodes"
+            " WHERE node_id=? ORDER BY is_latest DESC LIMIT 1",
+            (identifier,),
+        ).fetchone()
+        if row is not None:
+            return _short_label(row[0], _humanize_path(str(row[1] or "")) or identifier)
+    if _table_exists(conn, "captures"):
+        row = conn.execute(
+            "SELECT app_name, window_title FROM captures WHERE id=?", (identifier,)
+        ).fetchone()
+        if row is not None:
+            return " · ".join(str(value) for value in row if value) or identifier
+    return _humanize_path(path_hint) or identifier
 
 
 def _nearby_capture_links(conn: sqlite3.Connection, timestamp: str | None) -> list[dict[str, Any]]:
@@ -184,20 +237,13 @@ def _resolve_entry(
         kind="memory",
         identifier=identifier,
         status="superseded" if row[5] else "active",
+        label=_short_label(row[4], _humanize_path(path) or identifier),
         summary=_trim(row[4]),
         timestamp=timestamp,
         path=path,
         metadata=metadata,
         context=_nearby_capture_links(conn, timestamp),
     )
-
-
-def _evo_receipt(conn: sqlite3.Connection, node_id: str) -> str:
-    row = conn.execute(
-        "SELECT file_name FROM evo_nodes WHERE node_id=? ORDER BY is_latest DESC LIMIT 1",
-        (node_id,),
-    ).fetchone()
-    return f"⟨{node_id}:{str(row[0] or '')}⟩" if row is not None else node_id
 
 
 def _resolve_evo_node(
@@ -213,7 +259,7 @@ def _resolve_evo_node(
         row = conn.execute(
             "SELECT node_id, content, layer, supersedes, is_latest, status, memory_at,"
             " gmt_created, file_name, tags, refined_from, abstracted_from, confidence,"
-            " conflicted, occurred_at, valid_from, valid_until"
+            " conflicted, occurred_at, valid_from, valid_until, superseded_by"
             " FROM evo_nodes WHERE node_id=? ORDER BY is_latest DESC LIMIT 1",
             (identifier,),
         ).fetchone()
@@ -222,19 +268,41 @@ def _resolve_evo_node(
     if row is None:
         return None
 
-    parent_ids = list(dict.fromkeys([*_json_list(row[3]), *_json_list(row[11])]))
+    # Version-chain edges belong in ``history`` below. Direct sources are only
+    # derivation inputs (abstraction/refinement), so clients do not present an
+    # earlier wording as independent proof for the current wording.
+    parent_ids = list(dict.fromkeys(_json_list(row[11])))
     if row[10] and str(row[10]) not in parent_ids:
         parent_ids.append(str(row[10]))
-    sources = [
-        _link(
-            relation="direct_lineage",
-            kind="point",
-            identifier=parent_id,
-            reference=_evo_receipt(conn, parent_id),
-            label="Earlier evidence used to derive this point",
+    sources = []
+    for parent_id in parent_ids:
+        parent_reference, parent_label = _evo_reference(conn, parent_id)
+        sources.append(
+            _link(
+                relation="direct_lineage",
+                kind="point",
+                identifier=parent_id,
+                reference=parent_reference,
+                label=parent_label,
+            )
         )
-        for parent_id in parent_ids
-    ]
+
+    history: list[dict[str, Any]] = []
+    for relation, related_ids in (
+        ("previous_version", _json_list(row[3])),
+        ("next_version", _json_list(row[17])),
+    ):
+        for related_id in related_ids:
+            related_reference, related_label = _evo_reference(conn, related_id)
+            history.append(
+                _link(
+                    relation=relation,
+                    kind="point",
+                    identifier=related_id,
+                    reference=related_reference,
+                    label=related_label,
+                )
+            )
 
     path = str(row[8] or "")
     canonical = receipt or f"⟨{identifier}:{path}⟩"
@@ -245,6 +313,7 @@ def _resolve_evo_node(
         kind="point",
         identifier=identifier,
         status=str(row[5] or ("active" if row[4] else "superseded")),
+        label=_short_label(row[1], _humanize_path(path) or identifier),
         summary=_trim(row[1]),
         timestamp=timestamp,
         path=path,
@@ -260,6 +329,7 @@ def _resolve_evo_node(
         },
         sources=sources,
         context=_nearby_capture_links(conn, timestamp),
+        history=history,
     )
 
 
@@ -292,6 +362,10 @@ def _resolve_capture(
         kind="capture",
         identifier=identifier,
         status="available" if buffer_available else "metadata_only",
+        label=(
+            " · ".join(part for part in (str(row[2] or ""), str(row[4] or "")) if part)
+            or identifier
+        ),
         summary=summary,
         timestamp=str(row[1]) if row[1] else None,
         metadata={
@@ -341,7 +415,7 @@ def _resolve_activity(
                 kind="memory",
                 identifier=event.source_id,
                 reference=event.source_receipt,
-                label="Memory entry that records this activity",
+                label=_reference_label(conn, event.source_receipt),
                 timestamp=event.occurred_at,
             )
         )
@@ -351,6 +425,7 @@ def _resolve_activity(
         kind="activity",
         identifier=event.stable_id,
         status="historical",
+        label=_short_label(event.summary, "Activity"),
         summary=_trim(event.summary),
         timestamp=event.occurred_at,
         path=event.source_receipt,
@@ -406,7 +481,7 @@ def _resolve_geometry(
             kind="receipt",
             identifier=parse_reference(value)[0],
             reference=value,
-            label="Evidence receipt inherited by this model object",
+            label=_reference_label(conn, value),
         )
         for value in references
     ]
@@ -418,6 +493,7 @@ def _resolve_geometry(
         kind=kind,
         identifier=identifier,
         status=str(item.get("status") or "active"),
+        label=_short_label(summary, kind.capitalize()),
         summary=_trim(summary),
         timestamp=str(timestamp) if timestamp else None,
         metadata={
@@ -446,6 +522,7 @@ def resolve_evidence(conn: sqlite3.Connection, reference: str) -> dict[str, Any]
             kind="unknown",
             identifier="",
             status="missing",
+            label="Unknown evidence",
             metadata={"reason": "empty_reference"},
         )
 
@@ -472,6 +549,7 @@ def resolve_evidence(conn: sqlite3.Connection, reference: str) -> dict[str, Any]
         kind="unknown",
         identifier=identifier,
         status="missing",
+        label=_humanize_path(path_hint) or identifier,
         path=path_hint,
         metadata={
             "reason": "source_not_found_or_retained",

@@ -10,6 +10,7 @@ from persome.evomem.models import MemoryLayer, MemoryNode
 from persome.evomem.store import NodeStore
 from persome.store import entries as entries_mod
 from persome.store import fts
+from persome.store.schema_faces import ensure_schema as ensure_face_schema
 
 
 def test_parse_receipt_keeps_colons_inside_identifier() -> None:
@@ -56,6 +57,7 @@ def test_memory_receipt_separates_nearby_context_from_direct_sources(ac_root) ->
 
     assert result["kind"] == "memory"
     assert result["status"] == "active"
+    assert result["label"] == "The evidence viewer preserves provenance."
     assert result["metadata"]["confidence"] == "high"
     assert result["sources"] == []
     assert result["context"][0]["relation"] == "nearby_context"
@@ -95,12 +97,83 @@ def test_point_receipt_exposes_explicit_lineage(ac_root) -> None:
             "kind": "point",
             "id": "point-source",
             "reference": "⟨point-source:project-persome.md⟩",
-            "label": "Earlier evidence used to derive this point",
+            "label": "The user reviewed source evidence.",
             "timestamp": None,
             "status": None,
             "resolvable": True,
         }
     ]
+
+
+def test_point_receipt_exposes_human_readable_version_history(ac_root) -> None:
+    store = NodeStore()
+    store.save(
+        MemoryNode(
+            node_id="point-old",
+            content="The user preferred short answers.",
+            layer=MemoryLayer.L2_FACT,
+            file_name="user-preferences.md",
+        )
+    )
+    store.save_and_supersede(
+        MemoryNode(
+            node_id="point-current",
+            content="The user now prefers concise answers with evidence.",
+            layer=MemoryLayer.L2_FACT,
+            file_name="user-preferences.md",
+        ),
+        old_id="point-old",
+    )
+
+    with fts.cursor() as conn:
+        current = resolve_evidence(conn, "point-current")
+        old = resolve_evidence(conn, "point-old")
+
+    assert current["label"] == "The user now prefers concise answers with evidence."
+    assert current["sources"] == []
+    assert current["history"][0] == {
+        "relation": "previous_version",
+        "kind": "point",
+        "id": "point-old",
+        "reference": "⟨point-old:user-preferences.md⟩",
+        "label": "The user preferred short answers.",
+        "timestamp": None,
+        "status": None,
+        "resolvable": True,
+    }
+    assert old["history"][0]["relation"] == "next_version"
+    assert old["history"][0]["label"] == "The user now prefers concise answers with evidence."
+
+
+def test_aggregate_geometry_labels_inherited_receipts_with_point_content(ac_root) -> None:
+    store = NodeStore()
+    store.save(
+        MemoryNode(
+            node_id="point-readable",
+            content="The user checks claims against primary evidence.",
+            layer=MemoryLayer.L2_FACT,
+            file_name="user-research.md",
+        )
+    )
+    with fts.cursor() as conn:
+        ensure_face_schema(conn)
+        conn.execute(
+            "INSERT INTO schema_faces (face_id, level, signature, members, footprints,"
+            " provenance, observations, confidence, status, valid_from, created_at)"
+            " VALUES (?, 1, ?, ?, '[]', 'both', 3, 0.91, 'active', ?, ?)",
+            (
+                "face-evidence",
+                "Research decisions remain auditable.",
+                json.dumps(["point-readable"]),
+                "2026-07-01T00:00:00+00:00",
+                "2026-07-01T00:00:00+00:00",
+            ),
+        )
+        result = resolve_evidence(conn, "face-evidence")
+
+    assert result["kind"] == "face"
+    assert result["label"] == "Research decisions remain auditable."
+    assert result["sources"][0]["label"] == "The user checks claims against primary evidence."
 
 
 def test_capture_resolution_labels_expired_raw_payload_as_metadata_only(ac_root) -> None:

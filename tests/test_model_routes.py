@@ -173,10 +173,16 @@ class TestViewPage:
         assert 'id="zoom-reset"' in body
         assert 'id="zoom-in"' in body
         assert "Scroll or pinch to zoom" in body
+        assert 'role="tablist"' in body
+        assert 'data-detail-tab="overview"' in body
+        assert 'data-detail-tab="evidence"' in body
+        assert 'data-detail-tab="history"' in body
+        assert 'id="evidence-breadcrumbs"' in body
 
     def test_bundled_viewer_assets_are_served(self, ac_root):
         three = routes.model_asset("three.module.js")
         layout = routes.model_asset("layout.mjs")
+        evidence = routes.model_asset("evidence.mjs")
         share = routes.model_asset("share.mjs")
         viewer = routes.model_asset("viewer.js")
         css = routes.model_asset("viewer.css")
@@ -184,6 +190,7 @@ class TestViewPage:
         assert len(three.body) > 1_000_000
         assert b"class WebGLRenderer" in three.body
         assert b"computeClusterLayout" in layout.body
+        assert b"nodeEvidenceCards" in evidence.body
         assert b"buildXIntentUrl" in share.body
         assert b"drawShareCard" in share.body
         assert b'from "./layout.mjs"' in viewer.body
@@ -196,8 +203,10 @@ class TestViewPage:
         assert b'fetch("./graph"' in viewer.body
         assert b"fetch(`./node" in viewer.body
         assert b"fetch(`./evidence?ref=" in viewer.body
-        assert b"Evidence receipts" in viewer.body
+        assert b"Direct evidence" in viewer.body
         assert b"Nearby context" in viewer.body
+        assert b"Technical details" in viewer.body
+        assert b"evidenceTrail" in viewer.body
         assert b'fetch("/model' not in viewer.body
         assert b"ACESFilmicToneMapping" in viewer.body
         assert b"model.root?.signature" in viewer.body
@@ -231,7 +240,7 @@ class TestViewPage:
         assert b".share-button" in css.body
         assert b".share-notice" in css.body
         assert b".evidence-link" in css.body
-        assert b".evidence-back" in css.body
+        assert b".evidence-breadcrumbs" in css.body
         assert b"(min-width: 1181px) and (max-width: 1360px)" in css.body
         assert b"top: 116px" in css.body
         assert b"prefers-reduced-motion" in css.body

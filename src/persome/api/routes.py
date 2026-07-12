@@ -423,6 +423,7 @@ def model_view(request: Request) -> HTMLResponse:
 
 
 _MODEL_ASSETS = {
+    "evidence.mjs",
     "three.module.js",
     "layout.mjs",
     "share.mjs",
@@ -478,8 +479,10 @@ def model_evidence(
 
     Explicit stored lineage is returned in ``sources``. Time-adjacent captures
     are returned separately in ``context`` and are never presented as direct
-    provenance. Unknown or expired references fail open with ``status=missing``
-    so a historical receipt remains inspectable even after raw retention ends.
+    provenance. ``label`` is the human-readable display title; Point version
+    links are returned separately in ``history``. Unknown or expired references
+    fail open with ``status=missing`` so a historical receipt remains inspectable
+    even after raw retention ends.
     """
     from ..evidence import resolve_evidence
     from ..store import fts as fts_store

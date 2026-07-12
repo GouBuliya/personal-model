@@ -35,8 +35,12 @@ intentionally omitted from OpenAPI.
 
 Receipt buttons in the viewer call `/model/evidence`. The response is a
 progressive-disclosure node with `sources` for explicit stored lineage and
-`context` for time-adjacent captures. An unknown or retention-expired payload
-returns `status=missing` while preserving the original receipt for audit.
+`context` for time-adjacent captures. Human-readable `label` values let clients
+present evidence without exposing internal IDs; Point version links are kept in
+`history`. The local viewer organizes this as Overview, Evidence, and History,
+with drill-down breadcrumbs and raw receipts under technical details. An unknown
+or retention-expired payload returns `status=missing` while preserving the
+original receipt for audit.
 
 `/status.data.llm_profile` reports the effective provider, protocol, model,
 endpoint, key variable name, credential presence, and legacy-migration state.

@@ -60,8 +60,11 @@ Example stdio client configuration:
 
 `resolve_evidence` returns explicit stored lineage in `sources` and
 time-adjacent capture clues in `context`. Consumers must not present `context`
-as direct proof. Follow each returned `reference` to move down one layer; a
-retained receipt whose payload is no longer available returns `status=missing`.
+as direct proof. Display `label` as the human-readable card title and keep
+`reference` as the stable technical handle. Point predecessor/successor links
+are returned separately in `history`. Follow each returned `reference` to move
+down one layer; a retained receipt whose payload is no longer available returns
+`status=missing`.
 
 ## Transport
 

@@ -1067,9 +1067,11 @@ def build_server(
         or capture when the user asks "why?" or "what is this based on?". The
         response keeps ``sources`` (explicit stored lineage) separate from
         ``context`` (nearby captures that may help investigation but are NOT
-        claimed as direct inputs). Follow returned ``reference`` values to drill
-        down one layer at a time. A retained receipt whose payload has expired
-        returns ``status=missing`` rather than fabricating evidence.
+        claimed as direct inputs). Display ``label`` to people, keep ``reference``
+        as the technical handle, and read Point predecessor/successor links from
+        ``history``. Follow returned references to drill down one layer at a time.
+        A retained receipt whose payload has expired returns ``status=missing``
+        rather than fabricating evidence.
         """
         from ..evidence import resolve_evidence as resolve
 
