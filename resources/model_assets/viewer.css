@@ -630,6 +630,7 @@ button {
 
 .detail[data-kind="point"] { --detail-accent: var(--point); }
 .detail[data-kind="context"] { --detail-accent: var(--muted); }
+.detail[data-kind="line"] { --detail-accent: var(--line); }
 .detail[data-kind="face"] { --detail-accent: var(--face); }
 .detail[data-kind="volume"] { --detail-accent: var(--volume); }
 .detail[data-kind="root"] { --detail-accent: var(--root); }

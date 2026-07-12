@@ -240,7 +240,7 @@ class TestViewPage:
         assert share.media_type == "text/javascript"
         assert css.media_type == "text/css"
 
-    def test_viewer_interaction_contract_prefers_labels_over_lines(self, ac_root):
+    def test_viewer_interaction_contract_keeps_nodes_ahead_of_clickable_lines(self, ac_root):
         page = render_memory_view()
         viewer = routes.model_asset("viewer.js").body.decode()
         css = routes.model_asset("viewer.css").body.decode()
@@ -252,8 +252,13 @@ class TestViewPage:
         assert 'event.key === "Escape"' in viewer
         assert "raycaster.params.Line" not in viewer
         assert "pickables.push(line)" not in viewer
+        assert "screenLinePickables.push(lineObject)" in viewer
+        assert "MIN_NODE_HIT_RADIUS_PX = 12" in viewer
+        assert "MIN_LINE_HIT_RADIUS_PX = 8" in viewer
+        assert 'registerSelectionTarget("line", item.id, lineObject)' in viewer
         assert "pointer-events: auto" in css
         assert '.model-label[aria-expanded="true"]' in css
+        assert '.detail[data-kind="line"]' in css
 
 
 class TestEvidenceResolverRoute:

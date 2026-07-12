@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
-import { computeClusterLayout, zoomMath } from "./layout.mjs";
+import { computeClusterLayout, pickScreenTarget, zoomMath } from "./layout.mjs";
 import {
   SHARE_CARD_HEIGHT,
   SHARE_CARD_WIDTH,
@@ -103,6 +103,7 @@ let evidenceRequest = 0;
 let portraitMode = null;
 let labels = [];
 let pickables = [];
+let screenLinePickables = [];
 let selectionTargets = new Map();
 let positions = new Map();
 let items = new Map();
@@ -117,10 +118,19 @@ let lastZoomPercent = null;
 let lastFrameTime = performance.now();
 let shareReady = false;
 const layerVisible = { points: true, lines: true, faces: true, volumes: true, root: true };
-const kindLayers = { point: "points", context: "points", face: "faces", volume: "volumes", root: "root" };
+const kindLayers = {
+  point: "points",
+  context: "points",
+  line: "lines",
+  face: "faces",
+  volume: "volumes",
+  root: "root",
+};
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 const zoomDirection = new THREE.Vector3();
+const MIN_NODE_HIT_RADIUS_PX = 12;
+const MIN_LINE_HIT_RADIUS_PX = 8;
 const ZOOM_MIN_PERCENT = 50;
 const ZOOM_MAX_PERCENT = 400;
 const ZOOM_STEP_PERCENT = 25;
@@ -299,6 +309,15 @@ function addLine(start, end, color, opacity, dashed, layer = "lines") {
   return line;
 }
 
+function registerScreenLinePickable(lineObject, item, start, end) {
+  registerSelectionTarget("line", item.id, lineObject);
+  lineObject.userData.pickSegment = { start: start.clone(), end: end.clone() };
+  lineObject.userData.baseOpacity = Number(lineObject.material.opacity || 0);
+  screenLinePickables.push(lineObject);
+  items.set(selectionKey("line", item.id), item);
+  return lineObject;
+}
+
 function disposeGraph() {
   scene.remove(graph);
   graph.traverse((object) => {
@@ -311,6 +330,7 @@ function disposeGraph() {
   scene.add(graph);
   labels = [];
   pickables = [];
+  screenLinePickables = [];
   selectionTargets = new Map();
   positions = new Map();
   items = new Map();
@@ -326,9 +346,9 @@ function addPoint(point, position, baseRadius, showLabel, promoted) {
   const material = new THREE.MeshStandardMaterial({
     color: COLORS.points,
     emissive: COLORS.points,
-    emissiveIntensity: active ? (promoted ? 0.62 : 0.24) : 0.06,
+    emissiveIntensity: active ? (promoted ? 0.72 : 0.34) : 0.12,
     transparent: true,
-    opacity: active ? (promoted ? 0.98 : 0.56) : (promoted ? 0.22 : 0.08),
+    opacity: active ? (promoted ? 1 : 0.72) : (promoted ? 0.42 : 0.22),
     roughness: 0.26,
   });
   const mesh = registerPickable(new THREE.Mesh(geometry, material), "points", "point", point);
@@ -384,7 +404,7 @@ function addClusterHalo(memberPositions, center) {
       new THREE.MeshBasicMaterial({
         color: COLORS.faces,
         transparent: true,
-        opacity: 0.035,
+        opacity: 0.065,
         wireframe: true,
         depthWrite: false,
       })
@@ -443,7 +463,7 @@ function addVolume(volume, showLabel) {
         emissive: COLORS.volumes,
         emissiveIntensity: 0.42,
         transparent: true,
-        opacity: 0.52,
+        opacity: 0.72,
         wireframe: true,
       })
     ),
@@ -519,8 +539,15 @@ function addModelLine(line) {
   const sourceCluster = currentLayout?.pointClusterById.get(line.source);
   const targetCluster = currentLayout?.pointClusterById.get(line.target);
   const sameCluster = sourceCluster && sourceCluster === targetCluster;
-  const opacity = evolution ? (sameCluster ? 0.34 : 0.08) : 0.34;
-  addLine(start, end, evolution ? COLORS.lines : 0x6ebf8e, opacity, !evolution);
+  const opacity = evolution ? (sameCluster ? 0.5 : 0.16) : 0.46;
+  const lineObject = addLine(
+    start,
+    end,
+    evolution ? COLORS.lines : 0x6ebf8e,
+    opacity,
+    !evolution,
+  );
+  registerScreenLinePickable(lineObject, line, start, end);
 }
 
 function addOrbitRing(radius, color, opacity, rotation, layer) {
@@ -772,13 +799,20 @@ function syncSelectionState() {
     targets.forEach((target) => {
       if (target.element) {
         target.element.setAttribute("aria-expanded", String(active));
+      } else if (target.isLine && target.material) {
+        const baseOpacity = Number(target.userData.baseOpacity || 0);
+        target.material.opacity = active ? Math.min(1, baseOpacity * 2 + 0.24) : baseOpacity;
+        target.renderOrder = active ? 5 : 0;
       } else if (target.isMesh) {
-        target.scale.setScalar(active ? 1.32 : 1);
+        target.scale.setScalar(active ? 1.45 : 1);
       }
     });
   });
   window.__persomeInteractionState = {
     linePickables: pickables.filter((object) => object.isLine).length,
+    screenLinePickables: screenLinePickables.length,
+    minimumNodeHitRadiusPx: MIN_NODE_HIT_RADIUS_PX,
+    minimumLineHitRadiusPx: MIN_LINE_HIT_RADIUS_PX,
     nodePickables: pickables.length,
     interactiveLabels: labels.filter((label) => Boolean(label.userData.ref)).length,
     selected: selected ? { ...selected } : null,
@@ -978,12 +1012,17 @@ function showDetails(kind, item) {
   syncSelectionState();
   detailEl.dataset.kind = kind;
   detailKindEl.textContent = kind;
-  detailTitleEl.textContent = item.content || item.signature || item.label || item.id;
+  detailTitleEl.textContent = (
+    item.content || item.signature || item.label || item.predicate || item.kind || item.id
+  );
   detailMetaEl.replaceChildren();
   appendMeta("ID", item.id);
   appendMeta("Layer", item.layer || item.level);
   appendMeta("Status", item.status);
+  appendMeta("Type", item.kind);
   appendMeta("Predicate", item.label || item.predicate);
+  appendMeta("From", item.source);
+  appendMeta("To", item.target);
   appendMeta("Confidence", item.confidence);
   appendMeta("Observations", item.observations);
   appendMeta("Valid from", item.valid_from);
@@ -1282,10 +1321,61 @@ document.getElementById("play").addEventListener("click", (event) => {
 function pickAt(event) {
   const bounds = renderer.domElement.getBoundingClientRect();
   if (!bounds.width || !bounds.height) return null;
-  pointer.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
-  pointer.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
+  const localPointer = {
+    x: event.clientX - bounds.left,
+    y: event.clientY - bounds.top,
+  };
+  const projectWorldPoint = (worldPosition) => {
+    const projected = worldPosition.clone().project(camera);
+    if (projected.z < -1 || projected.z > 1) return null;
+    return {
+      x: (projected.x + 1) * 0.5 * bounds.width,
+      y: (1 - projected.y) * 0.5 * bounds.height,
+      depth: projected.z,
+    };
+  };
+  const worldPosition = new THREE.Vector3();
+  const nodeCandidates = pickables.filter((object) => object.visible).map((object) => {
+    object.getWorldPosition(worldPosition);
+    const projected = projectWorldPoint(worldPosition);
+    return projected ? { ...projected, target: object } : null;
+  }).filter(Boolean);
+  const screenNode = pickScreenTarget(
+    localPointer,
+    nodeCandidates,
+    [],
+    { nodeRadius: MIN_NODE_HIT_RADIUS_PX },
+  );
+  if (screenNode) return { object: screenNode };
+
+  pointer.x = (localPointer.x / bounds.width) * 2 - 1;
+  pointer.y = -(localPointer.y / bounds.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
-  return raycaster.intersectObjects(pickables.filter((object) => object.visible), false)[0] || null;
+  const meshHit = raycaster.intersectObjects(
+    pickables.filter((object) => object.visible),
+    false,
+  )[0];
+  if (meshHit) return meshHit;
+
+  const lineCandidates = screenLinePickables.filter((object) => object.visible).map((object) => {
+    const segment = object.userData.pickSegment;
+    const start = segment ? projectWorldPoint(segment.start) : null;
+    const end = segment ? projectWorldPoint(segment.end) : null;
+    if (!start || !end) return null;
+    return {
+      start,
+      end,
+      depth: Math.min(start.depth, end.depth),
+      target: object,
+    };
+  }).filter(Boolean);
+  const screenLine = pickScreenTarget(
+    localPointer,
+    [],
+    lineCandidates,
+    { lineRadius: MIN_LINE_HIT_RADIUS_PX },
+  );
+  return screenLine ? { object: screenLine } : null;
 }
 
 renderer.domElement.addEventListener("pointerdown", (event) => {
