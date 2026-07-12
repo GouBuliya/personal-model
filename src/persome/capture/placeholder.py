@@ -189,7 +189,11 @@ def _identities_compatible(reference: dict[str, Any], candidate: dict[str, Any])
 
 
 def _reference_text_is_placeholder(
-    app_data: dict[str, Any], reference: dict[str, Any], text: str
+    app_data: dict[str, Any],
+    reference: dict[str, Any],
+    text: str,
+    *,
+    any_confirmed_match: bool = False,
 ) -> bool:
     """Prove one compact AX reference points into a local placeholder.
 
@@ -258,11 +262,14 @@ def _reference_text_is_placeholder(
                     placeholder_values=frozenset(),
                     inside_placeholder=False,
                 )
-    return bool(matches) and all(matches)
+    return any(matches) if any_confirmed_match else bool(matches) and all(matches)
 
 
 def sanitize_element_reference(
-    app_data: dict[str, Any], reference: dict[str, Any]
+    app_data: dict[str, Any],
+    reference: dict[str, Any],
+    *,
+    any_confirmed_match: bool = False,
 ) -> dict[str, Any]:
     """Remove proven placeholder text from a focused/clicked AX reference."""
     direct = _confirmed_placeholder_values(reference)
@@ -270,7 +277,15 @@ def sanitize_element_reference(
         key
         for key in _TEXT_KEYS
         if (text := _normalized(reference.get(key)))
-        and (text in direct or _reference_text_is_placeholder(app_data, reference, text))
+        and (
+            text in direct
+            or _reference_text_is_placeholder(
+                app_data,
+                reference,
+                text,
+                any_confirmed_match=any_confirmed_match,
+            )
+        )
     }
     if not clear_keys:
         return reference
@@ -291,7 +306,16 @@ def sanitize_trigger(app_data: dict[str, Any], trigger: dict[str, Any]) -> dict[
     element = details.get("element")
     if not isinstance(element, dict):
         return trigger
-    clean_element = sanitize_element_reference(app_data, element)
+    # A click label is an attention hint, not authored content. If the compact
+    # hit-test reference is ambiguous with the same text elsewhere, prefer
+    # dropping the label once any local placeholder match is proven; raw AX and
+    # visible authored content remain untouched. Focused/input references keep
+    # the stricter all-matches fail-open policy.
+    clean_element = sanitize_element_reference(
+        app_data,
+        element,
+        any_confirmed_match=str(trigger.get("event_type") or "") == "UserMouseClick",
+    )
     if clean_element is element:
         return trigger
     clean_details = dict(details)

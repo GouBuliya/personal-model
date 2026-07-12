@@ -458,11 +458,16 @@ def test_enrich_does_not_globally_remove_same_text_outside_editable_control() ->
     capture["ax_tree"]["apps"][0]["windows"][0]["elements"].insert(
         0, {"role": "AXStaticText", "value": _COMPOSER_PLACEHOLDER}
     )
+    capture["trigger"] = {
+        "event_type": "UserMouseClick",
+        "details": {"element": {"role": "AXStaticText", "value": _COMPOSER_PLACEHOLDER}},
+    }
 
     s1_parser.enrich(capture)
 
     assert capture["focused_element"]["value"] == ""
     assert _COMPOSER_PLACEHOLDER in capture["visible_text"]
+    assert capture["trigger"]["details"]["element"].get("value", "") == ""
 
 
 def test_enrich_requires_exact_placeholder_dom_class_token() -> None:
