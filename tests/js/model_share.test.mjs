@@ -9,6 +9,7 @@ import {
   SHARE_TEXT,
   SHARE_URL,
   buildXIntentUrl,
+  shareNarrative,
   shareStats,
 } from "../../resources/model_assets/share.mjs";
 
@@ -24,7 +25,7 @@ test("builds an X composer URL with the standard copy, destination, and tags", (
   assert.ok(!intent.href.includes("/model/"));
 });
 
-test("keeps the share artifact fixed, portable, and aggregate-only", () => {
+test("keeps the share artifact fixed and portable", () => {
   assert.equal(SHARE_CARD_WIDTH, 1200);
   assert.equal(SHARE_CARD_HEIGHT, 675);
   assert.equal(SHARE_FILE_NAME, "my-persome-constellation.png");
@@ -48,4 +49,32 @@ test("keeps the share artifact fixed, portable, and aggregate-only", () => {
       ["ROOT", 1],
     ],
   );
+});
+
+test("selects a bounded personal summary and highest-level key patterns", () => {
+  const narrative = shareNarrative({
+    root: {
+      signature: "A focused systems builder who turns context into auditable work.",
+      receipts: ["private-root-receipt"],
+    },
+    volumes: [
+      { id: "volume-low", signature: "Lower-confidence structure.", confidence: 0.7 },
+      { id: "volume-high", signature: "Trusted personal AI connects context and correction.", confidence: 0.96 },
+    ],
+    faces: [
+      { id: "face-high", signature: "Focused work starts with a small plan.", confidence: 0.99 },
+      { id: "face-second", signature: "Research claims are checked against evidence.", confidence: 0.91 },
+    ],
+  });
+
+  assert.equal(
+    narrative.root,
+    "A focused systems builder who turns context into auditable work.",
+  );
+  assert.deepEqual(narrative.highlights, [
+    { kind: "VOLUME", text: "Trusted personal AI connects context and correction." },
+    { kind: "VOLUME", text: "Lower-confidence structure." },
+    { kind: "FACE", text: "Focused work starts with a small plan." },
+  ]);
+  assert.ok(!JSON.stringify(narrative).includes("private-root-receipt"));
 });
