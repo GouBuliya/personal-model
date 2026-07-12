@@ -1142,10 +1142,12 @@ function animate(frameTime = performance.now()) {
   controls.update();
   syncZoomUI();
   const time = performance.now() * 0.001;
-  pulseGlows.forEach((glow) => {
-    const pulse = 1 + Math.sin(time * 1.2 + glow.userData.glowPhase) * glow.userData.glowPulse;
-    glow.scale.setScalar(glow.userData.glowBase * pulse);
-  });
+  if (!REDUCED_MOTION) {
+    pulseGlows.forEach((glow) => {
+      const pulse = 1 + Math.sin(time * 1.2 + glow.userData.glowPhase) * glow.userData.glowPulse;
+      glow.scale.setScalar(glow.userData.glowBase * pulse);
+    });
+  }
   if (hoverDirty && hoverPointer && !pointerDown) {
     renderer.domElement.style.cursor = pickAt(hoverPointer) ? "pointer" : "grab";
     hoverDirty = false;

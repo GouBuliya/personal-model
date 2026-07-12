@@ -93,10 +93,13 @@ class TestViewPage:
         assert b"model.root?.signature" in viewer.body
         assert b"controls.zoomToCursor = true" in viewer.body
         assert b"window.__persomeZoomState" in viewer.body
+        assert b"if (!REDUCED_MOTION)" in viewer.body
         assert b'event.key === "+"' in viewer.body
         assert b'event.key === "-"' in viewer.body
         assert b'event.key === "0"' in viewer.body
         assert b".zoom-controls" in css.body
+        assert b"(min-width: 1181px) and (max-width: 1360px)" in css.body
+        assert b"top: 116px" in css.body
         assert b"prefers-reduced-motion" in css.body
         assert viewer.media_type == "text/javascript"
         assert layout.media_type == "text/javascript"

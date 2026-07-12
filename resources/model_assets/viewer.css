@@ -823,6 +823,21 @@ button {
   pointer-events: none;
 }
 
+@media (min-width: 1181px) and (max-width: 1360px) {
+  .status {
+    max-width: calc(50vw - 294px);
+  }
+
+  .stat {
+    min-width: 52px;
+    padding-inline: 10px;
+  }
+
+  .build-state {
+    display: none;
+  }
+}
+
 @media (max-width: 1180px) {
   .topbar {
     grid-template-columns: minmax(150px, 1fr) auto minmax(130px, 1fr);
@@ -923,7 +938,7 @@ button {
   }
 
   .status {
-    top: 82px;
+    top: 116px;
     right: 10px;
     bottom: auto;
     left: auto;
@@ -1023,7 +1038,7 @@ button {
   }
 
   .status {
-    top: 86px;
+    top: 122px;
   }
 
   .stat[data-kind="faces"] {
