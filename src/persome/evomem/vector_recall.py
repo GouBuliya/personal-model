@@ -157,19 +157,38 @@ class OpenAICompatibleEmbedder:
     api_key_env: str = "OPENAI_API_KEY"
     timeout_seconds: float = 60.0
 
-    def _request(self, texts: list[str]) -> dict[str, Any]:
+    def _endpoint(self) -> tuple[str, dict[str, str]]:
+        """Resolve the POST URL and auth header for both endpoint shapes.
+
+        Mirrors the legacy runtime's embeddings client: a base URL that already
+        names the route (Azure ``.../deployments/<dep>/embeddings?api-version=...``
+        or anything ending in ``/embeddings``) is used verbatim with Azure's
+        ``api-key`` header; a plain base gets ``/embeddings`` appended and the
+        standard ``Authorization: Bearer`` header.
+        """
         import os
 
         key = (os.environ.get(self.api_key_env) or "").strip()
         if not key:
             raise EmbeddingContractError(f"{self.api_key_env} is not set in the environment")
+        low = self.base_url.lower()
+        is_full = (
+            "/deployments/" in low
+            or "api-version=" in low
+            or low.rstrip("/").endswith("/embeddings")
+        )
+        if is_full:
+            if "azure" in low or "cognitiveservices" in low:
+                return self.base_url, {"api-key": key}
+            return self.base_url, {"Authorization": f"Bearer {key}"}
+        return f"{self.base_url.rstrip('/')}/embeddings", {"Authorization": f"Bearer {key}"}
+
+    def _request(self, texts: list[str]) -> dict[str, Any]:
+        url, auth = self._endpoint()
         request = urllib.request.Request(
-            f"{self.base_url.rstrip('/')}/embeddings",
+            url,
             data=json.dumps({"model": self.model, "input": texts}).encode(),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {key}",
-            },
+            headers={"Content-Type": "application/json", **auth},
             method="POST",
         )
         with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:  # noqa: S310 - owner-configured endpoint

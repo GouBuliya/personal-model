@@ -378,3 +378,23 @@ def test_openai_backend_dispatches_through_dense_ranking(monkeypatch) -> None:
         cfg=_dense_cfg(vector_recall_backend="openai"),
     )
     assert [h["node_id"] for h in out] == ["n-coffee"]
+
+
+def test_openai_endpoint_shapes_match_the_legacy_client(monkeypatch) -> None:
+    monkeypatch.setenv("SHAPE_TEST_KEY", "k")
+    plain = vector_recall.OpenAICompatibleEmbedder(
+        base_url="https://api.openai.com/v1", api_key_env="SHAPE_TEST_KEY"
+    )
+    url, auth = plain._endpoint()
+    assert url == "https://api.openai.com/v1/embeddings"
+    assert auth == {"Authorization": "Bearer k"}
+
+    azure = vector_recall.OpenAICompatibleEmbedder(
+        base_url=(
+            "https://acct.openai.azure.com/openai/deployments/te3/embeddings?api-version=2024-02-01"
+        ),
+        api_key_env="SHAPE_TEST_KEY",
+    )
+    url, auth = azure._endpoint()
+    assert url.startswith("https://acct.openai.azure.com/") and "api-version=" in url
+    assert auth == {"api-key": "k"}
