@@ -748,13 +748,6 @@ schedule_model_open() {
   fi
 
   echo ""
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "  Your Personal Model Opens in 30 Minutes"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo ""
-  echo "Keep Persome running while it learns from real activity. In 30 minutes,"
-  echo "Persome will automatically open your local personal-model viewer."
-  echo ""
   if PERSOME_ROOT="${INSTALL_HOME}" "${INSTALL_BIN_DIR}/persome" model open --after 30; then
     MODEL_OPEN_SCHEDULED=1
   else
@@ -823,16 +816,7 @@ Install root : ${INSTALL_HOME}
 Virtualenv   : ${VENV_DIR}
 CLI shim     : ${INSTALL_BIN_DIR}/persome
 
-YOUR NEXT STEP — OPEN YOUR PERSONAL MODEL:
-  Keep Persome running for about 30 minutes so it can learn from real activity.
-  Then open the live personal-model viewer:
-
-     persome model open
-
-  You can run that command immediately at any time. Do not stop Persome to build
-  the model; Points and Lines are created while the Runtime keeps running.
-
-Other checks:
+Check Runtime status:
   persome status
 
 Event memory can appear during a session's five-minute flushes. Points and Lines
@@ -884,17 +868,18 @@ EOF
   if [[ ${MODEL_OPEN_SCHEDULED} -eq 1 ]]; then
     cat <<'EOF'
 
-MODEL CTA:
+MODEL CTA — KEEP PERSOME RUNNING:
   ✓ Your local personal-model viewer is scheduled to open automatically in
-    30 minutes. Keep Persome running. To open it sooner, run:
+    30 minutes. This is your next step: let Persome learn from real activity,
+    then explore the model it forms. To open it sooner, run:
 
       persome model open
 EOF
   else
     cat <<'EOF'
 
-MODEL CTA:
-  After about 30 minutes of real activity, open your personal model:
+MODEL CTA — OPEN YOUR PERSONAL MODEL:
+  Keep Persome running for about 30 minutes, then explore the model it forms:
 
       persome model open
 EOF
