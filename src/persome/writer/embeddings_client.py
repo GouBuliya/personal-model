@@ -88,6 +88,19 @@ def embed_batch(texts: list[str], *, model: str = MODEL) -> list[list[float] | N
         return [None] * len(texts)
     endpoint, auth_header = resolved
     clipped = [(t or "")[:_MAX_CHARS] for t in texts]
+    # Strict OpenAI/Azure endpoints reject an empty string anywhere in the batch
+    # ("input cannot be an empty string"); the legacy relay tolerated it. An empty
+    # entry has nothing to embed, so drop it (→ None, BM25-only) and POST only the
+    # non-empty inputs, mapping vectors back to their original positions.
+    send_indices = [i for i, t in enumerate(clipped) if t.strip()]
+    if not send_indices:
+        return [None] * len(texts)
+    if len(send_indices) != len(clipped):
+        sent = embed_batch([clipped[i] for i in send_indices], model=model)
+        out: list[list[float] | None] = [None] * len(texts)
+        for pos, vec in zip(send_indices, sent, strict=True):
+            out[pos] = vec
+        return out
     body = json.dumps({"model": model, "input": clipped}).encode()
     headers = {auth_header: key, "Content-Type": "application/json"}
     last: Exception | None = None

@@ -37,3 +37,56 @@ def test_resolve_endpoint(monkeypatch, base, want_url, want_header):
 def test_resolve_endpoint_unconfigured(monkeypatch):
     monkeypatch.setattr(ec, "provider_base_url", lambda _p: None)
     assert ec._resolve_endpoint() is None
+
+
+class _FakeResp:
+    def __init__(self, payload):
+        self.status_code = 200
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+def test_embed_batch_skips_empty_inputs(monkeypatch):
+    """Strict OpenAI/Azure endpoints reject empty strings in a batch; empty
+    entries must be dropped (→ None) and only non-empty inputs posted."""
+    posted: list[list[str]] = []
+
+    def fake_post(endpoint, *, content, headers):
+        body = __import__("json").loads(content)
+        inputs = body["input"]
+        assert all(s.strip() for s in inputs), f"empty string leaked to endpoint: {inputs!r}"
+        posted.append(inputs)
+        return _FakeResp(
+            {"data": [{"index": i, "embedding": [float(i)]} for i in range(len(inputs))]}
+        )
+
+    monkeypatch.setattr(ec, "provider_api_key", lambda _p: "k")
+    monkeypatch.setattr(
+        ec, "_resolve_endpoint", lambda: ("https://host/v1/embeddings", "x-api-key")
+    )
+    monkeypatch.setattr(
+        ec, "_http_client", lambda: type("C", (), {"post": staticmethod(fake_post)})()
+    )
+
+    out = ec.embed_batch(["alpha", "", "  ", "beta"])
+    # positions 1 (empty) and 2 (whitespace-only) → None; 0 and 3 embedded
+    assert out[0] is not None and out[3] is not None
+    assert out[1] is None and out[2] is None
+    # only the two non-empty inputs reached the endpoint, in order
+    assert posted == [["alpha", "beta"]]
+
+
+def test_embed_batch_all_empty_returns_none_without_posting(monkeypatch):
+    def fail_post(*a, **k):
+        raise AssertionError("must not POST an all-empty batch")
+
+    monkeypatch.setattr(ec, "provider_api_key", lambda _p: "k")
+    monkeypatch.setattr(
+        ec, "_resolve_endpoint", lambda: ("https://host/v1/embeddings", "x-api-key")
+    )
+    monkeypatch.setattr(
+        ec, "_http_client", lambda: type("C", (), {"post": staticmethod(fail_post)})()
+    )
+    assert ec.embed_batch(["", "   "]) == [None, None]
