@@ -10,7 +10,7 @@
 
 Persome learns how you actually think and work from the activity captured on your Mac—then gives Codex, Claude Code, and any MCP agent the context to pick up where you left off, understand what matters, and work while you sleep.
 
-<p align="center"><img src="docs/assets/readme/personal-model.png" alt="图片展示了Persome个人模型的界面，左侧有“LIVE PERSONAL MODEL”及“THE SHAPE OF YOU”等文字，强调系统思维创始人将个人上下文转化为可检验产品、证据支持决策和可持续动量。右侧是模型可视化界面，显示了1012个点、326条线、18个面、6个体积和1个根节点，还呈现了可调整的货币、原型先探索等信号，以及反馈循环、投资判断平衡等概念。右侧还配有如何阅读模型的说明，如点代表观察到的事实，线代表演变或关系等。" width="100%"></p>
+<p align="center"><img src="docs/assets/readme/personal-model.png" alt="Persome Personal Model interface. The left panel describes a live personal model that turns personal context into testable products, evidence-backed decisions, and sustainable momentum. The right panel visualizes 1,012 Points, 326 Lines, 18 Faces, 6 Volumes, and 1 Root, alongside signals, feedback loops, and guidance for reading the model." width="100%"></p>
 
 **Runs locally on your Mac. Private by default. Yours to inspect, correct, export, and delete.**
 
@@ -42,7 +42,7 @@ New evidence can strengthen, revise, or overturn an earlier inference. Every imp
 
 Persome turns sourced observations into relationships, patterns, higher-order structure, and one current Root: what matters now, how you tend to decide, and where your attention is moving.
 
-<p align="center"><img src="docs/assets/readme/one-root.png" alt="图片展示了“ONE ROOT - A MODEL OF YOU”概念，说明其将活动流转化为个人模型。从左至右，活动流（如笔记、Bugs等）形成点（1000+时刻）、线（300+连接）、面（80+模式）、体（20+主题），最终生成一个模型（1个，类型为模型）。右侧是个人模型示例，包含当前目标、质量标准等信息，底部强调“Thousands of moments. One evolving model of you.”，与上下文介绍的个人模型从众多时刻中生成、不断演进的内容相呼应。" width="100%"></p>
+<p align="center"><img src="docs/assets/readme/one-root.png" alt="One Root — A Model of You. An activity stream becomes 1,000+ Points, 300+ Lines, 80+ Faces, 20+ Volumes, and one evolving model. A Personal Model example on the right shows current goals and quality standards." width="100%"></p>
 
 From Points to Lines, Faces, Volumes, and one Root—a living model of who you are and what matters now.
 
@@ -68,11 +68,11 @@ Persome identifies unfinished work, ranks it against your priorities, and separa
 
 #### Continue where you left off
 
-<p align="center"><img src="docs/assets/readme/continue-where-you-left-off.png" alt="这张图片展示了Persome作为编程代理的功能场景，核心呈现“继续未完工作”的能力。页面左侧标注了三个待处理任务，分别为README、Onboarding和MCP，附带对应时间；右侧CODEX区域显示已恢复的工作状态，即此前准备Persome的启动事宜，当前目标是让Personal Model在五分钟内可见，下一步工作为修复新用户引导的验证，同时呈现了当前项目目录、git状态及未暂存的文件改动，印证该工具可将个人工作模型同步给编程代理，帮助用户从断点处继续推进工作。" width="100%"></p>
+<p align="center"><img src="docs/assets/readme/continue-where-you-left-off.png" alt="Persome helps a coding agent continue unfinished work. The left panel lists README, onboarding, and MCP tasks; the Codex panel restores the previous work state, current goal, next step, project directory, Git status, and unstaged changes." width="100%"></p>
 
 #### Work while you sleep
 
-<p align="center"><img src="docs/assets/readme/work-while-you-sleep.png" alt="图片展示了Persome的“Work While You Sleep”功能界面。左侧“30 OPEN LOOPS”部分，呈现了Personal Model、Tests、Dependencies、Codebase、Docs等模块及对应数值。中间“5 SAFE TO COMPLETE”部分，有Safe Task Filter，可筛选权限范围、数据访问、网络、命令、外部动作等。右侧“MORNING REPORT”部分，列出已完成本地任务、等待决策任务、外部动作等，还展示了权限边界设置。该图与上下文介绍的Persome功能相呼应，直观呈现其工作模式。" width="100%"></p>
+<p align="center"><img src="docs/assets/readme/work-while-you-sleep.png" alt="Persome Work While You Sleep interface. It organizes 30 open loops, filters five tasks that are safe to complete by permission scope and action type, and presents a morning report of completed local work, pending decisions, external actions, and permission boundaries." width="100%"></p>
 
 ---
 
