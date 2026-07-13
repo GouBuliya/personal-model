@@ -52,6 +52,18 @@ def test_make_id_uniqueness() -> None:
     assert len(ids) == 200
 
 
+def test_connect_names_recovery_path_on_corrupt_header(ac_root: Path) -> None:
+    # A live incident shape: page 1 of index.db overwritten, so every fresh
+    # connection failed with a bare "file is not a database" that MCP clients
+    # retried verbatim for hours. The probe must convert it into one
+    # actionable, still-catchable DatabaseError naming the recovery path.
+    db = ac_root / "index.db"
+    db.write_bytes(b"\x0d\x00\x00\x00" + b"\x00" * 4092)
+
+    with pytest.raises(fts.CorruptDatabaseError, match="persome start"):
+        fts.connect(db)
+
+
 def test_create_append_search(ac_root: Path) -> None:
     with fts.cursor() as conn:
         entries_mod.create_file(

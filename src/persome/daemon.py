@@ -133,6 +133,32 @@ async def _mcp_loop(cfg: Config) -> None:
                     exc,
                 )
                 return
+        except SystemExit as exc:
+            # uvicorn converts transport startup failures (a port it cannot
+            # bind, EPERM from macOS local-network privacy) into
+            # SystemExit(STARTUP_FAILURE), which sails past the OSError and
+            # Exception arms, kills the whole daemon — capture included — and
+            # leaves the supervisor restarting us into the same wall. Unwrap
+            # the original bind error and apply the same policy as above.
+            cause = exc.__context__
+            if isinstance(cause, OSError) and cause.errno == _errno.EADDRINUSE:
+                logger.warning(
+                    "mcp server failed to bind %s:%d — address in use, retrying in %.0fs",
+                    cfg.mcp.host,
+                    cfg.mcp.port,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 60.0)
+            else:
+                logger.error(
+                    "mcp server startup failed (exit code %s) on %s:%d — %s",
+                    exc.code,
+                    cfg.mcp.host,
+                    cfg.mcp.port,
+                    cause,
+                )
+                return
         except Exception as exc:  # noqa: BLE001
             logger.warning("mcp server crashed: %s (restarting in %.0fs)", exc, delay)
             await asyncio.sleep(delay)
