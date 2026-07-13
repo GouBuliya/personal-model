@@ -462,7 +462,22 @@ def _receipt_values(item: dict[str, Any]) -> list[str]:
 def _has_geometry_identity(conn: sqlite3.Connection, identifier: str) -> bool:
     """Cheaply reject arbitrary IDs before building the full model snapshot."""
     if identifier.startswith("evolution:"):
-        return True
+        old_id, separator, new_id = identifier.removeprefix("evolution:").rpartition(":")
+        if (
+            not separator
+            or not old_id.strip()
+            or not new_id.strip()
+            or not _table_exists(conn, "evo_nodes")
+        ):
+            return False
+        try:
+            rows = conn.execute(
+                "SELECT supersedes FROM evo_nodes WHERE node_id=? AND status != 'archived'",
+                (new_id,),
+            ).fetchall()
+        except sqlite3.Error:
+            return False
+        return any(old_id in _json_list(row[0]) for row in rows)
     for table, column in (("relation_edges", "edge_id"), ("schema_faces", "face_id")):
         if not _table_exists(conn, table):
             continue

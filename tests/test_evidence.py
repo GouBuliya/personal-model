@@ -265,6 +265,68 @@ def test_unknown_reference_does_not_build_the_full_model(ac_root, monkeypatch) -
     assert result["status"] == "missing"
 
 
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "evolution:garbage",
+        "evolution:point-old:point-not-retained",
+        "evolution:wrong-parent:point-current",
+    ],
+)
+def test_unknown_evolution_reference_does_not_build_the_full_model(
+    ac_root, monkeypatch, reference: str
+) -> None:
+    from persome.model import snapshot as snapshot_mod
+
+    store = NodeStore()
+    store.save(
+        MemoryNode(
+            node_id="point-current",
+            content="Current point without the claimed parent.",
+            layer=MemoryLayer.L2_FACT,
+            file_name="project-persome.md",
+        )
+    )
+    monkeypatch.setattr(
+        snapshot_mod,
+        "build_snapshot",
+        lambda *_args, **_kwargs: pytest.fail("unknown evolution must not build the snapshot"),
+    )
+
+    with fts.cursor() as conn:
+        result = resolve_evidence(conn, reference)
+
+    assert result["status"] == "missing"
+
+
+def test_valid_evolution_reference_resolves_the_snapshot_line(ac_root) -> None:
+    store = NodeStore()
+    store.save(
+        MemoryNode(
+            node_id="point-old:with-context",
+            content="The earlier recorded point.",
+            layer=MemoryLayer.L2_FACT,
+            file_name="project-persome.md",
+        )
+    )
+    store.save_and_supersede(
+        MemoryNode(
+            node_id="point-current",
+            content="The current recorded point.",
+            layer=MemoryLayer.L2_FACT,
+            file_name="project-persome.md",
+        ),
+        old_id="point-old:with-context",
+    )
+
+    with fts.cursor() as conn:
+        result = resolve_evidence(conn, "evolution:point-old:with-context:point-current")
+
+    assert result["kind"] == "line"
+    assert result["id"] == "evolution:point-old:with-context:point-current"
+    assert result["sources"][0]["reference"] == "⟨point-current:project-persome.md⟩"
+
+
 def test_activity_resolution_uses_exact_lookup(ac_root, monkeypatch) -> None:
     from persome.model.activity_source import ActivitySource
 
