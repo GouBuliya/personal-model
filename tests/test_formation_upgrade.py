@@ -106,3 +106,149 @@ def test_invalid_assertion_polarity_falls_back_to_neutral() -> None:
         ]
     }
     assert _gate(raw)["assertions"][0]["polarity"] == "0"
+
+
+# ── Batch B: completeness re-read (B1) + decorrelated sampling (B2) ──────────
+
+
+def _resp(delta: dict):
+    import json as _json
+    from types import SimpleNamespace
+
+    msg = SimpleNamespace(content=_json.dumps(delta))
+    return SimpleNamespace(choices=[SimpleNamespace(message=msg)])
+
+
+def _union_of(*raws):
+    return md._union_raw(list(raws))
+
+
+def test_union_raw_dedups_and_keeps_supersession_candidate() -> None:
+    a = {"assertions": [{"subject": {"ref": "\u5f20\u4f1f"}, "text": "joined Tencent"}]}
+    b = {
+        "assertions": [
+            {"subject": {"ref": "\u5f20\u4f1f"}, "text": "joined tencent", "supersedes": ["x"]},
+            {"subject": {"ref": "\u5f20\u4f1f"}, "text": "a genuinely new fact"},
+        ]
+    }
+    merged = _union_of(a, b)
+    texts = [i["text"] for i in merged["assertions"]]
+    assert "a genuinely new fact" in texts
+    # the two "joined tencent" collapse to one, and the supersession-carrying wins
+    joined = [i for i in merged["assertions"] if "joined" in i["text"].lower()]
+    assert len(joined) == 1 and joined[0].get("supersedes") == ["x"]
+
+
+def test_decorrelated_second_sample_uses_positive_temperature(ac_root) -> None:
+    from persome import config as config_mod
+
+    cfg = config_mod.load()
+    cfg.memory_delta.decorrelated_samples = True
+    seen_temps: list = []
+
+    def fake_call(_cfg, _stage, _messages, temperature=None):
+        seen_temps.append(temperature)
+        return _resp({"entities": [], "assertions": [], "relations": [], "events": []})
+
+    from unittest.mock import patch
+
+    import persome.timeline.store as tl_store
+
+    block = tl_store.TimelineBlock(
+        start_time=gold.SESSION_DATE,
+        end_time=gold.SESSION_DATE,
+        entries=["[cmux] work"],
+        apps_used=["cmux"],
+    )
+    with patch.object(md.tl_store, "query_range", return_value=[block]):
+        md.run_after_session(
+            cfg,
+            session_id="s-b2",
+            start_time=gold.SESSION_DATE,
+            end_time=gold.SESSION_DATE,
+            llm_call=fake_call,
+        )
+    # sampled twice; the second temperature is > 0 (decorrelated, not a T=0 twin)
+    assert seen_temps == [0.0, 0.7] or (len(seen_temps) == 2 and seen_temps[1] > 0.0)
+
+
+def test_completeness_reread_admits_only_missed_facts(ac_root) -> None:
+    from persome import config as config_mod
+
+    cfg = config_mod.load()
+    cfg.memory_delta.completeness_reread = True
+    cfg.memory_delta.apply_enabled = False
+
+    pass1 = {
+        "entities": [
+            {
+                "new_entity": "\u5f20\u4f1f",
+                "kind": "person",
+                "quote": "\u5f20\u4f1f",
+                "confidence": 0.9,
+            }
+        ],
+        "assertions": [
+            {
+                "subject": {"new_entity": "\u5f20\u4f1f"},
+                "text": "captured in pass 1",
+                "quote": "\u5f20\u4f1f",
+                "confidence": 0.9,
+            }
+        ],
+        "relations": [],
+        "events": [],
+    }
+    pass2 = {
+        "entities": [],
+        "assertions": [
+            # duplicate of pass 1 (same subject+content) — must be deduped
+            {
+                "subject": {"new_entity": "\u5f20\u4f1f"},
+                "text": "captured in pass 1",
+                "quote": "\u5f20\u4f1f",
+                "confidence": 0.9,
+            },
+            # genuinely missed fact — must be admitted
+            {
+                "subject": {"new_entity": "\u5f20\u4f1f"},
+                "text": "a fact pass 1 missed",
+                "quote": "\u5f20\u4f1f",
+                "confidence": 0.9,
+            },
+        ],
+        "relations": [],
+        "events": [],
+    }
+    calls = {"n": 0}
+
+    def fake_call(_cfg, _stage, _messages, temperature=None):
+        calls["n"] += 1
+        return _resp(pass1 if calls["n"] == 1 else pass2)
+
+    # session text must contain the quote token so the gate passes
+    import persome.timeline.store as tl_store
+
+    block = tl_store.TimelineBlock(
+        start_time=gold.SESSION_DATE,
+        end_time=gold.SESSION_DATE,
+        entries=["[WeChat] \u5f20\u4f1f said hello"],
+        apps_used=["WeChat"],
+    )
+    import persome.store.fts as fts
+
+    with fts.cursor() as conn:
+        pass  # ensure DB exists
+
+    from unittest.mock import patch
+
+    with patch.object(md.tl_store, "query_range", return_value=[block]):
+        result = md.run_after_session(
+            cfg,
+            session_id="s-b1",
+            start_time=gold.SESSION_DATE,
+            end_time=gold.SESSION_DATE,
+            llm_call=fake_call,
+        )
+    assert calls["n"] == 2  # pass 1 + re-read
+    assert result.counts["assertions"] == 2  # pass-1 fact + the one missed fact, dedup applied

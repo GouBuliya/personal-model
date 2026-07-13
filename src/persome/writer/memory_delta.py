@@ -72,8 +72,126 @@ def _norm_ended(item: dict) -> bool:
 LlmCallFn = Callable[..., Any]
 
 
-def _default_llm_call(cfg: Any, stage: str, messages: list[dict[str, Any]]) -> Any:
-    return llm_mod.call_llm(cfg, stage, messages=messages, json_mode=True)
+def _default_llm_call(
+    cfg: Any, stage: str, messages: list[dict[str, Any]], *, temperature: float | None = None
+) -> Any:
+    extra = {"temperature": temperature} if temperature is not None else None
+    return llm_mod.call_llm(cfg, stage, messages=messages, json_mode=True, extra=extra)
+
+
+def _invoke(call: LlmCallFn, cfg: Any, messages: list[dict[str, Any]], temperature: float) -> Any:
+    """Call the (possibly injected) LLM seam, threading temperature when accepted."""
+    try:
+        return call(cfg, STAGE, messages, temperature=temperature)
+    except TypeError:
+        # An injected seam with the 3-arg signature ignores temperature.
+        return call(cfg, STAGE, messages)
+
+
+def _item_key(head: str, item: dict) -> tuple[str, str, str]:
+    """Dedup key for cross-sample / cross-pass union: (head, subject-ish, content)."""
+    subj = ""
+    for field_name in ("subject", "src"):
+        obj = item.get(field_name)
+        if isinstance(obj, dict):
+            subj = str(obj.get("ref") or obj.get("new_entity") or "")
+            break
+    content = item.get("text") or item.get("title") or ""
+    if head == "entities":
+        content = str(item.get("ref") or item.get("new_entity") or "")
+    if head == "relations":
+        content = f"{item.get('predicate', '')}:{item.get('dst', {})}"
+    return (head, _norm_ws(subj).casefold(), _norm_ws(str(content)).casefold())
+
+
+def _union_raw(raws: list[dict]) -> dict:
+    """Union several raw deltas, deduping by :func:`_item_key`.
+
+    On a key collision the first-seen candidate wins UNLESS a later one carries a
+    supersession/link the winner lacks — mirroring the lab's union rule (keep the
+    candidate that carries the chain).
+    """
+    merged: dict[str, list[dict]] = {h: [] for h in _HEADS}
+    seen: dict[tuple[str, str, str], int] = {}
+    for raw in raws:
+        for head in _HEADS:
+            for item in raw.get(head) or []:
+                if not isinstance(item, dict):
+                    continue
+                key = _item_key(head, item)
+                if key in seen:
+                    prior = merged[head][seen[key]]
+                    if item.get("supersedes") and not prior.get("supersedes"):
+                        merged[head][seen[key]] = item
+                    continue
+                seen[key] = len(merged[head])
+                merged[head].append(item)
+    return merged
+
+
+_REREAD_INSTRUCTION = (
+    "This is a completeness RE-READ of the SAME session. Below is <already_captured> "
+    "— the memories already admitted from this session. Emit ONLY durable, authored "
+    "facts that were stated in <session_events> but are MISSING from <already_captured>; "
+    "do not repeat, rephrase, or re-emit anything already captured. If a fact was later "
+    "revised in the session, emit only its final state. Same JSON schema and same "
+    "authored-evidence, density, calendar, and polarity rules. If nothing was missed, "
+    "return empty arrays."
+)
+
+
+def _completeness_reread(
+    cfg: Any,
+    *,
+    call: LlmCallFn,
+    base_messages: list[dict[str, Any]],
+    clean: dict,
+    dropped: int,
+    roster: identity_mod.Roster,
+    session_text: str,
+    min_confidence: float,
+    cooccurrence: bool,
+) -> tuple[dict, int]:
+    """Pass-2 re-read: admit only owner-authored facts pass 1 missed (spec B1)."""
+    prior = {h: clean.get(h, []) for h in _HEADS}
+    reread_messages = [
+        *base_messages,
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": _REREAD_INSTRUCTION},
+                {
+                    "type": "text",
+                    "text": f"<already_captured>\n{json.dumps(prior, ensure_ascii=False)}\n"
+                    "</already_captured>",
+                },
+            ],
+        },
+    ]
+    raw2 = _safe_json(llm_mod.extract_text(_invoke(call, cfg, reread_messages, 0.0)))
+    if not raw2:
+        return clean, dropped
+    # Gate pass-2 without cooccurrence (pass-1 already added it); merge only items
+    # whose key is new versus pass 1.
+    gated2, dropped2 = gate_delta(
+        raw2,
+        roster=roster,
+        session_text=session_text,
+        min_confidence=min_confidence,
+        cooccurrence=False,
+    )
+    have = {_item_key(h, it) for h in _HEADS for it in clean.get(h, [])}
+    added = 0
+    for head in _HEADS:
+        for item in gated2.get(head, []):
+            key = _item_key(head, item)
+            if key in have:
+                continue
+            have.add(key)
+            clean[head].append(item)
+            added += 1
+    logger.debug("memory_delta: completeness re-read added %d item(s)", added)
+    return clean, dropped + dropped2
 
 
 @dataclass
@@ -494,14 +612,25 @@ def run_after_session(
         },
     ]
 
+    mdc = cfg.memory_delta
+    min_conf = float(getattr(mdc, "min_confidence", 0.5))
+    cooc = bool(getattr(mdc, "cooccurrence_knows", True))
+    call = llm_call or _default_llm_call
+
+    # B2 (spec): temperature-decorrelated multi-sampling — sample twice (T=0 then
+    # T>0) and union candidates BEFORE gating. Two T=0 samples are correlated and
+    # add nothing, so the second temperature must be > 0.
+    if bool(getattr(mdc, "decorrelated_samples", False)):
+        temps = [0.0, float(getattr(mdc, "decorrelated_second_temperature", 0.7))]
+    else:
+        temps = [0.0]
     try:
-        call = llm_call or _default_llm_call
-        response = call(cfg, STAGE, messages)
-        raw = _safe_json(llm_mod.extract_text(response))
+        raws = [_safe_json(llm_mod.extract_text(_invoke(call, cfg, messages, t))) for t in temps]
     except Exception:  # noqa: BLE001 — LLM errors never disturb the chain
         logger.warning("memory_delta %s: LLM call failed", session_id, exc_info=True)
         result.skipped_reason = "llm_failed"
         return result
+    raw = _union_raw([r for r in raws if r]) if len(raws) > 1 else (raws[0] if raws else {})
 
     if not raw:
         result.skipped_reason = "unparseable"
@@ -510,6 +639,7 @@ def run_after_session(
     owner_candidates, candidate_dropped = gate_owner_alias_candidates(
         raw, session_text=session_text
     )
+
     try:
         with fts.cursor() as conn:
             for candidate in owner_candidates:
@@ -536,6 +666,30 @@ def run_after_session(
                 protected_owner_aliases=owner_identity.reserved_aliases(cfg, conn=conn),
             )
             dropped = candidate_dropped + gated_dropped
+
+            # B1 (spec): completeness re-read — a second pass over the SAME window
+            # with the pass-1 admitted memories as prior, admitting only
+            # owner-authored facts pass 1 missed. Cross-pass dedup by item key. The
+            # primary recall lever. (ProMem)
+            if bool(getattr(mdc, "completeness_reread", False)):
+                try:
+                    clean, dropped = _completeness_reread(
+                        cfg,
+                        call=call,
+                        base_messages=messages,
+                        clean=clean,
+                        dropped=dropped,
+                        roster=roster,
+                        session_text=session_text,
+                        min_confidence=min_conf,
+                        cooccurrence=cooc,
+                    )
+                except Exception:  # noqa: BLE001 — a failed re-read never loses pass-1
+                    logger.warning(
+                        "memory_delta %s: completeness re-read failed",
+                        session_id,
+                        exc_info=True,
+                    )
             delta_id = deltas_store.insert(
                 conn,
                 session_id=session_id,

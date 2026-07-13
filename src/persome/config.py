@@ -214,6 +214,19 @@ class MemoryDeltaConfig:
 
     cooccurrence_knows: bool = True
 
+    # Completeness re-read (spec B1, ProMem arXiv 2601.04463): after pass 1, call
+    # the model a second time over the same window with pass-1 memories as prior,
+    # admitting only owner-authored facts pass 1 missed. The primary recall lever;
+    # doubles the per-window LLM cost, so OFF by default.
+    completeness_reread: bool = False
+
+    # Temperature-decorrelated multi-sampling (spec B2, self-consistency Wang 2022):
+    # sample the formation call twice per window (T=0 then T=0.7) and union the
+    # candidates before gating. Two T=0 samples are correlated and add nothing, so
+    # the second temperature must be > 0. Also doubles cost; OFF by default.
+    decorrelated_samples: bool = False
+    decorrelated_second_temperature: float = 0.7
+
 
 @dataclass
 class OrphanReaperConfig:
@@ -740,6 +753,9 @@ min_confidence = 0.5
 apply_enabled = true       # deterministic Point/Line production after persist
 apply_assertions = true
 cooccurrence_knows = true
+completeness_reread = false   # spec B1: second re-read pass to catch missed authored facts (ProMem); doubles per-window LLM cost
+decorrelated_samples = false  # spec B2: sample twice (T=0 + T=0.7) and union candidates before gating (self-consistency); doubles cost
+decorrelated_second_temperature = 0.7
 
 [evomem]
 # evomem SSOT switch — survivability base (snapshots + chain self-check).
