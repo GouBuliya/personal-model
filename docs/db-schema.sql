@@ -13,6 +13,11 @@
 
 -- ---- store/fts.py connect() — core schema + modules ensured on every connect ----
 
+CREATE TABLE atom_facets (
+            entry_id TEXT NOT NULL,
+            facet    TEXT NOT NULL
+        );
+
 CREATE TABLE captures (
     rowid INTEGER PRIMARY KEY AUTOINCREMENT,
     id TEXT UNIQUE NOT NULL,
@@ -148,6 +153,10 @@ CREATE TABLE vector_queue (
             entry_id    TEXT PRIMARY KEY,
             enqueued_at TEXT NOT NULL
         );
+
+CREATE INDEX idx_atom_facets_entry ON atom_facets(entry_id);
+
+CREATE INDEX idx_atom_facets_facet ON atom_facets(facet);
 
 CREATE INDEX idx_captures_app ON captures(app_name);
 

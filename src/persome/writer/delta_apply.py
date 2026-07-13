@@ -15,6 +15,7 @@ from ..evomem.models import MemoryLayer
 from ..evomem.person_graph import _slug as _entity_slug
 from ..logger import get
 from ..store import entries as entries_store
+from ..store import fts as fts_store
 from ..store import relation_edges as edges_store
 from ..store.relation_edges import EntityKind, Predicate
 
@@ -169,7 +170,17 @@ def _apply_assertions(
             conf = a.get("confidence")
             if isinstance(conf, (int, float)):
                 tags += f" confidence:{float(conf):.2f}"
-            mem.add_direct(text, layer=MemoryLayer.L5_KNOWLEDGE, file_name=stem, tags=tags)
+            entry_id = mem.add_direct(
+                text, layer=MemoryLayer.L5_KNOWLEDGE, file_name=stem, tags=tags
+            )
+            # C2 facet head source: persist this assertion's addressing handles
+            # keyed by its entry id (== evomem node_id, stable across rebuild).
+            # Off by default on the read side ([search] facet_pool_weight = 0.0),
+            # but captured now so the head has data the day a benchmark earns it.
+            facets = a.get("facets")
+            if entry_id and isinstance(facets, list) and facets:
+                with contextlib.suppress(Exception):
+                    fts_store.replace_atom_facets(conn, entry_id, facets)
             r.assertions_minted += 1
         except Exception as exc:  # noqa: BLE001
             r.errors.append(f"assertion: {exc}")

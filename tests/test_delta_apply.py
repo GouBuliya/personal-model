@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from persome.evomem.engine import EvoMemory
+from persome.store import entries as entries_store
 from persome.store import fts
 from persome.store import relation_edges as edges_store
 from persome.writer import delta_apply
@@ -448,6 +449,39 @@ def test_assertions_land_as_fact_entries(ac_root):
         "\u6e29\u5b50\u58a8\u62ff\u4e86\u817e\u8baf offer" in facts
         and "\u6e29\u5b50\u58a8\u6539\u4e86 inspector.py" in facts
     )
+
+
+def test_assertion_facets_persist_and_are_retrievable(ac_root):
+    """C2: an applied assertion's captured handles land in atom_facets keyed by
+    the minted entry id, and the facet head reaches that entry by a handle."""
+    clean = {
+        "entities": [{"ref": "\u6e29\u5b50\u58a8", "kind": "person", "ended": False, "quote": "x"}],
+        "relations": [],
+        "events": [],
+        "assertions": [
+            {
+                "subject": {"ref": "\u6e29\u5b50\u58a8"},
+                "text": "They accepted the new role starting next week.",
+                "facets": ["Tencent Hunyuan", "next Monday"],
+                "quote": "q",
+                "confidence": 0.95,
+            }
+        ],
+    }
+    r = _apply_cfg(clean, apply_assertions=True)
+    assert r.assertions_minted == 1
+    with fts.cursor() as conn:
+        stored = {row["facet"] for row in conn.execute("SELECT facet FROM atom_facets")}
+        assert stored == {"Tencent Hunyuan", "next Monday"}
+        # Project evo_nodes → the entries FTS table (as the live daemon does).
+        # atom_facets is keyed by the STABLE node_id, so the facet head's JOIN
+        # against entries.id keeps working across a wholesale rebuild.
+        entries_store.rebuild_index(conn, source_authority="evomem")
+        # the head reaches the entry via a handle the dense text never names
+        ids = fts._facet_pool(conn, "who joined Tencent Hunyuan", top_k=5)
+        assert len(ids) == 1
+        row = conn.execute("SELECT content FROM entries WHERE id=?", (ids[0],)).fetchone()
+        assert row is not None and "Tencent Hunyuan" not in row["content"]
 
 
 def test_assertions_gated_off_by_default(ac_root):

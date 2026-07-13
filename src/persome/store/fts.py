@@ -644,6 +644,50 @@ def _prepare_database_path(db_path: Path) -> bool:
     return True
 
 
+# ─── atom_facets (C2 facet retrieval head — MemGAS, ICLR 2026 / arXiv 2505.19549) ─
+# Formation captures 2-6 short *addressing handles* per assertion/event (proper
+# nouns, dates, quantities, activity phrases) that are NEVER surfaced as facts —
+# the dense ``text`` stands alone (see prompts/memory_delta.md "facets"). This
+# table indexes those handles by their parent entry (``entries.id`` == evomem
+# ``node_id``, stable across rebuild_index) so a retrieval query naming a handle
+# can reach the entry even when the dense text buries that token. Regular table
+# because ``entries`` is FTS5 (no side columns). Orphan rows (parent hard-deleted)
+# are harmless: the ``_facet_pool`` JOIN is INNER, so they never vote.
+def _ensure_atom_facets(conn: sqlite3.Connection) -> None:
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS atom_facets (
+            entry_id TEXT NOT NULL,
+            facet    TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_atom_facets_entry ON atom_facets(entry_id);
+        CREATE INDEX IF NOT EXISTS idx_atom_facets_facet ON atom_facets(facet);
+    """)
+
+
+def replace_atom_facets(
+    conn: sqlite3.Connection, entry_id: str, facets: Iterable[str] | None
+) -> int:
+    """Set the facet handles for one entry (DELETE-then-INSERT, idempotent).
+
+    Blank/duplicate (case-insensitive) handles are dropped. Returns how many
+    handles were stored. An empty/None ``facets`` clears the entry's rows.
+    """
+    if not entry_id:
+        return 0
+    conn.execute("DELETE FROM atom_facets WHERE entry_id = ?", (entry_id,))
+    stored = 0
+    seen: set[str] = set()
+    for f in facets or []:
+        handle = str(f or "").strip()
+        key = handle.lower()
+        if not handle or key in seen:
+            continue
+        seen.add(key)
+        conn.execute("INSERT INTO atom_facets(entry_id, facet) VALUES (?, ?)", (entry_id, handle))
+        stored += 1
+    return stored
+
+
 def connect(db_path: Path | None = None) -> sqlite3.Connection:
     db_path = db_path or paths.index_db()
     if sqlite3.sqlite_version_info < _MIN_SECURE_FTS_SQLITE:
@@ -809,6 +853,7 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     session_store.ensure_schema(conn)
     _ensure_entry_temporal(conn)
     _ensure_entry_metadata(conn)
+    _ensure_atom_facets(conn)
     from . import vectors as vectors_mod
 
     vectors_mod.ensure_schema(conn)
@@ -1420,6 +1465,11 @@ _POOL_WEIGHTS: dict[str, Any] = {
     "relation": 1.0,
     "relation_shadow": True,
     "contains_rerank": True,
+    # C2 facet head (MemGAS). Default 0.0 = OFF: the pool is never computed and
+    # search_associative is byte-identical to today. A retrieval benchmark
+    # (OmniMemEval) must earn a positive weight before it votes — the lab's
+    # "don't ship an unvalidated retrieval head" discipline.
+    "facet": 0.0,
 }
 
 
@@ -1443,10 +1493,16 @@ def set_relation_shadow(enabled: bool) -> None:
     _POOL_WEIGHTS["relation_shadow"] = bool(enabled)
 
 
-def set_pool_weights(*, slot: float, relation: float) -> None:
-    """Configure the associative entrance's slot-head vote weights (1.0 = legacy)."""
+def set_pool_weights(*, slot: float, relation: float, facet: float | None = None) -> None:
+    """Configure the associative entrance's slot-head vote weights (1.0 = legacy).
+
+    ``facet`` is the C2 facet-head weight; None leaves the current value (default
+    0.0 = the head is inert and never computed).
+    """
     _POOL_WEIGHTS["slot"] = max(0.0, float(slot))
     _POOL_WEIGHTS["relation"] = max(0.0, float(relation))
+    if facet is not None:
+        _POOL_WEIGHTS["facet"] = max(0.0, float(facet))
 
 
 # The RRF fusion is rank-only — the text backbone (BM25 + dense) is time-BLIND, so a
@@ -1535,7 +1591,11 @@ def wire_read_path(cfg: Any) -> None:
     dense_ready = bool(s.hybrid_enabled) and embeddings_client.available()
     vectors_mod.set_enabled(dense_ready)
     set_hybrid_config(enabled=dense_ready, recall_n=s.hybrid_recall_n, rrf_k=s.hybrid_rrf_k)
-    set_pool_weights(slot=s.slot_pool_weight, relation=s.relation_pool_weight)
+    set_pool_weights(
+        slot=s.slot_pool_weight,
+        relation=s.relation_pool_weight,
+        facet=getattr(s, "facet_pool_weight", 0.0),
+    )
     set_relation_shadow(s.relation_include_shadow)
     set_contains_rerank(s.contains_pool_rerank)
     set_tags_matchable(s.tags_matchable)
@@ -1829,6 +1889,49 @@ def _window_pool(conn: sqlite3.Connection, *, since: str, until: str, top_k: int
     return [r["id"] for r in rows]
 
 
+def _facet_pool(
+    conn: sqlite3.Connection,
+    query: str,
+    *,
+    top_k: int,
+    since: str | None = None,
+    until: str | None = None,
+) -> list[str]:
+    """C2 facet head (MemGAS, ICLR 2026 / arXiv 2505.19549).
+
+    Vote for entries whose formation-captured addressing handles
+    (``atom_facets.facet`` — proper nouns, dates, quantities, activity phrases)
+    textually occur in the query. A HARD head like the entity/scene contains
+    pools: zero-LLM, zero-embedding SQLite lookup. Facets are addressing-only
+    (never surfaced as facts), so this is pure recall assistance — an entry is
+    reached by a handle the dense text may bury. Entries ranked by number of
+    DISTINCT handles matched, then recency. Superseded entries never vote (the
+    INNER JOIN on live ``entries`` filters them). Callers gate this on a
+    positive facet weight, so the default-off path never runs it.
+    """
+    q = (query or "").strip().lower()
+    if not q:
+        return []
+    clauses = ["e.superseded = 0", "LENGTH(af.facet) >= 2", "INSTR(?, LOWER(af.facet)) > 0"]
+    args: list[Any] = [q]
+    if since:
+        clauses.append("e.timestamp >= ?")
+        args.append(since)
+    if until:
+        clauses.append("e.timestamp <= ?")
+        args.append(until)
+    args.append(top_k)
+    rows = conn.execute(
+        "SELECT af.entry_id AS eid, COUNT(DISTINCT LOWER(af.facet)) AS votes, "
+        "MAX(e.timestamp) AS ts "
+        "FROM atom_facets af JOIN entries e ON e.id = af.entry_id "
+        "WHERE " + " AND ".join(clauses) + " "
+        "GROUP BY af.entry_id ORDER BY votes DESC, ts DESC LIMIT ?",
+        args,
+    ).fetchall()
+    return [r["eid"] for r in rows]
+
+
 def _bigram_sim(a: str, b: str) -> float:
     """Char-bigram Jaccard — the deterministic content-similarity the MMR
     re-rank uses (same shape as the sink's fuzzy fold; zero network)."""
@@ -1883,6 +1986,7 @@ def search_associative(
     relation_pool_weight: float | None = None,
     relation_include_shadow: bool | None = None,
     contains_rerank: bool | None = None,
+    facet_pool_weight: float | None = None,
 ) -> list[EntryHit]:
     """The associative read entrance (memory-rebuild spec §3.2/§3.3, incremental).
 
@@ -1891,15 +1995,29 @@ def search_associative(
     semantic, exactly ``search_hybrid``'s pools), the WHO entity head, the
     WHERE scene head, the WHY/HOW relation head (graph expansion of the Q's
     identities over ACTIVE relation_edges — shadow stays out, §3.3 status
-    gate), and — when the Q carries a day window — the WHEN window pool, with
-    the window ALSO pruning every other pool (the time slot is both a hard
-    filter and a ranked list). Absent slot = zero votes, no mode switch;
-    all slots empty degrades to ``search_hybrid`` — one engine, one entrance.
+    gate), the C2 facet head (atom_facets handles the query names — off unless
+    ``facet_pool_weight``/``[search] facet_pool_weight`` > 0), and — when the Q
+    carries a day window — the WHEN window pool, with the window ALSO pruning
+    every other pool (the time slot is both a hard filter and a ranked list).
+    Absent slot = zero votes, no mode switch; all slots empty degrades to
+    ``search_hybrid`` — one engine, one entrance.
     """
     entities = [e for e in (entities or []) if e and e.strip()]
     scene_terms = [s for s in (scene_terms or []) if s and s.strip()]
     has_window = bool(since and until)
-    if not entities and not scene_terms and not has_window:
+    recall_n = max(top_k, int(_HYBRID["recall_n"]))
+    # C2 facet head is opt-in: compute it ONLY when its weight is positive, so
+    # the default-off path is byte-identical to pre-C2 (no extra query, and the
+    # slot-less degrade-to-hybrid guard below is unchanged).
+    w_facet = (
+        _POOL_WEIGHTS.get("facet", 0.0)
+        if facet_pool_weight is None
+        else max(0.0, facet_pool_weight)
+    )
+    facet_ids = (
+        _facet_pool(conn, query, top_k=recall_n, since=since, until=until) if w_facet > 0.0 else []
+    )
+    if not entities and not scene_terms and not has_window and not facet_ids:
         return search_hybrid(
             conn,
             query=query,
@@ -1910,7 +2028,6 @@ def search_associative(
             embedder=embedder,
             mmr_diversity=mmr_diversity,
         )
-    recall_n = max(top_k, int(_HYBRID["recall_n"]))
     # §3.3/§3.4 step 1 — hard heads FIRST, so a unique high-confidence hard hit
     # can EARLY-EXIT before the expensive soft heads (the dense embedding call)
     # ever run. Adaptive computation: certainty buys latency.
@@ -1996,6 +2113,7 @@ def search_associative(
             scene_ids = _rerank_by_query_sim(conn, scene_ids, _qv)
             relation_ids = _rerank_by_query_sim(conn, relation_ids, _qv)
             relation_shadow_ids = _rerank_by_query_sim(conn, relation_shadow_ids, _qv)
+            facet_ids = _rerank_by_query_sim(conn, facet_ids, _qv)
     bm25 = _bm25_pool(
         conn, query=query, path_patterns=path_patterns, since=since, until=until, top_k=recall_n
     )
@@ -2022,6 +2140,7 @@ def search_associative(
             (window_ids, w_slot),
             (relation_ids, w_rel),
             (relation_shadow_ids, w_rel * 0.5),
+            (facet_ids, w_facet),
         )
         if p and w > 0.0
     ]

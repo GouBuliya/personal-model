@@ -431,6 +431,13 @@ class SearchConfig:
     # voice for genuine 5W1H queries (deterministic golden slot buckets stay 1.0).
     slot_pool_weight: float = 0.3
     relation_pool_weight: float = 1.0
+    # C2 facet retrieval head (MemGAS, ICLR 2026 / arXiv 2505.19549): formation
+    # captures short addressing handles per fact (atom_facets); this pool votes
+    # for entries whose handles the query names. Default 0.0 = OFF (the pool is
+    # never computed and search_associative is byte-identical to pre-C2). Earn a
+    # positive weight on a retrieval benchmark (OmniMemEval) before enabling —
+    # the lab's "don't ship an unvalidated retrieval head" discipline.
+    facet_pool_weight: float = 0.0
     # §5 production read cutover (memory-rebuild §3.2): query-time consumers (MCP
     # search / writer tool-loop) route through
     # retrieval.associative.associative_read — zero-LLM Q distillation feeding the
@@ -780,6 +787,7 @@ slot_pool_weight = 0.3             # RRF weight for entity, scene, and time-wind
 relation_include_shadow = true     # Include audited shadow relations at reduced weight
 contains_pool_rerank = true        # Dense rerank within graph-expanded pools
 relation_pool_weight = 1.0         # Weight for graph-expanded relation candidates
+facet_pool_weight = 0.0            # C2 facet head RRF weight; 0 = off until a benchmark earns it
 associative_read_enabled = true    # Use associative retrieval; false falls back to hybrid search
 tags_matchable = false             # Match BM25 against content only; true restores tag matching
 recency_half_life_days = 14.0      # Deterministic post-fusion age decay; 0 disables

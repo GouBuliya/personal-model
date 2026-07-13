@@ -8,10 +8,12 @@ mechanism → status (shipped / default-off / deferred / rejected) → public an
 Discipline note (spec §3): the frozen golden fixture
 (`tests/fixtures/formation_golden/`) is a **formation-domain** proxy — it scores
 extraction precision/recall/calendar/polarity on one persome screen session. It
-does **not** score retrieval ranking. So the retrieval heads (C2–C4) cannot earn
-their inclusion here; per the lab's own "don't ship an unvalidated mechanism"
-rule, they are recorded as deferred to a retrieval-benchmark round, not shipped
-default-on.
+does **not** score retrieval ranking. So a retrieval head cannot earn a positive
+default weight here; per the lab's own "don't ship an unvalidated mechanism"
+rule, a head may be **built + wired + tested default-off** (weight 0.0, byte-zero
+perturbation when off), but a retrieval benchmark (OmniMemEval) must earn its
+weight before it is turned on. C2 (facet head) is now in that state; C3–C4 stay
+deferred (not built).
 
 ## Batch A — formation prompt + gate
 
@@ -34,7 +36,7 @@ default-on.
 | Mechanism | Status | Anchor | Verification / rationale |
 |---|---|---|---|
 | C1 facet capture (formation side) | **shipped** | MemGAS, ICLR 2026 / arXiv 2505.19549 | Assertions/events carry an optional `facets` list, gated to ≤6 short deduped handles, addressing-only (never surfaced as facts — the dense `text` stands alone). Persisted in the `memory_deltas` payload. Tests: `test_facets_are_captured_normalized_and_capped`, `test_missing_or_bad_facets_yield_empty_list`. |
-| C1 facet index/head (retrieval side) | **deferred** | MemGAS | Wiring a facet pool into `store/fts.py`/`retrieval/associative.py` cannot be validated on the formation fixture (no retrieval scoring), and the retrieval path was just stabilized under the single-owner EXCLUSIVE contract (d59cb47). Deferred to a retrieval-benchmark round (feed persome formation output to the lab's OmniMemEval harness). Facets are already captured (C1 above), so the index has its source when that round runs. |
+| C2 facet index/head (retrieval side) | **shipped, default-off (weight 0.0)** | MemGAS, ICLR 2026 / arXiv 2505.19549 | Built + wired + tested, inert until a benchmark earns a weight. `atom_facets(entry_id, facet)` table (keyed by the stable evomem `node_id`, rebuild-safe; committed to `docs/db-schema.sql`) is written at apply time from each assertion's captured handles (`delta_apply._apply_assertions`). `_facet_pool` votes for entries whose handles the query names — a HARD, zero-LLM/zero-embedding head fused into `search_associative` at `[search] facet_pool_weight` (default **0.0** → the pool is never computed and the entrance is byte-identical to pre-C2; the head never triggers the single-hit early-exit, so it can only *add* recall, never override the text backbone). Tests: `test_facet_head.py` (7 — storage dedup/replace, off-inert, reaches-buried-handle, vote-ranking, superseded-skip, since/until, min-length) + `test_delta_apply.py::test_assertion_facets_persist_and_are_retrievable` (end-to-end apply → rebuild → retrieve). Earns a positive weight only on the OmniMemEval retrieval round below. |
 | C3 temporal-decay head | **deferred** | SYNAPSE, arXiv 2601.02744 | Same rationale — needs a retrieval benchmark to earn inclusion; a persome recency-decay pool already exists in `_bm25_pool`/window scoring, so the marginal head must prove additive gain, which the formation fixture cannot show. |
 | C4 association (Hebbian) head | **deferred** | HeLa-Mem arXiv 2604.16839 + SYNAPSE lateral inhibition | Same rationale. persome already has a relation/slot pool; a co-formation Hebbian head must prove gain over it on a retrieval benchmark. |
 
@@ -78,10 +80,11 @@ against the gold labels:
 ## Next round (independent, not blocking)
 
 The live fixture pass is done (above) — it is a precision oracle only and did not
-justify B1. The real B1 decision, and the deferred retrieval heads (C1-index, C3,
-C4), need the lab's OmniMemEval conversation benchmark, where both owner- and
-entity-facts are in scope and recall is measurable. Feed persome's memory_delta
-output through that harness, run baseline vs B1-on and per-head ablations, and set
-each default from the paired result — the "harder signal" round from the spec's
-reminders. Until then B1/B2 stay default-off and the retrieval heads stay
-deferred, on evidence, not on caution alone.
+justify B1. The real B1 decision, and the C2 facet head's weight (built + wired +
+default-off, waiting on a number), need the lab's OmniMemEval conversation
+benchmark, where both owner- and entity-facts are in scope and recall is
+measurable. Feed persome's memory_delta output through that harness, run baseline
+vs B1-on and a `facet_pool_weight` sweep (0.0 → 0.3 → 1.0), and set each default
+from the paired result — the "harder signal" round from the spec's reminders.
+Until then B1/B2 and C2 stay default-off, and C3–C4 stay deferred (unbuilt), on
+evidence, not on caution alone.
