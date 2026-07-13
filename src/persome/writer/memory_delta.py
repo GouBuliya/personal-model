@@ -67,6 +67,35 @@ def _norm_ended(item: dict) -> bool:
     return item.get("ended") is True
 
 
+_FACET_MAX = 6
+_FACET_MAX_CHARS = 64
+
+
+def _norm_facets(item: dict) -> list[str]:
+    """Validate facet handles (spec C1): ≤6 short, non-empty, deduped strings.
+
+    Facets are addressing handles ONLY — never surfaced as facts. Anything that
+    is not a short string is dropped; the memory ``text`` must stand alone.
+    """
+    raw = item.get("facets")
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for f in raw:
+        if not isinstance(f, str):
+            continue
+        val = f.strip()
+        key = val.casefold()
+        if not val or len(val) > _FACET_MAX_CHARS or key in seen:
+            continue
+        seen.add(key)
+        out.append(val)
+        if len(out) >= _FACET_MAX:
+            break
+    return out
+
+
 # Injectable LLM seam (mirrors case_extractor): resolved lazily so the
 # ``fake_llm`` fixture's monkeypatched ``llm_mod.call_llm`` is picked up.
 LlmCallFn = Callable[..., Any]
@@ -462,7 +491,12 @@ def gate_delta(
             and conf_ok(item)
         ):
             clean["assertions"].append(
-                {**item, "subject": subject, "polarity": _norm_polarity(item)}
+                {
+                    **item,
+                    "subject": subject,
+                    "polarity": _norm_polarity(item),
+                    "facets": _norm_facets(item),
+                }
             )
         else:
             dropped += 1
@@ -502,7 +536,7 @@ def gate_delta(
             and _quote_ok(item, evidence_norm)
             and conf_ok(item)
         ):
-            clean["events"].append({**item, "participants": resolved})
+            clean["events"].append({**item, "participants": resolved, "facets": _norm_facets(item)})
         else:
             dropped += 1
 

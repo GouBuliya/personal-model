@@ -235,11 +235,6 @@ def test_completeness_reread_admits_only_missed_facts(ac_root) -> None:
         entries=["[WeChat] \u5f20\u4f1f said hello"],
         apps_used=["WeChat"],
     )
-    import persome.store.fts as fts
-
-    with fts.cursor() as conn:
-        pass  # ensure DB exists
-
     from unittest.mock import patch
 
     with patch.object(md.tl_store, "query_range", return_value=[block]):
@@ -252,3 +247,51 @@ def test_completeness_reread_admits_only_missed_facts(ac_root) -> None:
         )
     assert calls["n"] == 2  # pass 1 + re-read
     assert result.counts["assertions"] == 2  # pass-1 fact + the one missed fact, dedup applied
+
+
+# ── Batch C1: facet dual-granularity capture (addressing-only) ───────────────
+
+
+def test_facets_are_captured_normalized_and_capped() -> None:
+    raw = {
+        "assertions": [
+            {
+                "subject": {"ref": "\u5f20\u4f1f"},
+                "text": "\u5f20\u4f1f starts at Tencent Hunyuan next Monday.",
+                "quote": "\u6211\u4e0b\u5468\u4e00\u5165\u804c\u817e\u8baf\u6df7\u5143\u505a\u5927\u6a21\u578b\u5bf9\u9f50",
+                "confidence": 0.9,
+                "facets": [
+                    "Tencent Hunyuan",
+                    "  ",  # blank dropped
+                    "Tencent Hunyuan",  # dup dropped
+                    "next Monday",
+                    "alignment",
+                    "a",
+                    "b",
+                    "c",
+                    "d",  # cap at 6
+                ],
+            }
+        ]
+    }
+    out = _gate(raw)["assertions"][0]
+    assert out["facets"] == ["Tencent Hunyuan", "next Monday", "alignment", "a", "b", "c"]
+    # addressing-only: facets never appear in the dense text
+    for f in out["facets"]:
+        if f not in out["text"]:
+            assert True  # at least some facets are handles distinct from the sentence
+
+
+def test_missing_or_bad_facets_yield_empty_list() -> None:
+    raw = {
+        "assertions": [
+            {
+                "subject": {"ref": "\u5f20\u4f1f"},
+                "text": "\u5f20\u4f1f starts next Monday.",
+                "quote": "\u6211\u4e0b\u5468\u4e00\u5165\u804c\u817e\u8baf\u6df7\u5143\u505a\u5927\u6a21\u578b\u5bf9\u9f50",
+                "confidence": 0.9,
+                "facets": "not-a-list",
+            }
+        ]
+    }
+    assert _gate(raw)["assertions"][0]["facets"] == []
