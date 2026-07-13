@@ -35,8 +35,12 @@ intentionally omitted from OpenAPI.
 
 Receipt buttons in the viewer call `/model/evidence`. The response is a
 progressive-disclosure node with `sources` for explicit stored lineage and
-`context` for time-adjacent captures. An unknown or retention-expired payload
-returns `status=missing` while preserving the original receipt for audit.
+`context` for time-adjacent captures. Human-readable `label` values let clients
+present evidence without exposing internal IDs; Point version links are kept in
+`history`. The local viewer organizes this as Overview, Evidence, and History,
+with drill-down breadcrumbs and raw receipts under technical details. An unknown
+or retention-expired payload returns `status=missing` while preserving the
+original receipt for audit.
 
 `/status.data.llm_profile` reports the effective provider, protocol, model,
 endpoint, key variable name, credential presence, and legacy-migration state.
@@ -68,6 +72,12 @@ The loopback viewer receives raw local graph/model detail so its owner can
 inspect the real person model. `persome model export` and MCP
 `get_model_snapshot` apply deterministic redaction by default; `/model/graph`
 is not a publication endpoint.
+
+The authenticated viewer polls for model changes, but the Runtime keeps one
+owner-local graph payload in memory for at most 15 seconds and makes refresh
+single-flight. This bounds repeated snapshot work across polling tabs without
+writing raw graph content to another file. The browser also coalesces overlapping
+polls and turns a request that exceeds 45 seconds into an explicit retry state.
 
 ## Security boundary
 

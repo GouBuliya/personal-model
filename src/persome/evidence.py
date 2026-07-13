@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import stat
+from pathlib import Path
 from typing import Any
 
 _SUMMARY_LIMIT = 4_000
@@ -41,6 +43,16 @@ def _json_list(value: Any) -> list[str]:
 
 def _trim(value: Any, limit: int = _SUMMARY_LIMIT) -> str:
     return str(value or "").strip()[:limit]
+
+
+def _humanize_path(value: str | None) -> str:
+    name = str(value or "").rsplit("/", 1)[-1].removesuffix(".md").removesuffix(".json")
+    return " ".join(part.capitalize() for part in name.replace("_", "-").split("-") if part)
+
+
+def _short_label(value: Any, fallback: str, limit: int = 140) -> str:
+    text = " ".join(str(value or "").split())
+    return text[:limit] if text else fallback
 
 
 def parse_reference(reference: str) -> tuple[str, str | None, str | None]:
@@ -87,12 +99,14 @@ def _base(
     kind: str,
     identifier: str,
     status: str,
+    label: str = "",
     summary: str = "",
     timestamp: str | None = None,
     path: str | None = None,
     metadata: dict[str, Any] | None = None,
     sources: list[dict[str, Any]] | None = None,
     context: list[dict[str, Any]] | None = None,
+    history: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "reference": reference,
@@ -100,13 +114,54 @@ def _base(
         "kind": kind,
         "id": identifier,
         "status": status,
+        "label": label or identifier,
         "summary": summary,
         "timestamp": timestamp,
         "path": path,
         "metadata": metadata or {},
         "sources": sources or [],
         "context": context or [],
+        "history": history or [],
     }
+
+
+def _evo_reference(conn: sqlite3.Connection, node_id: str) -> tuple[str, str]:
+    try:
+        row = conn.execute(
+            "SELECT file_name, content FROM evo_nodes"
+            " WHERE node_id=? ORDER BY is_latest DESC LIMIT 1",
+            (node_id,),
+        ).fetchone()
+    except sqlite3.Error:
+        row = None
+    if row is None:
+        return node_id, node_id
+    path = str(row[0] or "")
+    label = _short_label(row[1], _humanize_path(path) or node_id)
+    return f"⟨{node_id}:{path}⟩", label
+
+
+def _reference_label(conn: sqlite3.Connection, reference: str) -> str:
+    identifier, path_hint, _receipt = parse_reference(reference)
+    if _table_exists(conn, "entries"):
+        row = conn.execute("SELECT content, path FROM entries WHERE id=?", (identifier,)).fetchone()
+        if row is not None:
+            return _short_label(row[0], _humanize_path(str(row[1] or "")) or identifier)
+    if _table_exists(conn, "evo_nodes"):
+        row = conn.execute(
+            "SELECT content, file_name FROM evo_nodes"
+            " WHERE node_id=? ORDER BY is_latest DESC LIMIT 1",
+            (identifier,),
+        ).fetchone()
+        if row is not None:
+            return _short_label(row[0], _humanize_path(str(row[1] or "")) or identifier)
+    if _table_exists(conn, "captures"):
+        row = conn.execute(
+            "SELECT app_name, window_title FROM captures WHERE id=?", (identifier,)
+        ).fetchone()
+        if row is not None:
+            return " · ".join(str(value) for value in row if value) or identifier
+    return _humanize_path(path_hint) or identifier
 
 
 def _nearby_capture_links(conn: sqlite3.Connection, timestamp: str | None) -> list[dict[str, Any]]:
@@ -176,28 +231,22 @@ def _resolve_entry(
             metadata.update(valid_from=temporal[0], valid_until=temporal[1])
 
     path = str(row[1] or "")
-    canonical = receipt or f"⟨{identifier}:{path}⟩"
+    canonical = f"⟨{identifier}:{path}⟩" if path else receipt or identifier
     timestamp = str(row[2]) if row[2] else None
+    context_timestamp = str(metadata.get("occurred_at") or timestamp or "") or None
     return _base(
         reference=original,
         canonical_reference=canonical,
         kind="memory",
         identifier=identifier,
         status="superseded" if row[5] else "active",
+        label=_short_label(row[4], _humanize_path(path) or identifier),
         summary=_trim(row[4]),
         timestamp=timestamp,
         path=path,
         metadata=metadata,
-        context=_nearby_capture_links(conn, timestamp),
+        context=_nearby_capture_links(conn, context_timestamp),
     )
-
-
-def _evo_receipt(conn: sqlite3.Connection, node_id: str) -> str:
-    row = conn.execute(
-        "SELECT file_name FROM evo_nodes WHERE node_id=? ORDER BY is_latest DESC LIMIT 1",
-        (node_id,),
-    ).fetchone()
-    return f"⟨{node_id}:{str(row[0] or '')}⟩" if row is not None else node_id
 
 
 def _resolve_evo_node(
@@ -213,7 +262,7 @@ def _resolve_evo_node(
         row = conn.execute(
             "SELECT node_id, content, layer, supersedes, is_latest, status, memory_at,"
             " gmt_created, file_name, tags, refined_from, abstracted_from, confidence,"
-            " conflicted, occurred_at, valid_from, valid_until"
+            " conflicted, occurred_at, valid_from, valid_until, superseded_by"
             " FROM evo_nodes WHERE node_id=? ORDER BY is_latest DESC LIMIT 1",
             (identifier,),
         ).fetchone()
@@ -222,29 +271,52 @@ def _resolve_evo_node(
     if row is None:
         return None
 
-    parent_ids = list(dict.fromkeys([*_json_list(row[3]), *_json_list(row[11])]))
+    # Version-chain edges belong in ``history`` below. Direct sources are only
+    # derivation inputs (abstraction/refinement), so clients do not present an
+    # earlier wording as independent proof for the current wording.
+    parent_ids = list(dict.fromkeys(_json_list(row[11])))
     if row[10] and str(row[10]) not in parent_ids:
         parent_ids.append(str(row[10]))
-    sources = [
-        _link(
-            relation="direct_lineage",
-            kind="point",
-            identifier=parent_id,
-            reference=_evo_receipt(conn, parent_id),
-            label="Earlier evidence used to derive this point",
+    sources = []
+    for parent_id in parent_ids:
+        parent_reference, parent_label = _evo_reference(conn, parent_id)
+        sources.append(
+            _link(
+                relation="direct_lineage",
+                kind="point",
+                identifier=parent_id,
+                reference=parent_reference,
+                label=parent_label,
+            )
         )
-        for parent_id in parent_ids
-    ]
+
+    history: list[dict[str, Any]] = []
+    for relation, related_ids in (
+        ("previous_version", _json_list(row[3])),
+        ("next_version", _json_list(row[17])),
+    ):
+        for related_id in related_ids:
+            related_reference, related_label = _evo_reference(conn, related_id)
+            history.append(
+                _link(
+                    relation=relation,
+                    kind="point",
+                    identifier=related_id,
+                    reference=related_reference,
+                    label=related_label,
+                )
+            )
 
     path = str(row[8] or "")
-    canonical = receipt or f"⟨{identifier}:{path}⟩"
-    timestamp = str(row[6] or row[7]) if row[6] or row[7] else None
+    canonical = f"⟨{identifier}:{path}⟩" if path else receipt or identifier
+    timestamp = str(row[14] or row[6] or row[7]) if row[14] or row[6] or row[7] else None
     return _base(
         reference=original,
         canonical_reference=canonical,
         kind="point",
         identifier=identifier,
         status=str(row[5] or ("active" if row[4] else "superseded")),
+        label=_short_label(row[1], _humanize_path(path) or identifier),
         summary=_trim(row[1]),
         timestamp=timestamp,
         path=path,
@@ -260,6 +332,7 @@ def _resolve_evo_node(
         },
         sources=sources,
         context=_nearby_capture_links(conn, timestamp),
+        history=history,
     )
 
 
@@ -284,7 +357,17 @@ def _resolve_capture(
 
     from . import paths
 
-    buffer_available = (paths.capture_buffer_dir() / f"{identifier}.json").is_file()
+    # Capture IDs are file stems.  Even if an imported/corrupt database contains
+    # a hostile absolute or nested ID, evidence lookup must not turn it into an
+    # existence probe outside the capture buffer.
+    capture_name = f"{identifier}.json"
+    buffer_available = False
+    if Path(capture_name).name == capture_name:
+        try:
+            retained = (paths.capture_buffer_dir() / capture_name).lstat()
+            buffer_available = stat.S_ISREG(retained.st_mode) and retained.st_nlink == 1
+        except OSError:
+            pass
     summary = _trim(row[7] or row[6])
     return _base(
         reference=original,
@@ -292,6 +375,10 @@ def _resolve_capture(
         kind="capture",
         identifier=identifier,
         status="available" if buffer_available else "metadata_only",
+        label=(
+            " · ".join(part for part in (str(row[2] or ""), str(row[4] or "")) if part)
+            or identifier
+        ),
         summary=summary,
         timestamp=str(row[1]) if row[1] else None,
         metadata={
@@ -314,20 +401,17 @@ def _resolve_activity(
     identifier: str,
     receipt: str | None,
 ) -> dict[str, Any] | None:
-    from .model.activity_source import ActivitySource, normalize_activity_identity
+    from .model.activity_source import ActivitySource, is_activity_identity
 
-    normalized = normalize_activity_identity(identifier)
+    _receipt_id, path_hint, _canonical = parse_reference(original)
+    if is_activity_identity(identifier):
+        activity_identity = identifier
+    elif path_hint in {"sessions", "intents"}:
+        activity_identity = f"event:{path_hint.removesuffix('s')}:{identifier}"
+    else:
+        return None
     try:
-        event = next(
-            (
-                item
-                for item in ActivitySource(conn).events()
-                if item.stable_id == normalized
-                or item.source_receipt == original
-                or item.source_receipt == receipt
-            ),
-            None,
-        )
+        event = ActivitySource(conn).event(activity_identity)
     except sqlite3.Error:
         return None
     if event is None:
@@ -341,16 +425,17 @@ def _resolve_activity(
                 kind="memory",
                 identifier=event.source_id,
                 reference=event.source_receipt,
-                label="Memory entry that records this activity",
+                label=_reference_label(conn, event.source_receipt),
                 timestamp=event.occurred_at,
             )
         )
     return _base(
         reference=original,
-        canonical_reference=receipt or event.source_receipt,
+        canonical_reference=event.source_receipt,
         kind="activity",
         identifier=event.stable_id,
         status="historical",
+        label=_short_label(event.summary, "Activity"),
         summary=_trim(event.summary),
         timestamp=event.occurred_at,
         path=event.source_receipt,
@@ -374,12 +459,47 @@ def _receipt_values(item: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(str(value) for value in values if value))
 
 
+def _has_geometry_identity(conn: sqlite3.Connection, identifier: str) -> bool:
+    """Cheaply reject arbitrary IDs before building the full model snapshot."""
+    if identifier.startswith("evolution:"):
+        old_id, separator, new_id = identifier.removeprefix("evolution:").rpartition(":")
+        if (
+            not separator
+            or not old_id.strip()
+            or not new_id.strip()
+            or not _table_exists(conn, "evo_nodes")
+        ):
+            return False
+        try:
+            rows = conn.execute(
+                "SELECT supersedes FROM evo_nodes WHERE node_id=? AND status != 'archived'",
+                (new_id,),
+            ).fetchall()
+        except sqlite3.Error:
+            return False
+        return any(old_id in _json_list(row[0]) for row in rows)
+    for table, column in (("relation_edges", "edge_id"), ("schema_faces", "face_id")):
+        if not _table_exists(conn, table):
+            continue
+        try:
+            if conn.execute(
+                f"SELECT 1 FROM {table} WHERE {column}=? LIMIT 1", (identifier,)
+            ).fetchone():
+                return True
+        except sqlite3.Error:
+            continue
+    return False
+
+
 def _resolve_geometry(
     conn: sqlite3.Connection,
     *,
     original: str,
     identifier: str,
 ) -> dict[str, Any] | None:
+    if not _has_geometry_identity(conn, identifier):
+        return None
+
     from .model.snapshot import build_snapshot
 
     try:
@@ -400,13 +520,21 @@ def _resolve_geometry(
         return None
     kind, item = match
     references = _receipt_values(item)
+    point_labels = {
+        str(point["receipt"]): _short_label(
+            point.get("content"),
+            _humanize_path(str(point.get("file_name") or "")) or str(point.get("id") or "Point"),
+        )
+        for point in snapshot["points"]
+        if point.get("receipt")
+    }
     sources = [
         _link(
             relation="direct_evidence",
             kind="receipt",
             identifier=parse_reference(value)[0],
             reference=value,
-            label="Evidence receipt inherited by this model object",
+            label=point_labels.get(value) or _reference_label(conn, value),
         )
         for value in references
     ]
@@ -418,6 +546,7 @@ def _resolve_geometry(
         kind=kind,
         identifier=identifier,
         status=str(item.get("status") or "active"),
+        label=_short_label(summary, kind.capitalize()),
         summary=_trim(summary),
         timestamp=str(timestamp) if timestamp else None,
         metadata={
@@ -446,6 +575,7 @@ def resolve_evidence(conn: sqlite3.Connection, reference: str) -> dict[str, Any]
             kind="unknown",
             identifier="",
             status="missing",
+            label="Unknown evidence",
             metadata={"reason": "empty_reference"},
         )
 
@@ -472,6 +602,7 @@ def resolve_evidence(conn: sqlite3.Connection, reference: str) -> dict[str, Any]
         kind="unknown",
         identifier=identifier,
         status="missing",
+        label=_humanize_path(path_hint) or identifier,
         path=path_hint,
         metadata={
             "reason": "source_not_found_or_retained",

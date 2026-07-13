@@ -3,6 +3,13 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
 import { computeClusterLayout, pickScreenTarget, zoomMath } from "./layout.mjs";
 import {
+  evidenceBreadcrumb,
+  evidenceOverview,
+  nodeEvidenceCards,
+  nodeHistoryCards,
+  relationLabel,
+} from "./evidence.mjs";
+import {
   SHARE_CARD_HEIGHT,
   SHARE_CARD_WIDTH,
   SHARE_FILE_NAME,
@@ -26,8 +33,13 @@ const statusEl = document.getElementById("status");
 const detailEl = document.getElementById("detail");
 const detailKindEl = document.getElementById("detail-kind");
 const detailTitleEl = document.getElementById("detail-title");
+const detailSummaryEl = document.getElementById("detail-summary");
 const detailMetaEl = document.getElementById("detail-meta");
 const detailReceiptsEl = document.getElementById("detail-receipts");
+const detailHistoryEl = document.getElementById("detail-history-list");
+const evidenceBreadcrumbsEl = document.getElementById("evidence-breadcrumbs");
+const detailTabEls = [...document.querySelectorAll("[data-detail-tab]")];
+const detailPanelEls = [...document.querySelectorAll(".detail-panel")];
 const emptyEl = document.getElementById("empty");
 const errorEl = document.getElementById("error");
 const modelIdentityEl = document.getElementById("model-identity");
@@ -99,6 +111,7 @@ let hoverDirty = false;
 let selected = null;
 let selectedItem = null;
 let detailMode = "node";
+let evidenceTrail = [];
 let evidenceRequest = 0;
 let portraitMode = null;
 let labels = [];
@@ -117,6 +130,7 @@ let zoomGoalDistance = null;
 let lastZoomPercent = null;
 let lastFrameTime = performance.now();
 let shareReady = false;
+let modelLoadPromise = null;
 const layerVisible = { points: true, lines: true, faces: true, volumes: true, root: true };
 const kindLayers = {
   point: "points",
@@ -134,6 +148,7 @@ const MIN_LINE_HIT_RADIUS_PX = 8;
 const ZOOM_MIN_PERCENT = 50;
 const ZOOM_MAX_PERCENT = 400;
 const ZOOM_STEP_PERCENT = 25;
+const MODEL_GRAPH_TIMEOUT_MS = 45_000;
 const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 function freshLayerObjects() {
@@ -824,6 +839,7 @@ function clearSelection() {
   selected = null;
   selectedItem = null;
   detailMode = "node";
+  evidenceTrail = [];
   detailEl.hidden = true;
   delete detailEl.dataset.kind;
   syncSelectionState();
@@ -859,27 +875,59 @@ function appendMeta(label, value) {
   detailMetaEl.appendChild(row);
 }
 
-function receiptValues(item) {
-  const values = [
-    item.receipt,
-    item.source_evidence?.receipt,
-    ...(item.member_receipts || []),
-    ...(item.source_receipts || []),
-  ].filter(Boolean);
-  return [...new Set(values)];
+function setDetailTab(tab, focus = false) {
+  detailTabEls.forEach((button) => {
+    const active = button.dataset.detailTab === tab;
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+    if (active && focus) button.focus();
+  });
+  detailPanelEls.forEach((panel) => {
+    panel.hidden = panel.id !== `detail-${tab}`;
+  });
 }
 
-function evidenceButton(reference, label = reference, relation = "") {
+function technicalDetails(link) {
+  const details = document.createElement("details");
+  details.className = "evidence-technical";
+  const summary = document.createElement("summary");
+  summary.textContent = "Technical details";
+  const values = [
+    link.id ? `ID: ${link.id}` : "",
+    link.reference ? `Receipt: ${link.reference}` : "",
+  ].filter(Boolean);
+  const body = document.createElement("div");
+  body.textContent = values.join("\n");
+  details.append(summary, body);
+  return details;
+}
+
+function evidenceCard(link, { drill = true } = {}) {
+  const card = document.createElement("article");
+  card.className = "evidence-card";
   const button = document.createElement("button");
   button.type = "button";
   button.className = "evidence-link";
   const relationEl = document.createElement("span");
-  relationEl.textContent = relation ? relation.replaceAll("_", " ") : "Evidence";
+  relationEl.textContent = relationLabel(link.relation);
   const labelEl = document.createElement("b");
-  labelEl.textContent = label || reference;
+  labelEl.textContent = link.label || "Recorded evidence";
   button.append(relationEl, labelEl);
-  button.addEventListener("click", () => loadEvidence(reference));
-  return button;
+  if (link.timestamp || link.status) {
+    const meta = document.createElement("small");
+    meta.textContent = [link.status, link.timestamp].filter(Boolean).join(" · ");
+    button.appendChild(meta);
+  }
+  if (drill && (link.reference || link.id)) {
+    button.addEventListener("click", () => {
+      setDetailTab("evidence");
+      loadEvidence(link.reference || link.id);
+    });
+  } else {
+    button.disabled = true;
+  }
+  card.append(button, technicalDetails(link));
+  return card;
 }
 
 function appendEvidenceGroup(title, links, note = "") {
@@ -894,26 +942,44 @@ function appendEvidenceGroup(title, links, note = "") {
     detailReceiptsEl.appendChild(copy);
   }
   links.forEach((link) => {
-    const label = link.label || link.reference || link.id;
-    detailReceiptsEl.appendChild(
-      evidenceButton(link.reference || link.id, label, link.relation),
-    );
+    detailReceiptsEl.appendChild(evidenceCard(link));
+  });
+}
+
+function renderBreadcrumbs() {
+  evidenceBreadcrumbsEl.replaceChildren();
+  evidenceTrail.forEach((crumb, index) => {
+    if (index) {
+      const separator = document.createElement("span");
+      separator.textContent = "/";
+      separator.setAttribute("aria-hidden", "true");
+      evidenceBreadcrumbsEl.appendChild(separator);
+    }
+    if (index === evidenceTrail.length - 1) {
+      const current = document.createElement("strong");
+      current.textContent = crumb.label;
+      current.setAttribute("aria-current", "page");
+      evidenceBreadcrumbsEl.appendChild(current);
+      return;
+    }
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = crumb.label;
+    button.addEventListener("click", () => {
+      evidenceTrail = evidenceTrail.slice(0, index + 1);
+      if (crumb.data) renderEvidence(crumb.data);
+      else renderNodeEvidence(selected.kind, selectedItem);
+    });
+    evidenceBreadcrumbsEl.appendChild(button);
   });
 }
 
 function renderEvidence(data) {
   detailReceiptsEl.replaceChildren();
-  const back = document.createElement("button");
-  back.type = "button";
-  back.className = "evidence-back";
-  back.textContent = "← Back to node evidence";
-  back.addEventListener("click", () => {
-    if (selected && selectedItem) renderNodeEvidence(selected.kind, selectedItem);
-  });
-  detailReceiptsEl.appendChild(back);
+  renderBreadcrumbs();
 
   const heading = document.createElement("strong");
-  heading.textContent = `${data.kind || "unknown"} · ${data.status || "unknown"}`;
+  heading.textContent = evidenceBreadcrumb(data);
   detailReceiptsEl.appendChild(heading);
   if (data.summary) {
     const summary = document.createElement("p");
@@ -922,9 +988,9 @@ function renderEvidence(data) {
     detailReceiptsEl.appendChild(summary);
   }
   const facts = [
+    data.kind ? `Kind: ${data.kind}` : "",
+    data.status ? `Status: ${data.status}` : "",
     data.timestamp ? `Time: ${data.timestamp}` : "",
-    data.path ? `Path: ${data.path}` : "",
-    data.canonical_reference ? `Receipt: ${data.canonical_reference}` : "",
   ].filter(Boolean);
   facts.forEach((fact) => {
     const row = document.createElement("div");
@@ -933,6 +999,7 @@ function renderEvidence(data) {
     detailReceiptsEl.appendChild(row);
   });
   appendEvidenceGroup("Direct sources", data.sources);
+  appendEvidenceGroup("Version history", data.history);
   appendEvidenceGroup(
     "Nearby context",
     data.context,
@@ -944,6 +1011,15 @@ function renderEvidence(data) {
     missing.textContent = "The receipt is retained, but its local payload was not found or has expired.";
     detailReceiptsEl.appendChild(missing);
   }
+  const technical = technicalDetails({
+    id: data.id,
+    reference: data.canonical_reference || data.reference,
+  });
+  if (data.path) {
+    const body = technical.querySelector("div");
+    body.textContent += `${body.textContent ? "\n" : ""}Path: ${data.path}`;
+  }
+  detailReceiptsEl.appendChild(technical);
 }
 
 async function loadEvidence(reference) {
@@ -962,10 +1038,12 @@ async function loadEvidence(reference) {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     if (!selected || request !== evidenceRequest || detailMode !== "evidence") return;
+    evidenceTrail.push({ label: evidenceBreadcrumb(data), data });
     renderEvidence(data);
   } catch (error) {
     if (!selected || request !== evidenceRequest || detailMode !== "evidence") return;
     detailReceiptsEl.replaceChildren();
+    renderBreadcrumbs();
     const message = document.createElement("p");
     message.className = "evidence-note evidence-missing";
     message.textContent = `Unable to resolve evidence. ${error.message || error}`;
@@ -977,15 +1055,21 @@ function renderNodeEvidence(kind, item) {
   detailMode = "node";
   evidenceRequest += 1;
   detailReceiptsEl.replaceChildren();
+  renderBreadcrumbs();
 
-  const receipts = receiptValues(item);
-  if (receipts.length) {
+  const cards = nodeEvidenceCards(item, model);
+  if (cards.length) {
     const heading = document.createElement("strong");
-    heading.textContent = "Evidence receipts";
+    heading.textContent = "Direct evidence";
     detailReceiptsEl.appendChild(heading);
-    receipts.slice(0, 12).forEach((receipt) => {
-      detailReceiptsEl.appendChild(evidenceButton(receipt, receipt, "direct_evidence"));
+    cards.slice(0, 12).forEach((card) => {
+      detailReceiptsEl.appendChild(evidenceCard(card));
     });
+  } else {
+    const empty = document.createElement("p");
+    empty.className = "evidence-note";
+    empty.textContent = "No direct evidence receipts are attached to this object.";
+    detailReceiptsEl.appendChild(empty);
   }
 
   if (kind === "point") {
@@ -1005,6 +1089,35 @@ function renderNodeEvidence(kind, item) {
   }
 }
 
+function renderOverview(kind, item) {
+  detailSummaryEl.replaceChildren();
+  const overview = evidenceOverview(kind, item, model);
+  const heading = document.createElement("strong");
+  heading.textContent = overview.title;
+  const copy = document.createElement("p");
+  copy.textContent = overview.copy;
+  detailSummaryEl.append(heading, copy);
+  overview.highlights.forEach((card) => {
+    detailSummaryEl.appendChild(evidenceCard(card));
+  });
+}
+
+function renderNodeHistory(item) {
+  detailHistoryEl.replaceChildren();
+  const history = nodeHistoryCards(item, model);
+  if (!history.length) {
+    const empty = document.createElement("p");
+    empty.className = "evidence-note";
+    empty.textContent = "No previous or next version is recorded for this object.";
+    detailHistoryEl.appendChild(empty);
+    return;
+  }
+  const heading = document.createElement("strong");
+  heading.textContent = "Version trail";
+  detailHistoryEl.appendChild(heading);
+  history.forEach((link) => detailHistoryEl.appendChild(evidenceCard(link)));
+}
+
 function showDetails(kind, item) {
   selected = { kind, id: item.id };
   selectedItem = item;
@@ -1015,8 +1128,8 @@ function showDetails(kind, item) {
   detailTitleEl.textContent = (
     item.content || item.signature || item.label || item.predicate || item.kind || item.id
   );
+  evidenceTrail = [{ label: detailTitleEl.textContent, data: null }];
   detailMetaEl.replaceChildren();
-  appendMeta("ID", item.id);
   appendMeta("Layer", item.layer || item.level);
   appendMeta("Status", item.status);
   appendMeta("Type", item.kind);
@@ -1027,7 +1140,10 @@ function showDetails(kind, item) {
   appendMeta("Observations", item.observations);
   appendMeta("Valid from", item.valid_from);
   appendMeta("Members", item.members?.length);
+  renderOverview(kind, item);
   renderNodeEvidence(kind, item);
+  renderNodeHistory(item);
+  setDetailTab("overview");
   detailEl.hidden = false;
 }
 
@@ -1071,14 +1187,33 @@ function fingerprint(nextModel) {
   });
 }
 
-async function loadModel(force = false) {
+function showModelLoadError(error) {
+  const message = document.createElement("p");
+  message.textContent = error?.name === "AbortError"
+    ? "The model is taking too long to load. The Runtime may still be building it."
+    : `Unable to load the personal model. ${error?.message || error}`;
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.textContent = "Retry";
+  retry.addEventListener("click", () => loadModel(true));
+  errorEl.replaceChildren(message, retry);
+  errorEl.hidden = false;
+}
+
+async function loadModelOnce(force) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), MODEL_GRAPH_TIMEOUT_MS);
   try {
-    const response = await fetch("./graph", { cache: "no-store" });
+    const response = await fetch("./graph", {
+      cache: "no-store",
+      signal: controller.signal,
+    });
     if (!response.ok) throw new Error(`Model endpoint returned HTTP ${response.status}`);
     const payload = await response.json();
     if (!payload.model || !Array.isArray(payload.model.points)) {
       throw new Error("Model endpoint returned an invalid snapshot");
     }
+    errorEl.hidden = true;
     const nextFingerprint = fingerprint(payload.model);
     if (!force && nextFingerprint === modelFingerprint) return;
     model = payload.model;
@@ -1090,13 +1225,21 @@ async function loadModel(force = false) {
     setShareBusy(false);
     updateTimelineBounds();
     buildScene();
-    errorEl.hidden = true;
   } catch (error) {
     shareReady = false;
     setShareBusy(false);
-    errorEl.textContent = `Unable to load the personal model. ${error.message || error}`;
-    errorEl.hidden = false;
+    showModelLoadError(error);
+  } finally {
+    window.clearTimeout(timeout);
   }
+}
+
+function loadModel(force = false) {
+  if (modelLoadPromise) return modelLoadPromise;
+  modelLoadPromise = loadModelOnce(force).finally(() => {
+    modelLoadPromise = null;
+  });
+  return modelLoadPromise;
 }
 
 function frameLayout(force) {
@@ -1274,6 +1417,17 @@ document.querySelectorAll("[data-layer]").forEach((button) => {
     layerVisible[layer] = !layerVisible[layer];
     applyLayerVisibility();
     if (window.__persomeViewerState) window.__persomeViewerState.layers = { ...layerVisible };
+  });
+});
+
+detailTabEls.forEach((button, index) => {
+  button.addEventListener("click", () => setDetailTab(button.dataset.detailTab));
+  button.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    const next = (index + direction + detailTabEls.length) % detailTabEls.length;
+    setDetailTab(detailTabEls[next].dataset.detailTab, true);
   });
 });
 

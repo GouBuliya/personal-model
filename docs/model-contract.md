@@ -84,10 +84,13 @@ Point labels, receipts, source names, timestamps, and viewer credentials are exc
 artifact; the owner attaches the downloaded image and confirms the post in X.
 
 Visible node labels and their Point, Face, Volume, Root, or context meshes open the same provenance
-detail panel. Labels are keyboard-focusable; Escape closes the selection. Nodes retain a 12-pixel
-minimum screen-space hit target so distant geometry stays selectable. Evolution and relation Lines
-open their own endpoint, predicate, and evidence detail through an 8-pixel screen-space hit target;
-node hits always win where geometry overlaps. Derived hierarchy connectors remain visual-only.
+detail panel. Overview summarizes the evidence footprint, Evidence presents human-readable source
+cards with drill-down breadcrumbs, and History keeps Point predecessor/successor versions separate
+from derivation sources. Raw IDs, paths, and receipts stay collapsed under technical details. Labels
+and tabs are keyboard-focusable; Escape closes the selection. Nodes retain a 12-pixel minimum
+screen-space hit target so distant geometry stays selectable. Evolution and relation Lines open
+their own endpoint, predicate, and evidence detail through an 8-pixel screen-space hit target; node
+hits always win where geometry overlaps. Derived hierarchy connectors remain visual-only.
 `window.__persomeInteractionState` exposes aggregate interaction counts and hit-target bounds for
 local smoke tests.
 
@@ -102,6 +105,11 @@ Relation edges may carry the nullable triplet `source_kind`, `source_id`, and `s
 The triplet is atomic: callers either provide all three fields or none. Activity-derived edges use
 new stable IDs `event:entry:<id>` or `event:session:<id>`. `event:intent:<id>`
 is read-only compatibility for an old store.
+
+The read-only `resolve_evidence` MCP tool and authenticated `GET /model/evidence?ref=...` endpoint
+return `label` for human display and retain `reference` as the stable technical handle. Explicit
+derivation edges are in `sources`, time-adjacent investigation clues in `context`, and Point version
+edges in `history`. A missing retained payload stays inspectable as `status=missing`.
 
 ## Privacy and reproducibility
 

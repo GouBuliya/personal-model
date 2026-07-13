@@ -16,7 +16,10 @@ persome mcp
 
 The daemon endpoint requires `Authorization: Bearer <PERSOME_LOCAL_API_TOKEN>`.
 The token is provisioned in the owner-only Runtime env file. Stdio does not
-need or copy that bearer.
+need or copy that bearer. Stdio also skips construction of the daemon-only
+REST/Chat application and never runs database recovery, keeping per-client cold
+starts bounded to MCP tools. Integrity recovery remains a daemon-start and
+maintenance responsibility.
 
 Example stdio client configuration:
 
@@ -60,8 +63,11 @@ Example stdio client configuration:
 
 `resolve_evidence` returns explicit stored lineage in `sources` and
 time-adjacent capture clues in `context`. Consumers must not present `context`
-as direct proof. Follow each returned `reference` to move down one layer; a
-retained receipt whose payload is no longer available returns `status=missing`.
+as direct proof. Display `label` as the human-readable card title and keep
+`reference` as the stable technical handle. Point predecessor/successor links
+are returned separately in `history`. Follow each returned `reference` to move
+down one layer; a retained receipt whose payload is no longer available returns
+`status=missing`.
 
 ## Transport
 
