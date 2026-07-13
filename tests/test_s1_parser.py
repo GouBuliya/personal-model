@@ -575,6 +575,26 @@ def test_enrich_filters_standard_ax_placeholder_value_without_dom_marker() -> No
     assert _COMPOSER_PLACEHOLDER not in capture["visible_text"]
 
 
+def test_enrich_filters_helper_tree_standard_placeholder_after_native_focus_cleanup() -> None:
+    textarea = {
+        "role": "AXTextArea",
+        "value": _COMPOSER_PLACEHOLDER,
+        "AXPlaceholderValue": _COMPOSER_PLACEHOLDER,
+    }
+    # The native helper already removes the placeholder from its compact
+    # focused projection. Its window tree deliberately keeps the raw value and
+    # now carries AXPlaceholderValue so Python can clean the visible S1 view.
+    capture = _composer_capture(textarea, focused_value="")
+    capture["ax_tree"]["apps"][0]["focused_element"]["AXPlaceholderValue"] = _COMPOSER_PLACEHOLDER
+    raw = copy.deepcopy(capture["ax_tree"])
+
+    s1_parser.enrich(capture)
+
+    assert capture["focused_element"]["value"] == ""
+    assert _COMPOSER_PLACEHOLDER not in capture["visible_text"]
+    assert capture["ax_tree"] == raw
+
+
 def test_enrich_keeps_matching_text_without_placeholder_evidence() -> None:
     capture = _composer_capture({"role": "AXTextArea", "value": _COMPOSER_PLACEHOLDER})
 

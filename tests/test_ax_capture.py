@@ -203,9 +203,13 @@ def test_native_helper_filters_focused_placeholder_and_keeps_tree_evidence() -> 
     # Normal tree output retains the local pair as forensic evidence; Python
     # S1 sanitizes its authored-text projection without mutating raw AX.
     assert "confirmedPlaceholderTexts" not in traverse
+    assert 'dict["AXPlaceholderValue"] = p' in source
+    assert 'axString(element, "AXPlaceholderValue")' in traverse
+    assert "placeholderValue: placeholderValue" in traverse
     focused = source.split("func focusedUIElementDict", 1)[1]
     assert "config.raw || !placeholderTexts.contains(raw)" in focused
     assert "placeholderTexts.contains(title)" in focused
+    assert 'dict["AXPlaceholderValue"] = standardPlaceholder' in focused
 
 
 def test_stable_native_binary_is_reused_across_reinstall_sources(

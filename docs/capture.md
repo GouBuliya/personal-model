@@ -188,10 +188,10 @@ producers. An exact placeholder descendant is removed only inside its owning
 editable subtree and only when its text is locally paired with that control.
 Matching text is then cleared from the parent projection. Ordinary page text
 and broad CSS classes that merely contain the word `placeholder` remain intact.
-Historical timeline/MCP
-reads and `rebuild-captures-index` apply the same sanitizer, so replaying an old
-buffer cannot turn input hints into authored text; index rebuilds also preserve
-DB-only OCR backfills. When an AX-empty surface falls back to screenshot OCR,
+Historical timeline, MCP, and classifier chat-drill reads plus
+`rebuild-captures-index` apply the same sanitizer, so replaying an old buffer
+cannot turn input hints into authored text; index rebuilds also preserve DB-only
+OCR backfills. When an AX-empty surface falls back to screenshot OCR,
 the same frontmost/focused-window evidence removes exact OCR lines/fields only
 for controls whose placeholder can currently be visible (the control is empty
 or exposes that same hint as its value). It never performs substring

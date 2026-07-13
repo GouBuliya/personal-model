@@ -211,6 +211,7 @@ struct AXNode {
     var title: String?
     var description: String?
     var value: String?
+    var placeholderValue: String?
     var identifier: String?
     var domIdentifier: String?
     var domClassList: [String]
@@ -222,6 +223,7 @@ struct AXNode {
             && title == nil
             && description == nil
             && value == nil
+            && placeholderValue == nil
             && identifier == nil
             && domIdentifier == nil
             && domClassList.isEmpty
@@ -238,6 +240,7 @@ struct AXNode {
         if let t = title { dict["title"] = t }
         if let d = description { dict["description"] = d }
         if let v = value { dict["value"] = v }
+        if let p = placeholderValue { dict["AXPlaceholderValue"] = p }
         if let id = identifier { dict["identifier"] = id }
         if let domID = domIdentifier { dict["domIdentifier"] = domID }
         if !domClassList.isEmpty { dict["domClassList"] = domClassList }
@@ -279,6 +282,10 @@ func traverseElement(
         .trimmingCharacters(in: .whitespacesAndNewlines)
     let domClassList = axStringList(element, "AXDOMClassList")
     let attributeNames = config.raw ? axAttributeNames(element) : []
+    let rawPlaceholderValue = editableTextRoles.contains(role ?? "")
+        ? normalizedAXText(axString(element, "AXPlaceholderValue"))
+        : ""
+    let placeholderValue = rawPlaceholderValue.isEmpty ? nil : rawPlaceholderValue
 
     // Get text content
     var title = axString(element, kAXTitleAttribute as String)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -327,19 +334,21 @@ func traverseElement(
     let hasText = title != nil || value != nil
     let hasMetadata = subrole != nil
         || description != nil
+        || placeholderValue != nil
         || identifier != nil
         || domIdentifier != nil
         || !domClassList.isEmpty
 
     // For text-bearing roles: keep if they have text or meaningful children
     if let role = role, textBearingRoles.contains(role) {
-        if hasText || description != nil || !childNodes.isEmpty {
+        if hasText || description != nil || placeholderValue != nil || !childNodes.isEmpty {
             return AXNode(
                 role: role,
                 subrole: subrole,
                 title: title,
                 description: description,
                 value: value,
+                placeholderValue: placeholderValue,
                 identifier: identifier,
                 domIdentifier: domIdentifier,
                 domClassList: domClassList,
@@ -369,6 +378,7 @@ func traverseElement(
             title: title,
             description: description,
             value: value,
+            placeholderValue: placeholderValue,
             identifier: identifier,
             domIdentifier: domIdentifier,
             domClassList: domClassList,
@@ -385,6 +395,7 @@ func traverseElement(
             title: title,
             description: description,
             value: value,
+            placeholderValue: placeholderValue,
             identifier: identifier,
             domIdentifier: domIdentifier,
             domClassList: domClassList,
@@ -401,6 +412,7 @@ func traverseElement(
             title: title,
             description: description,
             value: value,
+            placeholderValue: placeholderValue,
             identifier: identifier,
             domIdentifier: domIdentifier,
             domClassList: domClassList,
@@ -473,6 +485,7 @@ func focusedUIElementDict(_ appRef: AXUIElement, config: Config) -> [String: Any
     let isSecure = role == "AXTextField" && subrole == "AXSecureTextField"
 
     let placeholderTexts = config.raw ? [] : confirmedPlaceholderTexts(el, role: role)
+    let standardPlaceholder = normalizedAXText(axString(el, "AXPlaceholderValue"))
     var value = ""
     if isSecure {
         value = "[REDACTED]"
@@ -502,6 +515,7 @@ func focusedUIElementDict(_ appRef: AXUIElement, config: Config) -> [String: Any
 
     var dict: [String: Any] = ["role": role]
     if let sr = subrole, !sr.isEmpty { dict["subrole"] = sr }
+    if !standardPlaceholder.isEmpty { dict["AXPlaceholderValue"] = standardPlaceholder }
     if !title.isEmpty { dict["title"] = title }
     if !desc.isEmpty { dict["description"] = desc }
     if !value.isEmpty {
