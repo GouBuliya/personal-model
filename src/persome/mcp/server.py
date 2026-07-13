@@ -6,7 +6,8 @@ depending on `[mcp] transport`. Exposes:
 
   Compressed memory (Markdown layer):
     list_memories, read_memory, search, verify_fact, behavior_patterns,
-    get_model_snapshot, resolve_evidence, entity_graph, read_receipt, recent_activity
+    get_model_snapshot, resolve_evidence, entity_graph, read_receipt,
+    related_events, recent_activity
   Raw captures (S1 buffer):
     current_context, search_captures, read_recent_capture
   Reference:
@@ -32,6 +33,7 @@ from ..prompts import load as load_prompt
 from ..store import files as files_mod
 from ..store import fts
 from ..timeline import attention_trajectory as attention_traj
+from ..timeline import store as timeline_store
 from . import captures as captures_mod
 from .limits import (
     bounded_float,
@@ -444,6 +446,85 @@ def _read_receipt(conn, *, entry_id: str) -> dict[str, Any]:  # type: ignore[no-
     }
 
 
+def _related_events(  # type: ignore[no-untyped-def]
+    conn,
+    *,
+    entry_id: str,
+    window_minutes: int = 30,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Direct entry → surrounding-events association read.
+
+    Given ONE memory entry, return the events associated with the moment it
+    records: timeline blocks OVERLAPPING the anchor window (what the user was
+    DOING — apps, focus, attention surface) plus the raw captures nearest the
+    anchor (what was ON SCREEN). The anchor is ``occurred_at`` when the entry
+    carries one — a memory distilled hours after the fact still lands on the
+    moment it describes — else the write-time ``timestamp``. Superseded
+    entries are readable (archaeology, not a claim about the present), same
+    contract as ``_read_receipt``; reading a live entry reinforces it."""
+    row = conn.execute(
+        "SELECT id, path, timestamp, content, superseded FROM entries WHERE id = ?",
+        (entry_id,),
+    ).fetchone()
+    if row is None:
+        return {"error": f"entry not found: {entry_id}"}
+    meta = fts.get_entry_metadata(conn, entry_id) or {}
+    anchor = meta.get("occurred_at") or row["timestamp"]
+    anchor_dt = _parse_iso_opt(anchor)
+    if anchor_dt is None:
+        return {"error": f"entry has no parseable anchor time: {entry_id}"}
+    window = timedelta(minutes=window_minutes)
+    blocks = timeline_store.query_overlapping(
+        conn, anchor_dt - window, anchor_dt + window, limit=limit
+    )
+    # Epoch-based proximity, same historical ISO parser as _read_receipt.
+    captures = conn.execute(
+        "SELECT id, timestamp, app_name, window_title, url FROM captures"
+        " WHERE abs(persome_epoch(timestamp) - persome_epoch(?)) <= ?"
+        " ORDER BY abs(persome_epoch(timestamp) - persome_epoch(?)) LIMIT ?",
+        (anchor, window_minutes * 60, anchor, limit),
+    ).fetchall()
+    if not row["superseded"]:
+        fts.increment_retrieval_counts(conn, (entry_id,))
+    return {
+        "entry": {
+            "id": row["id"],
+            "path": row["path"],
+            "timestamp": row["timestamp"],
+            "occurred_at": meta.get("occurred_at"),
+            "superseded": bool(row["superseded"]),
+            "excerpt": (row["content"] or "")[:280],
+        },
+        "anchor": anchor,
+        "window_minutes": window_minutes,
+        # What the user was doing around the anchor — one object per timeline block.
+        "events": [
+            {
+                "start_time": b.start_time.isoformat(),
+                "end_time": b.end_time.isoformat(),
+                "apps_used": b.apps_used,
+                "entries": b.entries,
+                "focus_excerpt": (b.focus_excerpt or "")[:500],
+                "attention_surface": b.attention_surface,
+                "capture_count": b.capture_count,
+            }
+            for b in blocks
+        ],
+        # What was on screen — nearest-first breadcrumbs for read_recent_capture(at=…).
+        "captures": [
+            {
+                "id": c["id"],
+                "timestamp": c["timestamp"],
+                "app_name": c["app_name"],
+                "window_title": c["window_title"],
+                "url": c["url"],
+            }
+            for c in captures
+        ],
+    }
+
+
 def _entity_graph(  # type: ignore[no-untyped-def]
     conn,
     cfg,
@@ -561,7 +642,7 @@ def _get_schema() -> dict[str, Any]:
 _SERVER_INSTRUCTIONS = """\
 # Persome — the user's local personal memory
 
-Persome is the user's private local memory: durable facts plus recent screen activity. Query it before asking the user to repeat context or guessing.
+Persome is private local memory: durable facts plus recent screen activity. Query it before asking the user to repeat context or guessing.
 
 ## When to use (decision rule)
 
@@ -574,7 +655,7 @@ Call Persome before clarifying or saying "I don't know" when the request may dep
 - personalization: "write it the way I usually do"
 - cross-session continuity, recent decisions, ongoing work
 
-A missed lookup is worse than an unnecessary one — the tools are local and cheap; `[]` / `null` is still information. Skip only when the request is fully specified in-chat or only live external state matters.
+A missed lookup is worse than an extra one: tools are local and cheap; `[]` / `null` is still information. Skip only for fully specified in-chat requests or live external state.
 
 ## Tool routing
 
@@ -586,7 +667,7 @@ A missed lookup is worse than an unnecessary one — the tools are local and che
 - exact string seen or typed on screen (errors, URLs, code) → `search_captures(query)`, then `read_recent_capture(...)`
 - what the user has been up to lately → `recent_activity()`; focus/time spent → `attention_trajectory()`
 - browse files → `list_memories()` / `read_memory(path)`
-- audit a memory/model claim → `resolve_evidence(reference)` / `read_receipt(entry_id)`
+- audit/context around a memory or model claim → `resolve_evidence(reference)` / `read_receipt(entry_id)` / `related_events(entry_id)`
 - the user corrects a wrong memory → `correct_memory(correction)`; a durable new finding → `remember(content)`
 - unsure between compressed vs raw → `search` and `search_captures` in parallel
 
@@ -640,6 +721,11 @@ top-down — who they are (resident), what happened (recall), what was on screen
 - `read_receipt(entry_id)` — dereference a `⟨entry_id:path⟩` receipt (from `chains`
   or any hit id) into the full entry + nearby-capture breadcrumbs. The audit trail
   from any memory down to the on-screen moment it came from.
+- `related_events(entry_id, window_minutes?, limit?)` — the events AROUND one
+  memory: timeline activity blocks overlapping its moment (apps, focus,
+  attention surface) + nearest raw-capture breadcrumbs. Anchored on the
+  entry's `occurred_at` when known, else its write time. Use when a fact
+  needs its surrounding story ("what was I doing when this was decided").
 - `resolve_evidence(reference)` — one resolver for model ids, Point/Line/Face/Volume/
   Root receipts, memory entries, activities, and captures. Its `sources` are explicit
   stored lineage; `context` is only time-adjacent and must not be described as proof.
@@ -1055,6 +1141,38 @@ def build_server(
             entry_id = bounded_text("entry_id", entry_id, maximum=256)
             with fts.cursor() as conn:
                 return json.dumps(_read_receipt(conn, entry_id=entry_id), ensure_ascii=False)
+
+    if getattr(cfg.mcp, "related_events_enabled", True):
+
+        @server.tool()
+        def related_events(entry_id: str, window_minutes: int = 30, limit: int = 20) -> str:
+            """**CALL for "what was happening around this memory"** — retrieve the
+            events associated with ONE specific memory entry, directly.
+
+            Given an `entry_id` (from any `search` hit, chain receipt, or
+            `verify_fact` evidence), returns `events` — the timeline activity
+            blocks overlapping the memory's moment (apps used, focus excerpt,
+            attention surface) — plus `captures`, the nearest raw-screen
+            breadcrumbs (follow with `read_recent_capture(at=…)`). The anchor is
+            the entry's `occurred_at` when known (when the event actually
+            happened), else its write time. Use when a fact needs its
+            surrounding story: what the user was doing, in which apps, right
+            around the moment a memory records. Widen `window_minutes` (max
+            1440) to survey a whole afternoon. Zero LLM, one SQLite read.
+            """
+            entry_id = bounded_text("entry_id", entry_id, maximum=256)
+            window_minutes = bounded_int(window_minutes, minimum=1, maximum=1440)
+            limit = bounded_int(limit, minimum=1, maximum=100)
+            with fts.cursor() as conn:
+                return json.dumps(
+                    _related_events(
+                        conn,
+                        entry_id=entry_id,
+                        window_minutes=window_minutes,
+                        limit=limit,
+                    ),
+                    ensure_ascii=False,
+                )
 
     if getattr(cfg.mcp, "entity_graph_enabled", True):
 

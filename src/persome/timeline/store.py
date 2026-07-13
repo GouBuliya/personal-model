@@ -225,6 +225,29 @@ def query_range(
     return [_row_to_block(r) for r in rows]
 
 
+def query_overlapping(
+    conn: sqlite3.Connection,
+    window_start: datetime,
+    window_end: datetime,
+    limit: int = 50,
+) -> list[TimelineBlock]:
+    """Blocks OVERLAPPING [window_start, window_end], chronological order.
+
+    Interval overlap (``end_time >= window_start AND start_time <= window_end``),
+    not the containment ``query_range`` applies — a block straddling a window
+    boundary still counts. This is the entry→events association read: given a
+    memory's anchor moment, return every activity block that was live around it.
+    """
+    rows = conn.execute(
+        "SELECT * FROM timeline_blocks "
+        "WHERE persome_epoch(end_time) >= persome_epoch(?) "
+        "AND persome_epoch(start_time) <= persome_epoch(?) "
+        "ORDER BY persome_epoch(start_time) ASC LIMIT ?",
+        (window_start.isoformat(), window_end.isoformat(), min(limit, 200)),
+    ).fetchall()
+    return [_row_to_block(r) for r in rows]
+
+
 def _row_to_block(row: sqlite3.Row | tuple) -> TimelineBlock:
     # Row indexing works for both sqlite3.Row and tuple
     get = row.__getitem__

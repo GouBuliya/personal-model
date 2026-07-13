@@ -1070,3 +1070,43 @@ def test_produce_block_records_miss_for_iron_meeting_window(ac_root: Path, fake_
     assert row is not None
     assert row["outcome"] == "miss"
     assert row["bundle_id"] == "com.electron.lark.iron"
+
+
+# ---------------------------------------------------------------------------
+# query_overlapping (entry → events association read)
+# ---------------------------------------------------------------------------
+
+
+def test_query_overlapping_uses_interval_overlap_not_containment(ac_root: Path) -> None:
+    """A block straddling a window boundary counts (query_range would drop it)."""
+    straddler = timeline_store.TimelineBlock(
+        start_time=datetime(2026, 6, 2, 9, 29, tzinfo=_TZ),
+        end_time=datetime(2026, 6, 2, 9, 31, tzinfo=_TZ),
+        entries=["[Xcode] edited store.py"],
+        apps_used=["Xcode"],
+        capture_count=2,
+    )
+    inside = timeline_store.TimelineBlock(
+        start_time=datetime(2026, 6, 2, 10, 0, tzinfo=_TZ),
+        end_time=datetime(2026, 6, 2, 10, 1, tzinfo=_TZ),
+        entries=["[Feishu] replied"],
+        apps_used=["Feishu"],
+        capture_count=1,
+    )
+    outside = timeline_store.TimelineBlock(
+        start_time=datetime(2026, 6, 2, 12, 0, tzinfo=_TZ),
+        end_time=datetime(2026, 6, 2, 12, 1, tzinfo=_TZ),
+        entries=["[Safari] browsed"],
+        apps_used=["Safari"],
+        capture_count=1,
+    )
+    with fts.cursor() as conn:
+        timeline_store.ensure_schema(conn)
+        for blk in (straddler, inside, outside):
+            timeline_store.insert(conn, blk)
+        got = timeline_store.query_overlapping(
+            conn,
+            datetime(2026, 6, 2, 9, 30, tzinfo=_TZ),
+            datetime(2026, 6, 2, 10, 30, tzinfo=_TZ),
+        )
+    assert [b.apps_used[0] for b in got] == ["Xcode", "Feishu"]  # chronological

@@ -42,6 +42,7 @@ Example stdio client configuration:
 | `read_memory` | Read one memory file with time, tag, and tail filters. |
 | `search` | Search durable memory with BM25 and optional dense retrieval. |
 | `read_receipt` | Resolve a memory entry to its provenance. |
+| `related_events` | Retrieve the events around one memory entry: overlapping timeline blocks plus nearest captures, anchored on `occurred_at` when known. |
 | `resolve_evidence` | Resolve model, memory, activity, and capture references through one progressive evidence contract. |
 | `recent_activity` | Read recent durable event entries. |
 | `behavior_patterns` | Read modeled behavioral patterns and their support. |
