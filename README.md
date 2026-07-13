@@ -1,419 +1,186 @@
-# Build your Personal Model
+# Readme
 
-<!-- mcp-name: io.github.Intuition-Lab/personal-model -->
+**About**: **Build your HUMAN.md.**
 
-**The open-source Personal Model that makes every AI yours.**
+<p align="center"><b>[Personal Model]</b></p>
 
-Persome learns how you actually think and work from focused activity captured on your Mac after you grant macOS permission—then gives Codex, Claude Code, and other trusted MCP-compatible clients evidence-linked context to continue your work and make grounded decisions.
+<p align="center"><b>Build your Personal Model →</b><br>☆ Star Persome on GitHub</p>
 
-**Local. Private. Yours to inspect, correct, export, and delete.**
+### **Build your Personal Model**
 
-[![CI](https://github.com/Intuition-Lab/personal-model/actions/workflows/ci.yml/badge.svg)](https://github.com/Intuition-Lab/personal-model/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/Intuition-Lab/personal-model)](https://github.com/Intuition-Lab/personal-model/releases)
-[![License: Apache-2.0](https://img.shields.io/badge/code-Apache--2.0-blue)](LICENSE)
-[![macOS 13+](https://img.shields.io/badge/macOS-13%2B-black)](#platform-support)
-[![MCP](https://img.shields.io/badge/interface-MCP-0b7285)](MCP.md)
-[![Official MCP Registry](https://img.shields.io/badge/Official_MCP_Registry-Persome-6f42c1)](https://registry.modelcontextprotocol.io/?q=Persome)
+The open-source personal model that makes every AI yours.
 
-[Try the five-minute demo](#five-minute-demo) · [Build yours](#build-yours) · [See the use cases](#use-cases)
+Persome learns how you actually think and work from everything you see, say, hear, and do—then gives Codex, Claude Code, and any MCP agent the context to pick up where you left off, understand what matters, and work while you sleep.
 
----
+![图片展示了Persome个人模型的界面，左侧有“LIVE PERSONAL MODEL”及“THE SHAPE OF YOU”等文字，强调系统思维创始人将个人上下文转化为可检验产品、证据支持决策和可持续动量。右侧是模型可视化界面，显示了1012个点、326条线、18个面、6个体积和1个根节点，还呈现了可调整的货币、原型先探索等信号，以及反馈循环、投资判断平衡等概念。右侧还配有如何阅读模型的说明，如点代表观察到的事实，线代表演变或关系等。](docs/assets/readme/personal-model.png)
 
-## What is Persome?
+**Runs locally on your Mac. Private by default. Yours to inspect, correct, export, and delete.**
 
-Every new AI agent meets you as a stranger.
+### What is it？
 
-Persome turns your work into a local, living, evidence-backed model of your context, decisions, patterns, priorities, and current state.
-
-Think of it as a living `HUMAN.md`—not a profile you maintain by hand, but a model that updates as you work and can be used by every trusted agent.
-
-> **Memory knows what happened. A Personal Model knows what matters next.**
-
-Memory is the evidence. The Personal Model is the product.
-
-Persome Runtime currently starts with focused macOS work activity captured while you enable it. Additional input modalities are future product scope, not capabilities claimed by this repository.
-
----
-
-## Your `HUMAN.md`
+Your `HUMAN.md`
 
 Persome connects activity into progressively deeper context:
 
 | Layer | Meaning |
-| --- | --- |
+|-|-|
 | **Point** | A sourced observation or event |
 | **Line** | A relationship or change over time |
 | **Face** | A pattern supported by related evidence |
 | **Volume** | A higher-order structure across projects or areas of life |
-| **Root** | At most one current, integrated model of you |
+| **Root** | The current integrated model of you |
 
-Higher layers are earned by evidence. A sparse model may contain only Points and Lines; Persome shows missing geometry as degraded instead of fabricating a Face, Volume, or Root. New evidence can strengthen, revise, or overturn an earlier inference, and every important claim keeps receipts.
+New evidence can strengthen, revise, or overturn an earlier inference. Every important claim keeps receipts.
 
-Persome also maintains `~/.persome/HUMAN.md`, a raw, owner-only (`0600`) reading view of the current model. The versioned JSON snapshot remains the machine-readable authority; a missing Root is represented honestly as a model that is still forming. Persome replaces only a `HUMAN.md` carrying its own management marker and preserves an unknown file you created at that path.
+### Use case
 
----
+1. **One Root — A Model of You**
 
-## Use cases
+**Thousands of moments. One evolving model of you.**
 
-These are connected-agent workflows that Persome can ground with local evidence and model context. They are not standalone Persome dashboards, and their personalization quality is not yet reported as a benchmark result.
+Persome turns sourced observations into relationships, patterns, higher-order structure, and one current Root: what matters now, how you tend to decide, and where your attention is moving.
 
-### 1. Continue where you left off
+![图片展示了“ONE ROOT - A MODEL OF YOU”概念，说明其将活动流转化为个人模型。从左至右，活动流（如笔记、Bugs等）形成点（1000+时刻）、线（300+连接）、面（80+模式）、体（20+主题），最终生成一个模型（1个，类型为模型）。右侧是个人模型示例，包含当前目标、质量标准等信息，底部强调“Thousands of moments. One evolving model of you.”，与上下文介绍的个人模型从众多时刻中生成、不断演进的内容相呼应。](docs/assets/readme/one-root.png)
 
-**Start a new agent session without briefing it from zero.**
+From Points to Lines, Faces, Volumes, and one Root—a living model of who you are and what matters now.
 
-A connected agent can use Persome to recover the goal, decisions, open loops, and next action that still matters—not merely the last thing on screen.
+1. **Same AI. Different You.**
 
-![Continue where you left off](assets/use-cases/continue-where-you-left-off.png)
+![](docs/assets/readme/same-ai-different-you.png)
 
-_Concept illustration with synthetic content: Persome supplies evidence-linked context while the connected agent recovers the work state; this is not a Persome Runtime dashboard._
+**The model is the same. The person it understands is different.**
 
----
+Two people can give the same AI the same prompt and deserve different answers. Your Personal Model changes how an agent prioritizes, decides, writes, and acts—because it understands who it is working for.
 
-### 2. Give a background agent the right context
+The same prompt should not produce the same answer for everyone. Give AI a model of you.
 
-**Help your agent find the unfinished work that matters.**
+1. **One MCP - Trun coding agent into proactive agent** 
 
-A connected agent can use Persome to identify unfinished work, rank it against your real priorities, and separate safe local tasks from decisions that need you. Persome supplies evidence-linked context; the connected agent owns execution and its permission policy.
+![](docs/assets/readme/one-mcp.png)
 
-This is a connected-agent integration workflow, not a built-in Persome scheduler, task runner, or permission UI. We will report outcome claims only when the inputs, approvals, outputs, and failures are reproducible.
+**Your coding agent finds its own work body**
 
----
+Connect Persome once through MCP. Codex, Claude Code, and other trusted agents can use the same model of your goals, priorities, working patterns, and boundaries.
 
-### 3. Turn your work into output
+Persome identifies unfinished work, ranks it against your priorities, and separates safe local tasks from decisions that need you. The connected agent executes; you keep authority over external actions.
 
-**Find the idea hidden inside the work.**
+**-Continue where you left off** 
 
-A connected agent can use Persome to connect your notes, revisions, and decisions, identify the thought worth sharing, and prepare a grounded draft for your review.
+![这张图片展示了Persome作为编程代理的功能场景，核心呈现“继续未完工作”的能力。页面左侧标注了三个待处理任务，分别为README、Onboarding和MCP，附带对应时间；右侧CODEX区域显示已恢复的工作状态，即此前准备Persome的启动事宜，当前目标是让Personal Model在五分钟内可见，下一步工作为修复新用户引导的验证，同时呈现了当前项目目录、git状态及未暂存的文件改动，印证该工具可将个人工作模型同步给编程代理，帮助用户从断点处继续推进工作。](docs/assets/readme/continue-where-you-left-off.png)
 
-![Turn your work into output](assets/use-cases/turn-work-into-output.png)
+**-Work while you sleep**
 
-_Concept illustration with synthetic content of a connected agent's UI: Persome supplies the model and receipts; the connected agent produces the draft._
+![图片展示了Persome的“Work While You Sleep”功能界面。左侧“30 OPEN LOOPS”部分，呈现了Personal Model、Tests、Dependencies、Codebase、Docs等模块及对应数值。中间“5 SAFE TO COMPLETE”部分，有Safe Task Filter，可筛选权限范围、数据访问、网络、命令、外部动作等。右侧“MORNING REPORT”部分，列出已完成本地任务、等待决策任务、外部动作等，还展示了权限边界设置。该图与上下文介绍的Persome功能相呼应，直观呈现其工作模式。](docs/assets/readme/work-while-you-sleep.png)
 
-The connected agent drafts. You decide what gets published.
+### Install, connect, and verify
 
----
+**Choose the path that matches what you want to prove.** The synthetic demo and the real-data install are intentionally separate.
 
-## One Personal Model. Every agent becomes yours.
+#### 1. Five-minute synthetic demo
 
-Persome exposes one consistent model through the [Model Context Protocol](https://modelcontextprotocol.io/).
+Try the complete Persome model without touching your personal data. This path requires Git and [uv](https://docs.astral.sh/uv/getting-started/installation/), but no API key, macOS Accessibility permission, or access to your existing `~/.persome` data.
 
-```mermaid
-flowchart TD
-    A["Your work on macOS"] --> B["Persome Personal Model"]
-    B --> C["MCP"]
-    C --> D["Codex"]
-    C --> E["Claude Code"]
-    C --> F["Other trusted agents"]
-```
-
-Your agents may change. Your model of you stays the same.
-
----
-
-## Five-minute demo
-
-See a complete model form without an API key, Accessibility permission, or access to your real data.
-
-Requirements: Git and [`uv`](https://docs.astral.sh/uv/).
-
-```bash
+```Plain Text
 git clone https://github.com/Intuition-Lab/personal-model.git
 cd personal-model
 uv run python scripts/sample_demo.py
 ```
 
-The demo opens the model viewer at `http://127.0.0.1:8743/model` and serves MCP at `http://127.0.0.1:8743/mcp` from a disposable synthetic store.
+The script opens the local viewer at `http://127.0.0.1:8743/model` and deletes its temporary synthetic data when you press `Ctrl-C`. Add `--showcase` for the denser, still fully synthetic graph shown in the README.
 
-Add `--showcase` to render the denser model used for product visuals. With the sample server still running, verify the real MCP transport from a second terminal with `uv run python scripts/verify_sample_mcp.py`.
+#### 2. Install with your data
 
-The showcase forms **424 Points, 146 Lines, 12 Faces, 4 Volumes, and 1 Root** from synthetic activity. No personal data is used.
+Requirements: macOS 13 or newer and Xcode Command Line Tools. For the shortest package-managed installation:
 
----
-
-## Build yours
-
-Requirements: macOS 13+, Apple Silicon or Intel, Xcode Command Line Tools, and Git. The package-managed path also requires [`uv`](https://docs.astral.sh/uv/).
-
-For the shortest package-managed installation:
-
-```bash
+```Plain Text
 uv tool install personal-model
-persome llm setup
-persome llm status --check
 persome onboard
 persome model open --after 30
 ```
 
-The distribution is named `personal-model`; the installed CLI remains `persome`. For the most explicit source-based first run:
+The distribution is named `personal-model`; the installed CLI is `persome`.
 
-```bash
+For the most explicit source-based first run:
+
+```Plain Text
 git clone https://github.com/Intuition-Lab/personal-model.git
 cd personal-model
 bash install.sh
 ```
 
-The source installer includes the provider wizard and the same interactive onboarding. Without a configured semantic provider, capture and BM25 recall still work, but semantic modeling degrades. After either path, verify the actual Runtime rather than opening its protected HTTP URL directly:
+After successful interactive onboarding, the source installer schedules the one-shot 30-minute viewer reminder automatically.
 
-```bash
-persome status
-persome model status
-persome model open
+**What onboarding proves**
+
+- `persome onboard` explains each macOS request before it appears.
+- Accessibility is granted to the versioned `mac-ax-helper` and, only when event-driven capture is enabled, `mac-ax-watcher`.
+- Screen Recording is requested only when the effective screenshot or local-OCR policy requires pixels. Persome never requires Full Disk Access.
+- On Apple Silicon, onboarding verifies the isolated local OCR worker when OCR is enabled.
+- It proves the final lifecycle owner and Runtime generation, then reports a fresh-capture receipt in standard daemon mode or an explicit readiness/privacy receipt for supported alternate modes such as trusted ingest.
+
+An LLM is optional for collection and BM25 recall, but required for semantic modeling. If provider setup was skipped, run:
+
+```Plain Text
+persome llm setup
+persome llm status --check
 ```
 
-Onboarding explains each macOS request before it appears. Grant **Accessibility** to the versioned `mac-ax-helper` and, when event-driven capture is enabled, `mac-ax-watcher` as prompted:
+#### 3. Connect a trusted MCP client
 
-```text
-System Settings → Privacy & Security → Accessibility
-```
+Register whichever owner-local clients you use:
 
-Accessibility lets Persome read focused text and structure across supported apps. Screen Recording is requested only when the effective OCR or screenshot-retention policy needs pixels. Full Disk Access is not required. An LLM is optional for collection and BM25 recall, but required for semantic modeling; provider keys live in the owner-only `~/.persome/env`.
-
-### Connect an agent
-
-Persome is verified in the [Official MCP Registry](https://registry.modelcontextprotocol.io/?q=Persome) as `io.github.Intuition-Lab/personal-model`. Register whichever owner-local clients you trust:
-
-```bash
-persome install codex
+```Plain Text
 persome install claude-code
+persome install codex
+persome install claude-desktop
+persome install opencode
 ```
 
-For another MCP client:
+These stdio registrations launch Persome on demand, so the daemon does not need to be running and no HTTP bearer is copied into client configuration.
 
-```json
-{
-  "mcpServers": {
-    "persome": {
-      "command": "persome",
-      "args": ["mcp"]
-    }
-  }
-}
+For Cursor, generate a stdio configuration and merge its `mcpServers.persome` object into `.cursor/mcp.json` or `~/.cursor/mcp.json`:
+
+```Plain Text
+persome install mcp-json --filename persome-mcp.json
 ```
 
-MCP access is a personal-data capability. Some MCP capture tools can return raw screen text, window titles, URLs, and focused-field values; treat captured content as untrusted data, never instructions. Stdio registrations launch Persome on demand without copying an HTTP bearer into client configuration. See [MCP client setup and verification](docs/mcp-clients.md) for Cursor, Claude Desktop, opencode, authenticated HTTP, uninstall commands, and the canonical JSON shape.
+> MCP access is a personal-data capability; register only clients you trust.
 
-Then try:
+#### 4. Verify and ask grounded questions
 
-```text
-Continue where I left off. Cite the evidence you used.
-```
-
-```text
-Find my unfinished work from the last seven days.
-Rank it by my current goals. Do not execute anything.
-```
-
----
-
-## How it works
-
-```mermaid
-flowchart TD
-    A["Focused activity while capture is enabled"] --> B["Local evidence"]
-    B --> C["Personal Model"]
-    C --> D["Task-relevant context"]
-    D --> E["Trusted agents"]
-```
-
-1. **Observe locally** — Persome reads the focused macOS Accessibility tree. Optional local OCR handles surfaces with little structured text.
-2. **Structure activity** — It organizes events, projects, entities, and relationships.
-3. **Build the model** — Evidence becomes Points, Lines, Faces, Volumes, and, when evidence supports it, at most one current Root.
-4. **Retrieve selectively** — Agents receive the context relevant to the task, with evidence attached.
-5. **Keep you in control** — Inferences can be inspected, corrected, exported, or deleted.
-
-| Interface | Endpoint or command |
-| --- | --- |
-| Authenticated HTTP MCP | `http://127.0.0.1:8742/mcp` |
-| stdio MCP | `persome mcp` |
-| Authenticated model viewer | `persome model open` |
-| Model export | `persome model export` |
-
-Except for canonical `GET /health`, REST, viewer, and HTTP MCP routes require the owner-local bearer or a one-use viewer capability. Treat any local endpoint access as access to personal data.
-
----
-
-## Local-first by design
-
-- Personal data and the model live under `~/.persome` by default.
-- Persome binds to `127.0.0.1` and has no cloud account, remote sync, product telemetry, or update phone-home.
-- Screenshots are excluded from MCP by default and encrypted by default when retention is enabled; review the capture policy before retaining pixels.
-- Export is deterministically redacted by default, but redaction is not anonymization. Review real exports and obtain consent before sharing them.
-- `~/.persome/HUMAN.md` is a raw local reading view, not a sharing artifact; make corrections through `persome correct` instead of editing the managed projection.
-- Persome does not execute external actions; connected agents own action and permission policy.
-
-Local-first does not mean every configuration is fully offline. Semantic stages may send selected captured or modeled text, window titles, URLs, focused-field values, and timeline content to the model endpoint you choose. Captured text is untrusted content, never an instruction to Persome. Connected agents follow their own providers' data boundaries; read the full [security and privacy boundary](SECURITY_PRIVACY.md) before using real personal data.
-
-```bash
-# Inspect
+```Plain Text
 persome status
 persome model status
 persome model open
 
-# Correct or export
-persome correct --help
-persome model export
-
-# Delete modeled memory, or all local capture/timeline/model data
-persome stop
-persome clean memory
-persome clean all
+# Only if you configured a semantic provider:
+persome llm status --check
 ```
 
-### Update
+A sparse or degraded model can be valid early; Persome reports missing geometry instead of fabricating Faces, Volumes, or a Root.
+
+After connecting an MCP client, try:
+
+> Search my Persome memory for **[topic]**. Use `search`, open the strongest result with `read_receipt`, and cite the source path, timestamp, and receipt ID. If the evidence is missing or conflicting, say so instead of guessing.
+
+Active work is reduced every five minutes by default. With valid capture and a working semantic provider, a first useful recall is operationally expected within about ten minutes—not guaranteed as a benchmark result.
+
+#### 5. Update Persome
 
 For a `uv tool` installation, upgrade with the package manager and re-run Runtime proof:
 
-```bash
+```Plain Text
 uv tool upgrade personal-model
 persome onboard
 persome model open --after 30
 ```
 
-For an installation created by `install.sh`, run `persome update` from any directory. The transactional updater preserves configuration, credentials, personal data, capture policy, and lifecycle intent. An existing valid Root is also backfilled into the managed `HUMAN.md` without recapturing activity or calling an LLM.
+For an installation created by `install.sh`, run the transactional updater from any directory:
 
-See [operations and data control](docs/operations.md) for rollback, backup, client removal, reset, and complete-uninstall instructions.
+```Plain Text
+persome update
+```
 
----
+`persome update` preserves configuration, credentials, personal data, capture policy, and lifecycle intent, and performs its own mode-aware onboarding before committing the update. Do not use it to update a package-manager-managed installation.
 
-## Personal Model vs. memory
-
-| Memory | Personal Model |
-| --- | --- |
-| Retrieves what happened | Models what events mean together |
-| Returns facts or snippets | Connects projects, decisions, people, and time |
-| Remembers stated preferences | Tests them against behavior and corrections |
-| Looks backward | Represents current state and supports next-state research |
-| Usually belongs to one app | Works across trusted agents through MCP |
-
-Persome does not claim to replace every adjacent system. Use a screen-history tool for a full searchable archive, a memory API to save and retrieve application facts, and Persome when agents need an evolving, auditable model of the person they work for.
-
----
-
-## What is proven today
-
-| Claim | Status |
-| --- | --- |
-| Synthetic activity forms complete model geometry | [`tests/test_runtime_model_e2e.py`](tests/test_runtime_model_e2e.py), deterministic synthetic test |
-| MCP search returns inspectable receipts | [`sample_demo.py`](scripts/sample_demo.py) + [`verify_sample_mcp.py`](scripts/verify_sample_mcp.py), deterministic synthetic test |
-| Capture and BM25 recall work without a provider key | Covered by `PERSOME_LLM_MOCK=1 uv run pytest -m "not macos and not integration"`; semantic modeling requires a configured provider |
-| Personal relevance and next-state prediction | Not reported here; a reproducible benchmark is planned |
-
-The synthetic demo proves the runtime, model formation, receipts, and MCP transport. It does not prove personalization quality on a real person.
-
----
-
-## Read the docs
-
-| Need | Start here |
-| --- | --- |
-| Installation and Runtime verification | [`VALIDATION.md`](VALIDATION.md) |
-| Runtime architecture | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
-| Model and `HUMAN.md` contracts | [`MODEL_FORMAT.md`](MODEL_FORMAT.md), [model contract](docs/model-contract.md) |
-| MCP tools and client setup | [`MCP.md`](MCP.md), [client setup](docs/mcp-clients.md) |
-| Configuration and LLM providers | [configuration](docs/config.md) |
-| Operations and troubleshooting | [operations](docs/operations.md), [troubleshooting](docs/troubleshooting.md) |
-| Security and privacy | [`SECURITY_PRIVACY.md`](SECURITY_PRIVACY.md) |
-
----
-
-## Platform support
-
-| Platform | Capture | Local OCR | Runtime / MCP |
-| --- | --- | --- | --- |
-| macOS 13+ on Apple Silicon (`arm64`) | Supported | Bundled PP-OCRv6 | Supported |
-| macOS 13+ on Intel (`x86_64`) | Supported AX path | Unavailable because Paddle does not ship the required Intel wheel | Supported |
-| Linux | No live macOS capture | Not packaged | Offline tests and development only |
-| Windows | Unsupported | Unsupported | Unsupported |
-
-Python 3.11–3.13 with SQLite 3.42+ is supported by the source installer.
-
----
-
-## Roadmap
-
-- [ ] Reproducible five-minute first-use experience
-- [ ] Published evaluation of the three core use cases
-- [ ] Richer correction and time controls
-- [ ] More reproducible connected-agent workflows with explicit client-owned action boundaries
-- [ ] More verified MCP hosts
-- [ ] A reproducible Personal Model benchmark
-
----
-
-## Contributing
-
-Persome is early. We welcome reproducible use cases, MCP integrations, evaluation tasks, privacy reviews, macOS improvements, and honest failure reports.
-
-Read [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md), and [`SUPPORT.md`](SUPPORT.md). Runtime code is licensed under [Apache 2.0](LICENSE); paper, benchmark, project-note, third-party, and personal-data boundaries are documented in [`LICENSES.md`](LICENSES.md), [`NOTICE`](NOTICE), and [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES).
-
----
-
-## Contributors
-
-Persome is shaped by people across engineering, design, research, and community.
-
-<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
-<table>
-  <tbody>
-    <tr>
-      <td valign="middle">
-        <a href="https://github.com/Singularity-tian"><img src="https://avatars.githubusercontent.com/u/113085728?v=4&amp;size=112" width="56" align="left" alt="Singularity" /></a>
-        &nbsp;&nbsp;<strong><a href="https://github.com/Singularity-tian">Singularity</a></strong><br />
-        &nbsp;&nbsp;<sub>💻&nbsp;Code</sub>
-      </td>
-      <td valign="middle">
-        <a href="https://github.com/GouBuliya"><img src="https://avatars.githubusercontent.com/u/163627234?v=4&amp;size=112" width="56" align="left" alt="Li_Xufeng" /></a>
-        &nbsp;&nbsp;<strong><a href="https://github.com/GouBuliya">Li_Xufeng</a></strong><br />
-        &nbsp;&nbsp;<sub>💻&nbsp;Code</sub>
-      </td>
-      <td valign="middle">
-        <a href="https://github.com/SiyiZhu1"><img src="https://avatars.githubusercontent.com/u/132850441?v=4&amp;size=112" width="56" align="left" alt="Siyi" /></a>
-        &nbsp;&nbsp;<strong><a href="https://github.com/SiyiZhu1">Siyi</a></strong><br />
-        &nbsp;&nbsp;<sub>🎨&nbsp;Design</sub>
-      </td>
-    </tr>
-    <tr>
-      <td valign="middle">
-        <a href="https://github.com/kevinaimonster"><img src="https://avatars.githubusercontent.com/u/172621334?v=4&amp;size=112" width="56" align="left" alt="Kevin" /></a>
-        &nbsp;&nbsp;<strong><a href="https://github.com/kevinaimonster">Kevin</a></strong><br />
-        &nbsp;&nbsp;<sub>💻&nbsp;Code</sub>
-      </td>
-      <td valign="middle">
-        <a href="https://github.com/huachenjie238-oss"><img src="https://avatars.githubusercontent.com/u/261379605?v=4&amp;size=112" width="56" align="left" alt="huachenjie238-oss" /></a>
-        &nbsp;&nbsp;<strong><a href="https://github.com/huachenjie238-oss">huachenjie238-oss</a></strong><br />
-        &nbsp;&nbsp;<sub>📈&nbsp;Growth</sub>
-      </td>
-      <td valign="middle">
-        <a href="https://github.com/JingYangGit"><img src="https://avatars.githubusercontent.com/u/169429757?v=4&amp;size=112" width="56" align="left" alt="Jing@Meowy" /></a>
-        &nbsp;&nbsp;<strong><a href="https://github.com/JingYangGit">Jing@Meowy</a></strong><br />
-        &nbsp;&nbsp;<sub>📈&nbsp;Growth</sub>
-      </td>
-    </tr>
-    <tr>
-      <td valign="middle">
-        <a href="https://github.com/AMTso7aw"><img src="https://avatars.githubusercontent.com/u/113247039?v=4&amp;size=112" width="56" align="left" alt="Zhiheng Chen" /></a>
-        &nbsp;&nbsp;<strong><a href="https://github.com/AMTso7aw">Zhiheng Chen</a></strong><br />
-        &nbsp;&nbsp;<sub>💻&nbsp;Code</sub>
-      </td>
-    </tr>
-  </tbody>
-</table>
-<!-- ALL-CONTRIBUTORS-LIST:END -->
-
-<sub>Contribution labels follow the
-[All Contributors](https://allcontributors.org/en/reference/emoji-key) convention.
-Contributions of every kind are welcome.</sub>
-
----
-
-## Why Persome
-
-Models will keep getting smarter. Agents will keep gaining more tools.
-
-But an agent also needs a model of the person it works for: what they have experienced, how everything connects, what they value, and what matters now.
-
-That model should live with the person—not inside one company's assistant.
-
-**Build your `HUMAN.md`. Give every agent a model of you.**
-
-[Star Persome on GitHub](https://github.com/Intuition-Lab/personal-model)
+<p align="center"><a href="https://github.com/Intuition-Lab/personal-model"><b>Star Persome on GitHub</b></a> · <a href="https://registry.modelcontextprotocol.io/?q=Persome">Official MCP Registry</a> · <a href="https://github.com/Intuition-Lab/personal-model/blob/main/docs/mcp-clients.md">MCP client setup</a> · <a href="https://github.com/Intuition-Lab/personal-model/blob/main/SECURITY_PRIVACY.md">Security &amp; privacy</a></p>
