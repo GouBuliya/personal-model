@@ -163,16 +163,37 @@ def _render_blocks(blocks: list[tl_store.TimelineBlock]) -> str:
 
 _WS_RE = re.compile(r"\s+")
 
+# Spans that an assistant or the system generated — never admissible as evidence
+# (spec A1; HaluMem interference design, arXiv 2511.03506). A memory grounded in
+# assistant/system output is the canonical hallucination trap: the assistant
+# introduces contrastive content that gets mis-attributed as a durable fact.
+# ``assistant_output:``/``assistant:``/``system:`` label the terminal-style
+# spans the timeline stage emits; ``<preview …>…</preview>`` is another
+# conversation's latest line the owner merely saw, not authored.
+_ASSISTANT_LINE_RE = re.compile(r"(?im)^\s*(?:assistant_output|assistant|system)\s*:.*$")
+_PREVIEW_TAG_RE = re.compile(r"(?is)<preview\b.*?</preview>")
+
 
 def _norm_ws(text: str) -> str:
     return _WS_RE.sub(" ", text).strip()
 
 
-def _quote_ok(item: dict, session_text_norm: str) -> bool:
+def evidence_text(session_text: str) -> str:
+    """Session text with assistant/system-generated spans removed (spec A1).
+
+    Quotes are checked against THIS, so a quote that only appears inside an
+    assistant/system/preview span can never ground a memory item.
+    """
+    stripped = _ASSISTANT_LINE_RE.sub(" ", session_text)
+    stripped = _PREVIEW_TAG_RE.sub(" ", stripped)
+    return _norm_ws(stripped)
+
+
+def _quote_ok(item: dict, evidence_text_norm: str) -> bool:
     quote = item.get("quote")
     if not isinstance(quote, str) or not quote.strip():
         return False
-    return _norm_ws(quote) in session_text_norm
+    return _norm_ws(quote) in evidence_text_norm
 
 
 def _canonicalize(
@@ -266,7 +287,10 @@ def gate_delta(
     posing as ``new_entity`` folds to its ``ref`` — so everything downstream
     (the parity eval, the future apply path) reads one identity space.
     """
+    # Full text grounds identity existence (an entity may be NAMED in displayed
+    # text); assistant/system-stripped text grounds FACT quotes (spec A1).
     text_norm = _norm_ws(session_text)
+    evidence_norm = evidence_text(session_text)
     clean: dict[str, list[dict]] = {h: [] for h in _HEADS}
     clean["owner_alias_candidates"] = list(owner_candidates or [])
     dropped = 0
@@ -296,7 +320,7 @@ def gate_delta(
             and item.get("kind") in _ENTITY_KINDS
             and who is not None
             and who.get("ref") != _SELF_IDENTITY
-            and _quote_ok(item, text_norm)
+            and _quote_ok(item, evidence_norm)
             and conf_ok(item)
         ):
             clean["entities"].append(
@@ -316,10 +340,12 @@ def gate_delta(
             and isinstance(item.get("text"), str)
             and item["text"].strip()
             and subject is not None
-            and _quote_ok(item, text_norm)
+            and _quote_ok(item, evidence_norm)
             and conf_ok(item)
         ):
-            clean["assertions"].append({**item, "subject": subject})
+            clean["assertions"].append(
+                {**item, "subject": subject, "polarity": _norm_polarity(item)}
+            )
         else:
             dropped += 1
 
@@ -331,7 +357,7 @@ def gate_delta(
             and item.get("predicate") in _PREDICATES
             and src is not None
             and dst is not None
-            and _quote_ok(item, text_norm)
+            and _quote_ok(item, evidence_norm)
             and conf_ok(item)
         ):
             clean["relations"].append(
@@ -355,7 +381,7 @@ def gate_delta(
             and item["title"].strip()
             and resolved is not None
             and all(p is not None for p in resolved)
-            and _quote_ok(item, text_norm)
+            and _quote_ok(item, evidence_norm)
             and conf_ok(item)
         ):
             clean["events"].append({**item, "participants": resolved})
@@ -456,6 +482,12 @@ def run_after_session(
                     "type": "text",
                     "text": f"<roster>\n{_render_roster(roster_entries)}\n</roster>",
                     "cache_control": _cache,
+                },
+                # Calendar anchor for relative-time resolution (spec A3) — after the
+                # cacheable roster prefix, before the session-specific events.
+                {
+                    "type": "text",
+                    "text": f"<session_date>{start_time:%Y-%m-%d} ({start_time:%A})</session_date>",
                 },
                 {"type": "text", "text": f"<session_events>\n{session_text}\n</session_events>"},
             ],
