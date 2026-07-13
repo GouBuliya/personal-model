@@ -5,6 +5,7 @@ import { computeClusterLayout, pickScreenTarget, zoomMath } from "./layout.mjs";
 import {
   evidenceBreadcrumb,
   evidenceOverview,
+  linePresentation,
   nodeEvidenceCards,
   nodeHistoryCards,
   relationLabel,
@@ -50,6 +51,8 @@ const zoomResetButton = document.getElementById("zoom-reset");
 const zoomInButton = document.getElementById("zoom-in");
 const shareButton = document.getElementById("share-x");
 const shareNoticeEl = document.getElementById("share-notice");
+const lineExplorerEl = document.getElementById("line-explorer");
+const lineSelectEl = document.getElementById("line-select");
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x070610, 0.026);
@@ -117,6 +120,7 @@ let portraitMode = null;
 let labels = [];
 let pickables = [];
 let screenLinePickables = [];
+let lineNavigatorItems = [];
 let selectionTargets = new Map();
 let positions = new Map();
 let items = new Map();
@@ -333,6 +337,33 @@ function registerScreenLinePickable(lineObject, item, start, end) {
   return lineObject;
 }
 
+function renderLineExplorer(lines) {
+  lineNavigatorItems = lines;
+  lineSelectEl.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.disabled = lines.length > 0;
+  placeholder.selected = true;
+  placeholder.textContent = lines.length ? "Choose a relationship…" : "No model lines available";
+  lineSelectEl.appendChild(placeholder);
+  lines.forEach((line, index) => {
+    const option = document.createElement("option");
+    option.value = String(index + 1);
+    option.textContent = linePresentation(line, model).option;
+    lineSelectEl.appendChild(option);
+  });
+  lineExplorerEl.hidden = lines.length === 0;
+  syncLineExplorer();
+}
+
+function syncLineExplorer() {
+  lineSelectEl.disabled = !layerVisible.lines || lineNavigatorItems.length === 0;
+  const selectedIndex = selected?.kind === "line"
+    ? lineNavigatorItems.findIndex((line) => line.id === selected.id)
+    : -1;
+  lineSelectEl.value = selectedIndex >= 0 ? String(selectedIndex + 1) : "";
+}
+
 function disposeGraph() {
   scene.remove(graph);
   graph.traverse((object) => {
@@ -346,6 +377,7 @@ function disposeGraph() {
   labels = [];
   pickables = [];
   screenLinePickables = [];
+  renderLineExplorer([]);
   selectionTargets = new Map();
   positions = new Map();
   items = new Map();
@@ -628,6 +660,10 @@ function buildScene() {
   });
   currentLayout.contextIds.forEach(addContextNode);
   visibleLines.forEach(addModelLine);
+  const renderedLineItems = visibleLines.filter(
+    (line) => positions.has(line.source) && positions.has(line.target),
+  );
+  renderLineExplorer(renderedLineItems);
   visibleFaces.forEach((face) => addFace(face, labeledFaces.has(face.id)));
   visibleVolumes.forEach((volume) => addVolume(volume, labeledVolumes.has(volume.id)));
   if (visibleRoot) addRoot(visibleRoot);
@@ -636,7 +672,7 @@ function buildScene() {
   renderStatus();
   emptyEl.hidden = visiblePoints.length > 0;
   frameLayout(false);
-  const renderedLines = visibleLines.filter((line) => positions.has(line.source) && positions.has(line.target)).length;
+  const renderedLines = renderedLineItems.length;
   window.__persomeViewerState = {
     schemaVersion: model.schema_version,
     generatedAt: modelGeneratedAt || null,
@@ -823,6 +859,7 @@ function syncSelectionState() {
       }
     });
   });
+  syncLineExplorer();
   window.__persomeInteractionState = {
     linePickables: pickables.filter((object) => object.isLine).length,
     screenLinePickables: screenLinePickables.length,
@@ -1118,7 +1155,19 @@ function renderNodeHistory(item) {
   history.forEach((link) => detailHistoryEl.appendChild(evidenceCard(link)));
 }
 
+function appendLineTechnicalDetails(item) {
+  const details = technicalDetails({ id: item.id });
+  const body = details.querySelector("div");
+  body.textContent = [
+    item.id ? `Line ID: ${item.id}` : "",
+    item.source ? `Source ID: ${item.source}` : "",
+    item.target ? `Target ID: ${item.target}` : "",
+  ].filter(Boolean).join("\n");
+  detailSummaryEl.appendChild(details);
+}
+
 function showDetails(kind, item) {
+  const lineDetail = kind === "line" ? linePresentation(item, model) : null;
   selected = { kind, id: item.id };
   selectedItem = item;
   pauseAutoRotate();
@@ -1126,21 +1175,24 @@ function showDetails(kind, item) {
   detailEl.dataset.kind = kind;
   detailKindEl.textContent = kind;
   detailTitleEl.textContent = (
-    item.content || item.signature || item.label || item.predicate || item.kind || item.id
+    lineDetail?.title
+    || item.content || item.signature || item.label || item.predicate || item.kind || item.id
   );
   evidenceTrail = [{ label: detailTitleEl.textContent, data: null }];
   detailMetaEl.replaceChildren();
   appendMeta("Layer", item.layer || item.level);
   appendMeta("Status", item.status);
   appendMeta("Type", item.kind);
-  appendMeta("Predicate", item.label || item.predicate);
-  appendMeta("From", item.source);
-  appendMeta("To", item.target);
+  appendMeta("Predicate", lineDetail?.predicate);
+  appendMeta("Label", lineDetail?.label);
+  appendMeta("From", lineDetail?.source);
+  appendMeta("To", lineDetail?.target);
   appendMeta("Confidence", item.confidence);
   appendMeta("Observations", item.observations);
   appendMeta("Valid from", item.valid_from);
   appendMeta("Members", item.members?.length);
   renderOverview(kind, item);
+  if (lineDetail) appendLineTechnicalDetails(item);
   renderNodeEvidence(kind, item);
   renderNodeHistory(item);
   setDetailTab("overview");
@@ -1418,6 +1470,12 @@ document.querySelectorAll("[data-layer]").forEach((button) => {
     applyLayerVisibility();
     if (window.__persomeViewerState) window.__persomeViewerState.layers = { ...layerVisible };
   });
+});
+
+lineSelectEl.addEventListener("change", () => {
+  const index = Number(lineSelectEl.value) - 1;
+  const item = lineNavigatorItems[index];
+  if (item) showDetails("line", item);
 });
 
 detailTabEls.forEach((button, index) => {

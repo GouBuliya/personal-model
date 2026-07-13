@@ -89,8 +89,10 @@ cards with drill-down breadcrumbs, and History keeps Point predecessor/successor
 from derivation sources. Raw IDs, paths, and receipts stay collapsed under technical details. Labels
 and tabs are keyboard-focusable; Escape closes the selection. Nodes retain a 12-pixel minimum
 screen-space hit target so distant geometry stays selectable. Evolution and relation Lines open
-their own endpoint, predicate, and evidence detail through an 8-pixel screen-space hit target; node
-hits always win where geometry overlaps. Derived hierarchy connectors remain visual-only.
+their own human-readable endpoint, exact predicate, and evidence detail through an 8-pixel
+screen-space hit target; node hits always win where geometry overlaps. Keyboard focus reveals a
+line picker with the same detail action. Raw line and endpoint IDs remain inside collapsed technical
+details. Derived hierarchy connectors remain visual-only.
 `window.__persomeInteractionState` exposes aggregate interaction counts and hit-target bounds for
 local smoke tests.
 
