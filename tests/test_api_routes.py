@@ -32,6 +32,8 @@ def test_health_returns_ok(monkeypatch) -> None:
             "ocr_worker": "ready",
             "ocr_enabled": True,
             "ocr_tier": "tiny",
+            "index": "unknown",
+            "capture_pipeline": "unknown",
         },
     }
 
@@ -59,6 +61,8 @@ def test_health_reports_enabled_ocr_degradation(monkeypatch) -> None:
         "ocr_worker": "not_started",
         "ocr_enabled": True,
         "ocr_tier": "tiny",
+        "index": "unknown",
+        "capture_pipeline": "unknown",
     }
 
 
@@ -77,6 +81,8 @@ def test_health_reports_failed_daemon_ocr_worker(monkeypatch) -> None:
         "ocr_worker": "failed",
         "ocr_enabled": True,
         "ocr_tier": "tiny",
+        "index": "unknown",
+        "capture_pipeline": "unknown",
     }
 
 
@@ -95,6 +101,8 @@ def test_health_reports_warming_daemon_ocr_worker_as_degraded(monkeypatch) -> No
         "ocr_worker": "warming",
         "ocr_enabled": True,
         "ocr_tier": "tiny",
+        "index": "unknown",
+        "capture_pipeline": "unknown",
     }
 
 

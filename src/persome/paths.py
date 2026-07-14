@@ -96,6 +96,11 @@ def daemon_lock_file() -> Path:
     return root() / ".daemon.lock"
 
 
+def wal_checkpoint_lock() -> Path:
+    """Cross-process reader/writer gate around live DB work and checkpoints."""
+    return root() / ".wal-checkpoint.lock"
+
+
 def launchagent_owner_file() -> Path:
     """Durable intent marker for launchd-owned Runtime lifecycle."""
     return root() / ".launchagent-owner"
@@ -190,7 +195,7 @@ def ensure_private_file(path: Path) -> Path:
     # while another connection is starting. Retry path replacement, and treat
     # a file that genuinely disappeared as already safe. Static symlinks,
     # special files, and hard links still fail before chmod or any data access.
-    for _attempt in range(3):
+    for _attempt in range(10):
         try:
             metadata = path.lstat()
         except FileNotFoundError:
@@ -199,7 +204,13 @@ def ensure_private_file(path: Path) -> Path:
             raise RuntimeError(f"private data file must not be a symlink: {path}")
         if not stat.S_ISREG(metadata.st_mode):
             raise RuntimeError(f"private data path is not a regular file: {path}")
-        if metadata.st_nlink != 1:
+        # SQLite can unlink a WAL/SHM inode after lstat returned but before we
+        # inspect its cached metadata. In that race the formerly linked inode
+        # legitimately reports zero links; retry the path replacement. More
+        # than one link is the actual hard-link condition.
+        if metadata.st_nlink == 0:
+            continue
+        if metadata.st_nlink > 1:
             raise RuntimeError(f"private data file must not be hard-linked: {path}")
         try:
             fd = os.open(path, flags)

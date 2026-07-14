@@ -72,7 +72,7 @@ def test_clean_captures_removes_files_and_index_rows(ac_root) -> None:
         assert conn.execute("SELECT COUNT(*) FROM captures").fetchone()[0] == 0
 
 
-def test_clean_memory_removes_canonical_model_exports_and_backups(ac_root) -> None:
+def test_clean_memory_removes_canonical_model_exports_and_backups(ac_root, monkeypatch) -> None:
     _seed_capture()
     _seed_model()
     paths.exports_dir().mkdir()
@@ -82,12 +82,21 @@ def test_clean_memory_removes_canonical_model_exports_and_backups(ac_root) -> No
     paths.human_file().write_text("# HUMAN.md\n")
     paths.model_build_manifest().write_text("{}")
 
+    real_remove = cli._remove_path
+    removed_inside_gate: list[bool] = []
+
+    def guarded_remove(path):  # noqa: ANN001, ANN202
+        removed_inside_gate.append(fts._in_exclusive_maintenance())  # noqa: SLF001
+        return real_remove(path)
+
+    monkeypatch.setattr(cli, "_remove_path", guarded_remove)
     files, entries, model_rows, artifacts = cli._clean_memory()
 
     assert files == 1
     assert entries == 1
     assert model_rows >= 2
     assert artifacts == 4
+    assert removed_inside_gate and all(removed_inside_gate)
     assert not paths.exports_dir().exists()
     assert not paths.backup_dir().exists()
     assert not paths.human_file().exists()
@@ -99,7 +108,7 @@ def test_clean_memory_removes_canonical_model_exports_and_backups(ac_root) -> No
         assert conn.execute("SELECT COUNT(*) FROM captures").fetchone()[0] == 1
 
 
-def test_clean_all_keeps_only_install_configuration(ac_root) -> None:
+def test_clean_all_keeps_only_install_configuration(ac_root, monkeypatch) -> None:
     _seed_capture()
     _seed_model()
     paths.config_file().write_text("[capture]\n")
@@ -114,11 +123,20 @@ def test_clean_all_keeps_only_install_configuration(ac_root) -> None:
     paths.logs_dir().mkdir(exist_ok=True)
     (paths.logs_dir() / "daemon.log").write_text("synthetic")
 
+    real_remove = cli._remove_path
+    removed_inside_gate: list[bool] = []
+
+    def guarded_remove(path):  # noqa: ANN001, ANN202
+        removed_inside_gate.append(fts._in_exclusive_maintenance())  # noqa: SLF001
+        return real_remove(path)
+
+    monkeypatch.setattr(cli, "_remove_path", guarded_remove)
     cli.clean_all(yes=True)
 
     assert paths.config_file().exists()
     assert paths.env_file().exists()
     assert (paths.root() / "venv").is_dir()
+    assert removed_inside_gate and all(removed_inside_gate)
     for deleted in (
         paths.capture_buffer_dir(),
         paths.memory_dir(),

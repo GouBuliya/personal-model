@@ -102,6 +102,8 @@ async def _mcp_loop(cfg: Config) -> None:
     """Host the MCP server inside the daemon. On crash, back off and restart."""
     import errno as _errno
 
+    from uvicorn.server import STARTUP_FAILURE as _UVICORN_STARTUP_FAILURE
+
     from .mcp import server as mcp_server
 
     delay = 2.0
@@ -131,6 +133,38 @@ async def _mcp_loop(cfg: Config) -> None:
                     cfg.mcp.host,
                     cfg.mcp.port,
                     exc,
+                )
+                return
+        except SystemExit as exc:
+            # uvicorn converts transport startup failures (a port it cannot
+            # bind, EPERM from macOS local-network privacy) into
+            # SystemExit(STARTUP_FAILURE), which sails past the OSError and
+            # Exception arms, kills the whole daemon — capture included — and
+            # leaves the supervisor restarting us into the same wall. Unwrap
+            # the original bind error and apply the same policy as above.
+            cause = exc.__context__
+            # SystemExit is a control-flow signal, not a normal server crash.
+            # Handle only uvicorn's documented bind-failure shape; an
+            # intentional exit (including SystemExit(3) without an OSError
+            # context) must keep its normal process-level semantics.
+            if exc.code != _UVICORN_STARTUP_FAILURE or not isinstance(cause, OSError):
+                raise
+            if cause.errno == _errno.EADDRINUSE:
+                logger.warning(
+                    "mcp server failed to bind %s:%d — address in use, retrying in %.0fs",
+                    cfg.mcp.host,
+                    cfg.mcp.port,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 60.0)
+            else:
+                logger.error(
+                    "mcp server startup failed (exit code %s) on %s:%d — %s",
+                    exc.code,
+                    cfg.mcp.host,
+                    cfg.mcp.port,
+                    cause,
                 )
                 return
         except Exception as exc:  # noqa: BLE001
@@ -185,6 +219,11 @@ def _build_task_registry(
             name="index-health",
             enabled=lambda cfg, capture_only: cfg.index_health.enabled,
             create=lambda cfg, sm: index_health.run_index_health_tick(cfg),
+        ),
+        TaskDefinition(
+            name="wal-checkpoint",
+            enabled=lambda cfg, capture_only: True,
+            create=lambda cfg, sm: session_tick.run_wal_checkpoint_tick(),
         ),
         TaskDefinition(
             name="timeline",
@@ -255,6 +294,35 @@ async def _run(cfg: Config, *, capture_only: bool = False, hard_exit: bool = Fal
         raise RuntimeError(
             "capture.source='ingest' requires the authenticated HTTP Runtime transport"
         )
+    # Keep the fully initialized owner connection attached for the daemon
+    # lifetime. Every Persome connection disables both auto-checkpoint and
+    # SQLite's independent checkpoint-on-close path; scheduled maintenance is
+    # therefore the only Runtime checkpoint entrance after startup migration.
+    # The owner carries no transaction and does not block ordinary DB work.
+    from .store import fts
+
+    # Startup schema work may itself run the one-time secure-purge checkpoint.
+    # Open it under the same exclusive gate used by scheduled checkpoints so a
+    # stdio client's transaction cannot overlap migration maintenance.
+    database_owner = fts.open_runtime_owner()
+    try:
+        await _run_owned(
+            cfg,
+            capture_only=capture_only,
+            hard_exit=hard_exit,
+            http_enabled=http_enabled,
+        )
+    finally:
+        fts.close_runtime_owner(database_owner)
+
+
+async def _run_owned(
+    cfg: Config,
+    *,
+    capture_only: bool,
+    hard_exit: bool,
+    http_enabled: bool,
+) -> None:
     runtime_generation = secrets.token_hex(16)
     # Keep the numeric pidfile backward-compatible with the updater/CLI from
     # the immediately previous release. The owner-only runtime state written

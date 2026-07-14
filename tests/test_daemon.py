@@ -62,6 +62,8 @@ class TestRegistryEnabledPredicates:
             "session",
             "reducer-retry",
             "daily-safety-net",
+            "index-health",
+            "wal-checkpoint",
             "timeline",
             "flush",
             "mcp",
@@ -73,6 +75,8 @@ class TestRegistryEnabledPredicates:
             "session",
             "reducer-retry",
             "daily-safety-net",
+            "index-health",
+            "wal-checkpoint",
             "mcp",
         }
 
@@ -116,6 +120,10 @@ class TestRegistryEnabledPredicates:
         assert "reducer-retry" not in _enabled_names(
             Config(reducer=ReducerConfig(enabled=False)), capture_only=True
         )
+
+    def test_wal_checkpoint_is_always_daemon_owned(self) -> None:
+        assert "wal-checkpoint" in _enabled_names(Config())
+        assert "wal-checkpoint" in _enabled_names(Config(), capture_only=True)
 
 
 class TestCreateTasksFromRegistry:
@@ -161,6 +169,31 @@ class TestCreateTasksFromRegistry:
 
         mock_cb.assert_called_once()
         assert mock_cb.call_args[0][0].get_name() == "test-task"
+
+
+async def test_wal_checkpoint_tick_owns_daily_truncate_and_passive_modes(
+    ac_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from persome.session import tick as tick_mod
+
+    modes: list[str] = []
+
+    def fake_checkpoint(mode: str, *, wait: bool = True) -> tuple[int, int, int]:
+        assert wait is False
+        modes.append(mode)
+        return (0, 2, 2)
+
+    monkeypatch.setattr(tick_mod.fts, "checkpoint", fake_checkpoint)
+    task = asyncio.create_task(tick_mod.run_wal_checkpoint_tick(interval_seconds=0.01))
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if len(modes) >= 2:
+            break
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert modes[:2] == ["TRUNCATE", "PASSIVE"]
 
 
 class TestOnTaskDone:
@@ -289,6 +322,61 @@ class TestMcpLoop:
         sleep.assert_awaited_once()
         assert calls["n"] == 2
 
+    async def test_uvicorn_systemexit_wrapping_eaddrinuse_retries(self) -> None:
+        # uvicorn converts bind failures into SystemExit(3); letting it escape
+        # took down the whole daemon and left launchd crash-looping into the
+        # still-bound port. The loop must unwrap it and back off like a plain
+        # EADDRINUSE.
+        calls = {"n": 0}
+
+        async def run_async(cfg: Config) -> None:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                try:
+                    raise OSError(errno.EADDRINUSE, "address in use")
+                except OSError:
+                    # mirrors uvicorn's sys.exit(STARTUP_FAILURE): __context__
+                    # carries the bind error even with display suppressed
+                    raise SystemExit(3) from None
+            return
+
+        with (
+            patch("persome.mcp.server.run_async", side_effect=run_async),
+            patch("persome.daemon.asyncio.sleep") as sleep,
+        ):
+            await _mcp_loop(Config())
+        sleep.assert_awaited_once()
+        assert calls["n"] == 2
+
+    async def test_uvicorn_systemexit_other_bind_error_returns_immediately(self) -> None:
+        async def run_async(cfg: Config) -> None:
+            try:
+                raise PermissionError(1, "operation not permitted")
+            except PermissionError:
+                raise SystemExit(3) from None
+
+        with (
+            patch("persome.mcp.server.run_async", side_effect=run_async),
+            patch("persome.daemon.asyncio.sleep") as sleep,
+            patch("persome.daemon.logger") as log,
+        ):
+            await _mcp_loop(Config())
+        # Hard failure: log + return with the daemon still alive, no backoff.
+        log.error.assert_called_once()
+        sleep.assert_not_awaited()
+
+    @pytest.mark.parametrize("code", [0, 3])
+    async def test_non_uvicorn_systemexit_propagates(self, code: int) -> None:
+        async def run_async(cfg: Config) -> None:
+            raise SystemExit(code)
+
+        with (
+            patch("persome.mcp.server.run_async", side_effect=run_async),
+            pytest.raises(SystemExit) as raised,
+        ):
+            await _mcp_loop(Config())
+        assert raised.value.code == code
+
     async def test_cancellation_propagates(self) -> None:
         async def run_async(cfg: Config) -> None:
             raise asyncio.CancelledError
@@ -345,6 +433,54 @@ class TestRunLifecycle:
                 await task
 
         await driver()
+
+    async def test_holds_database_owner_connection_for_runtime_lifetime(
+        self, ac_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from persome import daemon as daemon_mod
+
+        owner = MagicMock()
+        open_owner = MagicMock(return_value=owner)
+        close_owner = MagicMock()
+        entered = False
+
+        async def fake_run_owned(*args: object, **kwargs: object) -> None:
+            nonlocal entered
+            entered = True
+            owner.close.assert_not_called()
+
+        monkeypatch.setattr("persome.store.fts.open_runtime_owner", open_owner)
+        monkeypatch.setattr("persome.store.fts.close_runtime_owner", close_owner)
+        monkeypatch.setattr(daemon_mod, "_run_owned", fake_run_owned)
+
+        await daemon_mod._run(self._no_task_cfg(), capture_only=True)
+
+        assert entered is True
+        open_owner.assert_called_once_with()
+        close_owner.assert_called_once_with(owner)
+
+    async def test_schema_initialization_failure_closes_owner_before_serving(
+        self, ac_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from persome import daemon as daemon_mod
+
+        open_owner = MagicMock(side_effect=RuntimeError("migration snapshot failed"))
+        close_owner = MagicMock()
+        served = False
+
+        async def fake_run_owned(*args: object, **kwargs: object) -> None:
+            nonlocal served
+            served = True
+
+        monkeypatch.setattr("persome.store.fts.open_runtime_owner", open_owner)
+        monkeypatch.setattr("persome.store.fts.close_runtime_owner", close_owner)
+        monkeypatch.setattr(daemon_mod, "_run_owned", fake_run_owned)
+
+        with pytest.raises(RuntimeError, match="migration snapshot failed"):
+            await daemon_mod._run(self._no_task_cfg(), capture_only=True)
+
+        assert served is False
+        close_owner.assert_not_called()
 
     async def test_clean_shutdown_removes_pid_file(
         self, ac_root: Path, monkeypatch: pytest.MonkeyPatch
