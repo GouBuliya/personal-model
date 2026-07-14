@@ -30,6 +30,78 @@ def test_discovers_open_obsidian_vault_first(tmp_path: Path) -> None:
     assert source_import.discover_obsidian_vaults(tmp_path) == [active, closed]
 
 
+def test_notion_option_requires_installed_desktop_app(tmp_path: Path) -> None:
+    (tmp_path / "Applications" / "Notion.app").mkdir(parents=True)
+    assert source_import.notion_is_installed(tmp_path) is True
+
+
+def test_onboarding_shows_only_detected_sources_and_builds_once(
+    tmp_path: Path, monkeypatch
+) -> None:
+    vault = tmp_path / "vault"
+    local = tmp_path / "local"
+    vault.mkdir()
+    local.mkdir()
+    seen_choices: list[str] = []
+    imported: list[tuple[str, Path]] = []
+    builds: list[object] = []
+
+    class UI:
+        def status(self, message: str) -> None:
+            pass
+
+        def choose_import_sources(self, choices: list[str]) -> list[str]:
+            seen_choices.extend(choices)
+            return choices
+
+        def choose_folder(self, prompt: str) -> Path | None:
+            assert "Notion" not in prompt
+            return local
+
+    monkeypatch.setattr(source_import, "discover_obsidian_vaults", lambda: [vault])
+    monkeypatch.setattr(source_import, "notion_is_installed", lambda: False)
+
+    def run_import(path: Path, *, source_type: str) -> source_import.ImportResult:
+        imported.append((source_type, path))
+        return source_import.ImportResult(
+            source_type=source_type,
+            root=path,
+            imported=1,
+            session_ids=[source_type],
+        )
+
+    monkeypatch.setattr(source_import, "import_folder", run_import)
+    monkeypatch.setattr(source_import, "build_imported_model", lambda cfg: builds.append(cfg))
+
+    results = source_import.offer_data_import(UI(), object())
+
+    assert seen_choices == ["Local folder", "Obsidian — vault"]
+    assert imported == [("obsidian", vault), ("folder", local)]
+    assert len(results) == 2
+    assert len(builds) == 1
+
+
+def test_onboarding_shows_notion_only_when_installed(tmp_path: Path, monkeypatch) -> None:
+    choices_seen: list[str] = []
+
+    class UI:
+        def status(self, message: str) -> None:
+            pass
+
+        def choose_import_sources(self, choices: list[str]) -> list[str]:
+            choices_seen.extend(choices)
+            return []
+
+        def choose_folder(self, prompt: str) -> Path | None:
+            raise AssertionError("no source was selected")
+
+    monkeypatch.setattr(source_import, "discover_obsidian_vaults", lambda: [])
+    monkeypatch.setattr(source_import, "notion_is_installed", lambda: True)
+
+    assert source_import.offer_data_import(UI(), object()) == []
+    assert choices_seen == ["Local folder", "Notion export"]
+
+
 def test_import_folder_is_read_only_private_and_idempotent(ac_root: Path, tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     (vault / ".obsidian").mkdir(parents=True)

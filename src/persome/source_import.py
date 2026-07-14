@@ -41,9 +41,11 @@ class ImportResult:
 
 
 class ImportUI(Protocol):
-    def confirm(self, *, title: str, message: str, action: str) -> bool: ...
-
     def status(self, message: str) -> None: ...
+
+    def choose_import_sources(self, choices: list[str]) -> list[str]: ...
+
+    def choose_folder(self, prompt: str) -> Path | None: ...
 
 
 def ensure_schema(conn: Any) -> None:
@@ -70,6 +72,17 @@ def discover_obsidian_vaults(home: Path | None = None) -> list[Path]:
             ranked.append((bool(value.get("open")), int(value.get("ts") or 0), path.resolve()))
     ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
     return list(dict.fromkeys(path for _, _, path in ranked))
+
+
+def notion_is_installed(home: Path | None = None) -> bool:
+    home = home or Path.home()
+    return any(
+        path.is_dir()
+        for path in (
+            Path("/Applications/Notion.app"),
+            home / "Applications" / "Notion.app",
+        )
+    )
 
 
 def _documents(root: Path) -> list[Path]:
@@ -225,31 +238,50 @@ def build_imported_model(cfg: Any) -> Any:
     return run_model_build(cfg, trigger="source-import")
 
 
-def offer_obsidian_import(ui: ImportUI, cfg: Any) -> ImportResult | None:
-    """Offer the active registered vault as the optional final onboarding step."""
+def offer_data_import(ui: ImportUI, cfg: Any) -> list[ImportResult]:
+    """Show only locally relevant sources, import selections, then build once."""
+    # Older test/product UIs can complete the hard onboarding gate without the
+    # optional import surface. The production OnboardingUI implements both.
+    if not hasattr(ui, "choose_import_sources") or not hasattr(ui, "choose_folder"):
+        return []
     vaults = discover_obsidian_vaults()
-    if not vaults:
-        return None
-    vault = vaults[0]
-    if not ui.confirm(
-        title="Bring your history to Persome",
-        message=(
-            f"Persome found your Obsidian vault “{vault.name}”. Import its Markdown notes "
-            "read-only and build your personal model now? Your vault will not be changed. "
-            "You can also import a local folder or a Notion export later with "
-            "‘persome import-data’."
-        ),
-        action="Import Obsidian",
-    ):
+    local_label = "Local folder"
+    obsidian_label = f"Obsidian — {vaults[0].name}" if vaults else ""
+    notion_label = "Notion export" if notion_is_installed() else ""
+    choices = [local_label]
+    choices.extend(label for label in (obsidian_label, notion_label) if label)
+    selected = ui.choose_import_sources(choices)
+    if not selected:
         ui.status("• Data import skipped; run `persome import-data` whenever you are ready")
-        return None
-    ui.status(f"Importing Obsidian vault {vault.name} (read-only)...")
-    result = import_folder(vault, source_type="obsidian")
-    if result.session_ids:
-        ui.status(f"Building your model from {result.imported} Obsidian notes...")
+        return []
+
+    sources: list[tuple[str, Path]] = []
+    if obsidian_label and obsidian_label in selected:
+        sources.append(("obsidian", vaults[0]))
+    if local_label in selected:
+        folder = ui.choose_folder("Choose a local folder of Markdown or text files")
+        if folder is not None:
+            sources.append(("folder", folder))
+    if notion_label and notion_label in selected:
+        folder = ui.choose_folder("Choose your unpacked Notion Markdown export folder")
+        if folder is not None:
+            sources.append(("notion", folder))
+
+    results: list[ImportResult] = []
+    for source_type, root in sources:
+        ui.status(f"Importing {source_type} data from {root.name} (read-only)...")
+        try:
+            results.append(import_folder(root, source_type=source_type))
+        except (OSError, ValueError) as exc:
+            ui.status(f"• Could not import {source_type}: {exc}")
+    if any(result.session_ids for result in results):
+        imported = sum(result.imported for result in results)
+        ui.status(f"Building your model from {imported} new or changed documents...")
         build_imported_model(cfg)
-    ui.status(
-        f"✓ Obsidian import complete: {result.imported} new/changed, "
-        f"{result.unchanged} already imported"
-    )
-    return result
+    if results:
+        ui.status(
+            "✓ Data import complete: "
+            f"{sum(result.imported for result in results)} new/changed, "
+            f"{sum(result.unchanged for result in results)} already imported"
+        )
+    return results

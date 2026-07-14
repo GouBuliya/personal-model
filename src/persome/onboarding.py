@@ -61,6 +61,33 @@ on run argv
 end run
 """
 
+_CHOOSE_IMPORT_SOURCES_SCRIPT = """
+on run argv
+    set sourceChoices to items 2 thru -1 of argv
+    tell current application to activate
+    try
+        set chosen to choose from list sourceChoices with title (item 1 of argv) with prompt "Choose any sources to import. You can skip this and import later." default items {item 1 of sourceChoices} OK button name "Continue" cancel button name "Not Now" with multiple selections allowed
+        if chosen is false then return ""
+        set AppleScript's text item delimiters to linefeed
+        return chosen as text
+    on error number -128
+        return ""
+    end try
+end run
+"""
+
+_CHOOSE_FOLDER_SCRIPT = """
+on run argv
+    tell current application to activate
+    try
+        set chosen to choose folder with prompt (item 1 of argv)
+        return POSIX path of chosen
+    on error number -128
+        return ""
+    end try
+end run
+"""
+
 
 class OnboardingError(RuntimeError):
     """The required onboarding proof could not be completed."""
@@ -137,6 +164,40 @@ class OnboardingUI:
         if reply in {"", "c", "check"}:
             return "check_again"
         return "cancel"
+
+    def choose_import_sources(self, choices: list[str]) -> list[str]:
+        if not choices:
+            return []
+        result = self._osascript(
+            _CHOOSE_IMPORT_SOURCES_SCRIPT,
+            "Import existing data",
+            *choices,
+            timeout=300,
+        )
+        if result is not None:
+            return [item for item in result.splitlines() if item in choices]
+        print("\nImport existing data")
+        if not sys.stdin.isatty():
+            return []
+        for index, choice in enumerate(choices, start=1):
+            print(f"  {index}. {choice}")
+        reply = input("Choose sources by number (comma-separated), or Enter to skip: ").strip()
+        selected: list[str] = []
+        for token in reply.split(","):
+            try:
+                selected.append(choices[int(token.strip()) - 1])
+            except (ValueError, IndexError):
+                continue
+        return list(dict.fromkeys(selected))
+
+    def choose_folder(self, prompt: str) -> Path | None:
+        result = self._osascript(_CHOOSE_FOLDER_SCRIPT, prompt, timeout=300)
+        if result is not None:
+            return Path(result).expanduser() if result else None
+        if not sys.stdin.isatty():
+            return None
+        reply = input(f"{prompt} (Enter to cancel): ").strip()
+        return Path(reply).expanduser() if reply else None
 
     def success(self, message: str) -> None:
         # Completion must never hold the CLI open behind a modal dialog. Keep
@@ -1232,11 +1293,11 @@ def onboard(
         expected_owner=expected_owner,
     )
     if not preserve_policy:
-        # Optional and read-only: capture readiness remains the hard gate, while
-        # a detected active Obsidian vault can seed Day-One model formation.
-        from .source_import import offer_obsidian_import
+        # Optional and read-only: capture readiness remains the hard gate;
+        # locally detected sources can seed Day-One model formation.
+        from .source_import import offer_data_import
 
-        offer_obsidian_import(ui, effective_cfg)
+        offer_data_import(ui, effective_cfg)
     if proof.receipt == "fresh-capture":
         completion = "a fresh capture with real context was verified"
     elif proof.receipt == "ingest-ready":

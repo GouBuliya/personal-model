@@ -1,11 +1,15 @@
 # Import existing knowledge
 
-On first onboarding, Persome checks Obsidian's local desktop vault registry. If
-an active vault is present, one confirmation imports its Markdown notes and
-builds the first personal model. The import is read-only: Persome neither
-writes to the vault nor installs an Obsidian plugin. Hidden directories such as
-`.obsidian`, symlinks, non-text attachments, and files larger than 2 MiB are
-excluded.
+On first onboarding, Persome shows a multi-select import step. A local folder is
+always available. Obsidian appears only when Persome finds a registered local
+vault, and Notion appears only when its desktop app is installed. Sources that
+are not present on the Mac are not shown. The user may select any combination
+or skip the step entirely; selected folders use the native macOS folder picker.
+
+The import is read-only: Persome neither writes to the source nor installs an
+Obsidian plugin. Hidden directories such as `.obsidian`, symlinks, non-text
+attachments, and files larger than 2 MiB are excluded. All selected sources are
+staged first, then one shared model build creates the first personal model.
 
 This is the lowest-friction first import because an Obsidian vault is already a
 local folder of Markdown files. A plugin is not required for migration; a
