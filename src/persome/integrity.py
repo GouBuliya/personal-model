@@ -1211,13 +1211,25 @@ def _repopulate_after_quarantine(
                     "DELETE FROM evo_nodes WHERE node_id=? AND user_id=? AND agent_id=?",
                     stale_node_keys,
                 )
-            # Faces, Volumes, Root, and their probe queue are rebuildable output,
-            # not recovery authority. Always discard snapshot copies so malformed
-            # or stale geometry cannot break the viewer before the required build.
+            # Faces, Volumes, Root, and their probe queue are derived output, but
+            # they also carry multi-run stability evidence that cannot be recreated
+            # from one model build.  A verified snapshot is therefore the recovery
+            # source for that evidence while its durable Point set remains compatible
+            # with the current Markdown authority.  Discard geometry only when no
+            # verified snapshot exists or Markdown proves that canonical Points were
+            # removed.  Newer/additional Points are safe: the next build incrementally
+            # refreshes the retained geometry.  Direct event/nested-memory cleanup is
+            # likewise irrelevant because Faces are mined from durable fact prefixes.
+            #
+            # The old unconditional delete caused a recovered model to keep thousands
+            # of Points and Lines but permanently fall back to zero Faces, Volumes,
+            # and Root: one rebuild cannot replay the historical resampling gate.
+            tables_to_invalidate: list[str] = []
+            if not snapshot_restored or stale_node_keys:
+                tables_to_invalidate.extend(["schema_faces", "cross_domain_probe_state"])
             # Relation edges are retained for a known evomem snapshot, but must
             # be cleared when current Markdown/direct sources removed or changed
             # Points that those relations may expose.
-            tables_to_invalidate = ["schema_faces", "cross_domain_probe_state"]
             if (
                 (snapshot_restored and restore_nodes_from_markdown)
                 or stale_node_keys

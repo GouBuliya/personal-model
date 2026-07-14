@@ -888,6 +888,72 @@ def test_markdown_authority_does_not_resurrect_forgotten_snapshot_node(ac_root: 
     assert database["derived_geometry_rows_invalidated"] >= 3
 
 
+def test_markdown_recovery_retains_verified_geometry_when_points_are_compatible(
+    ac_root: Path,
+) -> None:
+    """A verified snapshot preserves multi-run Face/Volume/Root evidence.
+
+    One post-recovery build cannot replay the historical resampling gate, so
+    deleting compatible derived rows would strand an otherwise healthy model at
+    Points/Lines forever.
+    """
+    config_mod.write_default_if_missing()
+    with fts.cursor() as conn:
+        entries.create_file(
+            conn,
+            name="project-retained.md",
+            description="Geometry retention proof",
+            tags=[],
+        )
+        entry_id = entries.append_entry(
+            conn,
+            name="project-retained.md",
+            content="DURABLE POINT REMAINS PRESENT",
+            tags=[],
+        )
+    NodeStore().save(
+        MemoryNode(
+            node_id=entry_id,
+            content="DURABLE POINT REMAINS PRESENT",
+            layer=MemoryLayer.L2_FACT,
+            file_name="project-retained.md",
+        )
+    )
+    with fts.cursor() as conn:
+        schema_faces.upsert_root(
+            conn,
+            signature="Verified Root must survive compatible recovery",
+            members=[entry_id],
+        )
+        conn.execute(
+            "INSERT INTO cross_domain_probe_state"
+            " (pair_key, last_probed_at, probe_count, detected) VALUES (?, ?, 2, 1)",
+            ('["retained-a","retained-b"]', "2026-07-12T00:00:00+00:00"),
+        )
+    snapshot = backup.create_snapshot(
+        now=datetime(2026, 7, 12, 9, 0, tzinfo=UTC),
+        structural_only=True,
+    )
+    assert snapshot is not None
+    paths.index_db().write_bytes(b"markdown-database-corruption" * 100)
+
+    integrity.check_and_recover()
+
+    with fts.cursor() as conn:
+        root = conn.execute(
+            "SELECT signature FROM schema_faces "
+            "WHERE level=3 AND status='active' AND valid_to IS NULL"
+        ).fetchone()
+        probe = conn.execute(
+            "SELECT probe_count, detected FROM cross_domain_probe_state"
+        ).fetchone()
+    assert root is not None and root[0] == "Verified Root must survive compatible recovery"
+    assert probe is not None and tuple(probe) == (2, 1)
+    database = json.loads(paths.integrity_recovery_marker().read_text())["database_recovery"]
+    assert database["stale_projected_nodes_removed"] == 0
+    assert database["derived_geometry_rows_invalidated"] == 0
+
+
 def test_incomplete_strict_markdown_discovery_never_deletes_snapshot_node(
     ac_root: Path, tmp_path: Path
 ) -> None:
