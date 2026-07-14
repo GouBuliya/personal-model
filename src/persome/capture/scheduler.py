@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .. import paths
+from .. import index_health, paths
 from ..config import CaptureConfig, Config
 from ..logger import get
 from ..store import fts as fts_store
@@ -492,6 +492,7 @@ def _write_capture(out: dict[str, Any]) -> Path:
 
     path = paths.capture_buffer_dir() / f"{_safe_filename(ts)}.json"
     paths.atomic_write_private_text(path, json.dumps(out, ensure_ascii=False))
+    index_health.record_capture_ok()
     _index_capture(path.stem, out)
     meta = out.get("window_meta") or {}
     logger.info(
@@ -554,7 +555,9 @@ def _index_capture(file_stem: str, out: dict[str, Any]) -> bool:
             )
     except Exception as exc:  # noqa: BLE001
         logger.warning("captures FTS insert failed for %s: %s", file_stem, exc)
+        index_health.record_index_result(False, str(exc))
         return False
+    index_health.record_index_result(True)
     return True
 
 
@@ -770,6 +773,7 @@ class _CaptureRunner:
         try:
             self._queue.put_nowait(trigger)
         except queue.Full:
+            index_health.record_queue_drop()
             logger.warning(
                 "capture queue full (%d pending); dropping trigger=%s",
                 self._queue.qsize(),

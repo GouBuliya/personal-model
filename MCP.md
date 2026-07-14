@@ -71,6 +71,13 @@ Example client configuration:
 | `read_recent_capture` | Read an exact `file_stem` or nearby capture; screenshot inclusion is opt-in. |
 | `attention_trajectory` | Read the attention path used during state formation. |
 
+When the evidence layer is degraded (index corruption, failing capture
+indexing, or an unindexed capture backlog), `search_captures` adds an
+in-band `index_health` object (`status`, `index`, `capture_state`,
+`index_backlog`, `note`) so a thin result set is never mistaken for "nothing
+happened on screen". A corrupt index raises an actionable tool error instead
+of returning partial results.
+
 ## Explicit write tools
 
 | Tool | Purpose |

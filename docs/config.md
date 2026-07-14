@@ -266,6 +266,25 @@ Person-graph ingest is deterministic. Case extraction distills reusable
 problem/solution evidence. Experimental relation extraction remains off; the
 memory-delta relation path is already active.
 
+## Index health
+
+```toml
+[index_health]
+enabled = true
+tick_seconds = 300
+failure_streak_threshold = 3
+backlog_warn_threshold = 50
+```
+
+The daemon's periodic self-check over the main SQLite B-tree and both FTS5
+indexes, plus the capture heartbeat that separates intentional silence
+(`paused`, `idle`) from a broken pipeline (`broken`). Reports publish to the
+owner-only `.index-health.json` sidecar and surface through `persome status`,
+`GET /health` / `GET /status`, the `/model` viewer banner, and the
+`search_captures` degradation note. See
+[`runtime-internals.md`](runtime-internals.md) and
+[`capture.md`](capture.md).
+
 ## Higher geometry
 
 ```toml

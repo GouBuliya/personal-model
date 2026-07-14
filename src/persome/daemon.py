@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import paths
+from . import index_health, paths
 from .capture import ocr_health, ocr_local
 from .capture import scheduler as capture_scheduler
 from .config import Config
@@ -178,6 +178,13 @@ def _build_task_registry(
             name="daily-safety-net",
             enabled=lambda cfg, capture_only: True,
             create=lambda cfg, sm: session_tick.run_daily_safety_net(cfg, sm),
+        ),
+        TaskDefinition(
+            # Runs in --capture-only too: a capture-only runtime still writes
+            # the buffer + captures FTS, so its owner still needs the heartbeat.
+            name="index-health",
+            enabled=lambda cfg, capture_only: cfg.index_health.enabled,
+            create=lambda cfg, sm: index_health.run_index_health_tick(cfg),
         ),
         TaskDefinition(
             name="timeline",

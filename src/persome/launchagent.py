@@ -72,6 +72,11 @@ def build_plist(binary: str) -> dict[str, object]:
         "ProgramArguments": [binary, "start", "--foreground"],
         "RunAtLoad": True,
         "KeepAlive": True,
+        # Damp crash loops: instant KeepAlive relaunches put a new writer on
+        # the SQLite WAL while sibling processes still map the old wal-index,
+        # which is the multi-process corruption window from the 2026-07-14
+        # incident (#68). 30s keeps recovery prompt but breaks the storm.
+        "ThrottleInterval": 30,
         # launchd otherwise inherits the user session's commonly permissive
         # 022 umask. Runtime state contains raw screen context and must be born
         # owner-only even before the explicit chmod defense runs.

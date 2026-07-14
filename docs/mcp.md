@@ -61,6 +61,12 @@ Example stdio client configuration:
 | `attention_trajectory` | Read the derived attention path used by state formation. |
 | `get_schema` | Return the Markdown memory schema. |
 
+`search_captures` degrades explicitly: while the daemon's index-health report
+is degraded or stale, its JSON payload carries an `index_health` object
+(`status`, `index`, `capture_state`, `index_backlog`, `note`), and a corrupt
+capture index raises an actionable tool error rather than returning silently
+partial results.
+
 `resolve_evidence` returns explicit stored lineage in `sources` and
 time-adjacent capture clues in `context`. Consumers must not present `context`
 as direct proof. Display `label` as the human-readable card title and keep

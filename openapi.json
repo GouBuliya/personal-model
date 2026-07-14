@@ -12,7 +12,7 @@
           "system"
         ],
         "summary": "Health",
-        "description": "Return liveness plus the configured local-OCR readiness state.",
+        "description": "Return liveness plus OCR readiness and coarse index/capture health.\n\nThis is the one unauthenticated route, so it only exposes non-personal\ncomponent states (``ok`` / ``degraded`` / ``unknown``), never counts,\npaths, or capture content — those live on the bearer-protected /status.",
         "operationId": "health_health_get",
         "responses": {
           "200": {

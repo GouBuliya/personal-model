@@ -185,3 +185,22 @@ tail -f ~/.persome/logs/launchd.err.log
 
 The SQLite store uses WAL mode. Integrity checks and rebuild commands are
 documented in [`troubleshooting.md`](troubleshooting.md).
+
+## Index health sidecar
+
+`~/.persome/.index-health.json` (owner-only, atomically replaced) is the
+latest report from the daemon's periodic `index-health` task: main-index and
+FTS5 integrity, buffer-vs-index backlog, the capture heartbeat
+(`active`/`paused`/`idle`/`broken`), and the last daily-snapshot outcome. It
+exists so status surfaces and stdio MCP processes can read health without
+opening the database — when the database itself is the casualty, the sidecar
+is still readable. Readers must treat a report older than three ticks as
+`stale` (published as such by `index_health.read_report`) rather than trust
+a dead daemon's last good word. Configuration lives under `[index_health]`
+in `config.toml` (`enabled`, `tick_seconds`, `failure_streak_threshold`,
+`backlog_warn_threshold`).
+
+The LaunchAgent plist sets `ThrottleInterval` (30s): instant crash
+relaunches put a fresh WAL writer next to sibling processes still holding
+the old wal-index mapping, which is the multi-process corruption window
+from the 2026-07-14 incident.

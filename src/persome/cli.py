@@ -32,7 +32,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from . import __version__, integrity, paths, runtime_pid
+from . import __version__, index_health, integrity, paths, runtime_pid
 from . import config as config_mod
 from . import env_file as env_file_mod
 from . import logger as logger_mod
@@ -756,6 +756,42 @@ def status() -> None:
         else:
             gap_str = f"[red]max gap {gap_m:.1f}m[/red]"
         table.add_row("Captures (1h)", f"{cap_count}  {gap_str}")
+
+    # Index health + capture heartbeat from the daemon's periodic self-check
+    # sidecar: the owner-facing line that separates "intentionally silent"
+    # from "the pipeline is broken".
+    health_report = index_health.read_report()
+    if health_report is None:
+        table.add_row("Index Health", "[yellow]unknown (no report yet)[/yellow]")
+    else:
+        idx = health_report.get("index") or {}
+        cap = health_report.get("capture") or {}
+        backlog = (health_report.get("backlog") or {}).get("backlog") or 0
+        stale_note = " [yellow](stale report)[/yellow]" if health_report.get("stale") else ""
+        idx_status = str(idx.get("status") or "unknown")
+        idx_style = "green" if idx_status == "ok" else "red"
+        table.add_row("Index Health", f"[{idx_style}]{idx_status}[/{idx_style}]{stale_note}")
+        cap_state = str(cap.get("state") or "unknown")
+        cap_style = (
+            "green"
+            if cap_state == "active"
+            else "yellow"
+            if cap_state in {"idle", "paused"}
+            else "red"
+        )
+        detail = f" — {cap.get('detail')}" if cap.get("detail") else ""
+        table.add_row("Capture Pipeline", f"[{cap_style}]{cap_state}[/{cap_style}]{detail}")
+        if backlog:
+            table.add_row(
+                "Index Backlog",
+                f"[yellow]{backlog} captures not searchable yet[/yellow] "
+                "(run `persome rebuild-captures-index --merge`)",
+            )
+        snap = health_report.get("snapshot") or {}
+        if snap.get("last_ok") is False:
+            table.add_row("Snapshot", f"[red]failing[/red] — {snap.get('last_error')}")
+        for action in health_report.get("recommended_actions", []):
+            table.add_row("", f"[yellow]→ {action}[/yellow]")
 
     table.add_row("Install", _install_source())
     credential = "ready" if default_profile.credential_ready else "credential missing"
