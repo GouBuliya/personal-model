@@ -12,7 +12,7 @@ inspection, correction, export, erasure, and uninstall behavior.
 | Linux | no | no | offline tests and development only |
 | Windows | no | no | unsupported |
 
-The installer uses Python 3.11-3.13. Xcode Command Line Tools are required to
+The installer uses Python 3.12-3.13. Xcode Command Line Tools are required to
 compile the Swift AX helpers.
 
 ## Permissions
@@ -204,7 +204,7 @@ the same stop, rollback, and post-install proof guarantees.
 The updated Runtime reconciles `HUMAN.md` from the current valid Root during
 startup/onboarding, so `persome update` backfills existing users without new
 capture or model calls. Package-manager users receive the same reconciliation
-after `uv tool upgrade personal-model` followed by `persome onboard`.
+after `uv tool upgrade --python 3.12 personal-model` followed by `persome onboard`.
 
 `persome update --source /path/to/checkout` is the explicit developer/offline
 path. The supplied tree must have the complete Persome source layout; the

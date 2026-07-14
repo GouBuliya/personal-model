@@ -214,6 +214,11 @@ def _build_task_registry(
             create=lambda cfg, sm: session_tick.run_daily_safety_net(cfg, sm),
         ),
         TaskDefinition(
+            name="wal-checkpoint",
+            enabled=lambda cfg, capture_only: True,
+            create=lambda cfg, sm: session_tick.run_wal_checkpoint_tick(),
+        ),
+        TaskDefinition(
             name="timeline",
             enabled=lambda cfg, capture_only: not capture_only,
             create=lambda cfg, sm: timeline_tick.run_forever(cfg),
@@ -282,6 +287,35 @@ async def _run(cfg: Config, *, capture_only: bool = False, hard_exit: bool = Fal
         raise RuntimeError(
             "capture.source='ingest' requires the authenticated HTTP Runtime transport"
         )
+    # Keep the fully initialized owner connection attached for the daemon
+    # lifetime. Every Persome connection disables both auto-checkpoint and
+    # SQLite's independent checkpoint-on-close path; scheduled maintenance is
+    # therefore the only Runtime checkpoint entrance after startup migration.
+    # The owner carries no transaction and does not block ordinary DB work.
+    from .store import fts
+
+    # Startup schema work may itself run the one-time secure-purge checkpoint.
+    # Open it under the same exclusive gate used by scheduled checkpoints so a
+    # stdio client's transaction cannot overlap migration maintenance.
+    database_owner = fts.open_runtime_owner()
+    try:
+        await _run_owned(
+            cfg,
+            capture_only=capture_only,
+            hard_exit=hard_exit,
+            http_enabled=http_enabled,
+        )
+    finally:
+        fts.close_runtime_owner(database_owner)
+
+
+async def _run_owned(
+    cfg: Config,
+    *,
+    capture_only: bool,
+    hard_exit: bool,
+    http_enabled: bool,
+) -> None:
     runtime_generation = secrets.token_hex(16)
     # Keep the numeric pidfile backward-compatible with the updater/CLI from
     # the immediately previous release. The owner-only runtime state written

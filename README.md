@@ -140,7 +140,13 @@ persome install claude-desktop
 persome install opencode
 ```
 
-These stdio registrations launch Persome on demand, so the daemon does not need to be running and no HTTP bearer is copied into client configuration.
+These stdio registrations launch the MCP process on demand, so the daemon does
+not need to be running after onboarding has initialized the local database, and
+no HTTP bearer is copied into client configuration. Schema creation and
+migration remain daemon-owned; a brand-new or externally upgraded data root
+must run `persome start` once before stdio clients use it. Stdio writes remain
+available while the daemon is stopped, but WAL maintenance waits for the daemon;
+start it periodically if you use write tools in that mode so the WAL stays bounded.
 
 For Cursor, generate a stdio configuration and merge its `mcpServers.persome` object into `.cursor/mcp.json` or `~/.cursor/mcp.json`:
 
@@ -174,10 +180,14 @@ Active work is reduced every five minutes by default. With valid capture and a w
 For a `uv tool` installation, upgrade with the package manager and re-run Runtime proof:
 
 ```text
-uv tool upgrade personal-model
+uv tool upgrade --python 3.12 personal-model
 persome onboard
 persome model open --after 30
 ```
+
+After any upgrade, restart editors that host a Persome stdio MCP process before
+resuming Runtime writes. A process loaded from the previous release cannot join
+the new cross-process SQLite maintenance gate until the editor reconnects it.
 
 For an installation created by `install.sh`, run the transactional updater from any directory:
 

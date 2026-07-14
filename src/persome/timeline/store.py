@@ -122,6 +122,10 @@ def _make_id(start: datetime) -> str:
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
+    from ..store import fts
+
+    if fts.is_client_process():
+        return
     conn.create_function("persome_epoch", 1, capture_timestamp_epoch)
     conn.executescript(SCHEMA)
     _migrate(conn)
