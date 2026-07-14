@@ -81,6 +81,12 @@ def test_get_schema() -> None:
     assert "Memory Organization Spec" in out["schema"]
 
 
+def test_pending_model_work_is_empty_on_fresh_root(ac_root: Path) -> None:
+    with fts.cursor() as conn:
+        out = mcp_server._pending_model_work(conn)
+    assert out == {"pending_reduction": 0, "pending_modeling": 0, "total": 0}
+
+
 def test_get_model_snapshot_uses_versioned_contract(ac_root: Path) -> None:
     with fts.cursor() as conn:
         out = mcp_server._get_model_snapshot(conn)
@@ -158,6 +164,9 @@ def test_get_model_snapshot_preserves_saved_manifest(ac_root: Path) -> None:
 def test_server_reports_runtime_version(ac_root: Path) -> None:
     server = mcp_server.build_server(auth_enabled=False)
     assert server._mcp_server.version == __version__
+    tool = server._tool_manager.get_tool("process_pending_model_work")
+    assert tool is not None
+    assert "ctx" not in tool.parameters["properties"]
 
 
 def test_stdio_server_skips_daemon_http_routes(ac_root: Path) -> None:

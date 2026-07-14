@@ -128,12 +128,17 @@ After successful interactive onboarding, the source installer schedules the one-
 - On Apple Silicon, onboarding verifies the isolated local OCR worker when OCR is enabled.
 - It proves the final lifecycle owner and Runtime generation, then reports a fresh-capture receipt in standard daemon mode or an explicit readiness/privacy receipt for supported alternate modes such as trusted ingest.
 
-An LLM is optional for collection and BM25 recall, but required for semantic modeling. If provider setup was skipped, run:
+An LLM is optional for collection and BM25 recall, but required for semantic modeling. You can configure a hosted/local provider for unattended processing:
 
 ```text
 persome llm setup
 persome llm status --check
 ```
+
+Alternatively, a trusted MCP client that supports Sampling with tools can
+explicitly call `process_pending_model_work`. That path uses the model allowance
+already available to the connected agent without exposing its login token to
+Persome; it does not power unattended background processing.
 
 ### 3. Connect a trusted MCP client
 

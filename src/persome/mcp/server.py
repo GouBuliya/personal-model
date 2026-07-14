@@ -675,6 +675,19 @@ def _get_schema() -> dict[str, Any]:
     return {"schema": load_prompt("schema.md")}
 
 
+def _pending_model_work(conn) -> dict[str, int]:  # type: ignore[no-untyped-def]
+    """Cheap backlog summary used before an allowance-consuming Sampling call."""
+    from ..session import store as session_store
+
+    reduction = len(session_store.list_pending_reduction(conn))
+    modeling = len(session_store.list_pending_modeling(conn))
+    return {
+        "pending_reduction": reduction,
+        "pending_modeling": modeling,
+        "total": reduction + modeling,
+    }
+
+
 _SERVER_INSTRUCTIONS = """\
 # Persome — the user's local personal memory
 
@@ -781,6 +794,15 @@ top-down — who they are (resident), what happened (recall), what was on screen
 
 - `get_schema()` — memory file naming and structural spec. Rarely needed during normal query flow.
 
+### User-funded model processing
+
+- `get_pending_model_work()` — inspect the backlog without spending model tokens.
+- `process_pending_model_work(max_sessions?)` — explicitly process up to 1–10
+  pending sessions by asking this MCP client to perform Sampling. Call only when
+  the user asks to build/update their Personal Model or approves using the
+  current agent's allowance. It requires MCP Sampling with tools and never gives
+  Persome access to the client's login token.
+
 ## Reading a search result
 
 Each hit carries more than text — use all of it:
@@ -861,7 +883,11 @@ def build_server(
     transports. A stdio client has no HTTP surface, so importing and building
     that application would only add several seconds of cold-start work.
     """
-    from mcp.server.fastmcp import FastMCP  # lazy import
+    from mcp.server.fastmcp import Context, FastMCP  # lazy import
+
+    # FastMCP evaluates postponed annotations in the function's module globals
+    # when registering nested tools.
+    globals()["Context"] = Context
 
     if auth_enabled:
         from ..security.auth import reset_browser_auth_state
@@ -1550,6 +1576,68 @@ def build_server(
         directly.
         """
         return json.dumps(_get_schema(), ensure_ascii=False)
+
+    @server.tool()
+    def get_pending_model_work() -> str:
+        """Return pending semantic session counts without invoking any model."""
+        with fts.cursor() as conn:
+            return json.dumps(_pending_model_work(conn), ensure_ascii=False)
+
+    @server.tool()
+    async def process_pending_model_work(
+        ctx: Context,
+        max_sessions: int = 1,
+    ) -> str:
+        """Process pending Personal Model sessions using this MCP client's model.
+
+        This is the user-funded modeling path: Persome requests MCP Sampling from
+        the originating client, so Codex, Claude, or another compatible agent uses
+        its own authenticated model entitlement. Persome never receives the
+        client's login token. The call is explicit and bounded because it may
+        consume the user's agent allowance.
+
+        Requires the client to advertise MCP Sampling with tools. Clients that
+        only support ordinary MCP tool calls cannot use this path; configure an
+        API/local provider or use a compatible agent instead.
+        """
+        import asyncio
+        from dataclasses import asdict
+
+        from mcp import types
+
+        from ..writer import agent as writer_agent
+        from ..writer.agent_funded import SamplingBridge, use_bridge
+
+        max_sessions = bounded_int(max_sessions, minimum=1, maximum=10)
+        capability = types.ClientCapabilities(
+            sampling=types.SamplingCapability(tools=types.SamplingToolsCapability())
+        )
+        if not ctx.session.check_client_capability(capability):
+            return json.dumps(
+                {
+                    "status": "unsupported",
+                    "reason": "client_missing_sampling_with_tools",
+                    "processed": 0,
+                },
+                ensure_ascii=False,
+            )
+
+        loop = asyncio.get_running_loop()
+        bridge = SamplingBridge(loop=loop, session=ctx.session)
+
+        def _run() -> Any:
+            with use_bridge(bridge):
+                return writer_agent.run(cfg, limit=max_sessions)
+
+        result = await asyncio.to_thread(_run)
+        return json.dumps(
+            {
+                "status": "completed",
+                "max_sessions": max_sessions,
+                **asdict(result),
+            },
+            ensure_ascii=False,
+        )
 
     # ─── Agent-Native Persome: memory write-back (the loop, Phase 3) ──────────────────────
     from . import memory_write as _memory_write

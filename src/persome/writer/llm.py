@@ -288,6 +288,19 @@ def call_llm(
         return _mock_response(stage, messages, tools, json_mode)
 
     model_cfg = cfg.model_for(stage)
+    # An originating MCP request may lend its client's model through Sampling.
+    # This takes precedence over configured providers for only that request and
+    # never exposes or persists the client's authentication material.
+    from .agent_funded import active_bridge
+
+    bridge = active_bridge()
+    if bridge is not None:
+        return bridge.complete(
+            messages=messages,
+            tools=tools,
+            max_tokens=model_cfg.max_tokens or _DEFAULT_MAX_TOKENS,
+        )
+
     override = os.environ.get("PERSOME_FALLBACK_MODEL")
     if override:
         model_cfg = ModelConfig(**{**model_cfg.__dict__, "model": override})

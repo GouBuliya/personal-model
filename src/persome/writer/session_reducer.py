@@ -380,7 +380,7 @@ def retry_due(cfg: Config) -> list[ReduceResult]:
     return results
 
 
-def reduce_all_pending(cfg: Config) -> list[ReduceResult]:
+def reduce_all_pending(cfg: Config, *, limit: int | None = None) -> list[ReduceResult]:
     """Unconditional catch-up: reduce every non-reduced ended/failed session.
 
     Called from the daily 23:55 safety-net. Covers ``ended`` rows
@@ -389,6 +389,8 @@ def reduce_all_pending(cfg: Config) -> list[ReduceResult]:
     """
     with fts.cursor() as conn:
         rows = session_store.list_pending_reduction(conn)
+    if limit is not None:
+        rows = rows[: max(0, limit)]
     out: list[ReduceResult] = []
     for row in rows:
         if row.end_time is None:
