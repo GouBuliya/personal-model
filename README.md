@@ -12,9 +12,9 @@ Persome learns how you actually think and work from focused activity captured on
 
 [Try the synthetic demo](#1-five-minute-synthetic-demo) · [Install with your data](#2-install-with-your-data) · [Connect an MCP client](#3-connect-a-trusted-mcp-client) · [Star Persome on GitHub](https://github.com/Intuition-Lab/personal-model)
 
-![Persome local personal-model viewer rendering a dense synthetic Point, Line, Face, Volume, and Root graph](docs/assets/persome-model-hero.png)
+![Illustration of a mature Persome Personal Model with evidence-linked Points, Lines, Faces, Volumes, and a Root](docs/assets/readme/personal-model.png)
 
-_Actual `/model` screenshot produced by `scripts/sample_demo.py --showcase`: 424 synthetic Points, 146 Lines, 12 Faces, 4 Volumes, and 1 Root. It contains no personal data._
+_Concept illustration of a mature Personal Model. The deterministic Runtime proof is shown in the demo below._
 
 ---
 
@@ -92,7 +92,11 @@ cd personal-model
 uv run python scripts/sample_demo.py
 ```
 
-The script opens the local viewer at `http://127.0.0.1:8743/model` and deletes its temporary synthetic data when you press `Ctrl-C`. Add `--showcase` for the denser, still fully synthetic graph shown in the README.
+The script opens the local viewer at `http://127.0.0.1:8743/model` and deletes its temporary synthetic data when you press `Ctrl-C`. Add `--showcase` for the denser, still fully synthetic graph shown below.
+
+![Persome local personal-model viewer rendering a dense synthetic Point, Line, Face, Volume, and Root graph](docs/assets/persome-model-hero.png)
+
+_Actual `/model` screenshot produced by `scripts/sample_demo.py --showcase`: 424 synthetic Points, 146 Lines, 12 Faces, 4 Volumes, and 1 Root. It contains no personal data._
 
 ### 2. Install with your data
 
