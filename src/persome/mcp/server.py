@@ -561,11 +561,11 @@ def _get_schema() -> dict[str, Any]:
 _SERVER_INSTRUCTIONS = """\
 # Persome — the user's local personal memory
 
-Persome is the user's private, local-first memory: durable facts (identity, preferences, habits, projects, people, schedule) plus raw recent on-screen activity. Query it instead of asking the user to repeat context or guessing.
+Persome is the user's private local memory: durable facts plus recent screen activity. Query it before asking the user to repeat context or guessing.
 
 ## When to use (decision rule)
 
-Call Persome BEFORE asking a clarifying question or saying "I don't know", whenever the request may depend on context outside this chat:
+Call Persome before clarifying or saying "I don't know" when the request may depend on context outside this chat:
 
 - ambiguous references: "this", "that", "it", "the bug", "the file", "the doc"
 - present tense: "what am I working on", "what's open on my screen"
@@ -586,6 +586,7 @@ A missed lookup is worse than an unnecessary one — the tools are local and che
 - exact string seen or typed on screen (errors, URLs, code) → `search_captures(query)`, then `read_recent_capture(...)`
 - what the user has been up to lately → `recent_activity()`; focus/time spent → `attention_trajectory()`
 - browse files → `list_memories()` / `read_memory(path)`
+- audit a memory/model claim → `resolve_evidence(reference)` / `read_receipt(entry_id)`
 - the user corrects a wrong memory → `correct_memory(correction)`; a durable new finding → `remember(content)`
 - unsure between compressed vs raw → `search` and `search_captures` in parallel
 

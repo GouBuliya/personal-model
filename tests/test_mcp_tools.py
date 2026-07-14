@@ -173,7 +173,8 @@ _INSTRUCTIONS_TRUNCATION_BUDGET = 2048
 
 
 def test_server_instructions_fit_client_truncation_budget() -> None:
-    head = mcp_server._SERVER_INSTRUCTIONS[:_INSTRUCTIONS_TRUNCATION_BUDGET]
+    instructions = mcp_server._SERVER_INSTRUCTIONS
+    head = instructions[:_INSTRUCTIONS_TRUNCATION_BUDGET]
     assert "## When to use" in head
     assert "## Tool routing" in head
     for tool in (
@@ -186,11 +187,17 @@ def test_server_instructions_fit_client_truncation_budget() -> None:
         "recent_activity",
         "list_memories",
         "read_memory",
+        "resolve_evidence",
+        "read_receipt",
         "correct_memory",
         "remember",
     ):
         assert tool in head, f"routing for {tool} fell below the truncation fold"
-    assert "suffice if this document was truncated" in head
+    fold = "Details follow; the rules above suffice if this document was truncated."
+    assert fold in head
+    # Some clients enforce transport budgets in bytes instead of code points.
+    fold_end = instructions.index(fold) + len(fold)
+    assert len(instructions[:fold_end].encode("utf-8")) <= _INSTRUCTIONS_TRUNCATION_BUDGET
 
 
 # ─── search_captures + current_context ────────────────────────────────────

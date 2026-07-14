@@ -315,7 +315,7 @@ class TestMcpLoop:
         sleep.assert_awaited_once()
         assert calls["n"] == 2
 
-    async def test_uvicorn_systemexit_other_cause_returns_immediately(self) -> None:
+    async def test_uvicorn_systemexit_other_bind_error_returns_immediately(self) -> None:
         async def run_async(cfg: Config) -> None:
             try:
                 raise PermissionError(1, "operation not permitted")
@@ -331,6 +331,18 @@ class TestMcpLoop:
         # Hard failure: log + return with the daemon still alive, no backoff.
         log.error.assert_called_once()
         sleep.assert_not_awaited()
+
+    @pytest.mark.parametrize("code", [0, 3])
+    async def test_non_uvicorn_systemexit_propagates(self, code: int) -> None:
+        async def run_async(cfg: Config) -> None:
+            raise SystemExit(code)
+
+        with (
+            patch("persome.mcp.server.run_async", side_effect=run_async),
+            pytest.raises(SystemExit) as raised,
+        ):
+            await _mcp_loop(Config())
+        assert raised.value.code == code
 
     async def test_cancellation_propagates(self) -> None:
         async def run_async(cfg: Config) -> None:

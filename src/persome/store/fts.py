@@ -385,12 +385,18 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     except sqlite3.DatabaseError as exc:
         conn.close()
         if any(sig in str(exc) for sig in _CORRUPTION_SIGNATURES):
-            raise CorruptDatabaseError(
-                f"{db_path.name} is damaged ({exc}). Restart the Persome daemon "
-                "(`persome start`) to quarantine it and restore from the latest "
-                "verified snapshot plus Markdown replay; memory Markdown files "
-                "are unaffected."
-            ) from exc
+            if db_path.resolve() == paths.index_db().resolve():
+                recovery = (
+                    "Run `persome stop` if the daemon is running, then `persome start` "
+                    "to quarantine it and restore from the latest verified snapshot plus "
+                    "Markdown replay; memory Markdown files are unaffected."
+                )
+            else:
+                recovery = (
+                    "Replace or rebuild this database from a verified source; automatic "
+                    "daemon-start recovery applies only to the live index.db."
+                )
+            raise CorruptDatabaseError(f"{db_path.name} is damaged ({exc}). {recovery}") from exc
         raise
     # SQLite's built-in date parser does not understand every ISO form Python's
     # historical ingest accepted (notably basic ISO), and interprets naive

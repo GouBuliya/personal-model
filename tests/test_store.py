@@ -60,8 +60,21 @@ def test_connect_names_recovery_path_on_corrupt_header(ac_root: Path) -> None:
     db = ac_root / "index.db"
     db.write_bytes(b"\x0d\x00\x00\x00" + b"\x00" * 4092)
 
-    with pytest.raises(fts.CorruptDatabaseError, match="persome start"):
+    with pytest.raises(fts.CorruptDatabaseError, match="persome start") as raised:
         fts.connect(db)
+    assert "persome stop" in str(raised.value)
+
+
+def test_connect_does_not_claim_startup_recovery_for_external_database(ac_root: Path) -> None:
+    db = ac_root / "exports" / "damaged-snapshot.db"
+    db.parent.mkdir()
+    db.write_bytes(b"\x0d\x00\x00\x00" + b"\x00" * 4092)
+
+    with pytest.raises(fts.CorruptDatabaseError) as raised:
+        fts.connect(db)
+    message = str(raised.value)
+    assert "persome start" not in message
+    assert "automatic daemon-start recovery applies only to the live index.db" in message
 
 
 def test_create_append_search(ac_root: Path) -> None:
