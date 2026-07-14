@@ -258,13 +258,21 @@ Additional top-level enrichment flags:
 ```toml
 person_graph_enabled = true
 case_extraction_enabled = true
+attention_digest_enabled = false
 relation_extraction_enabled = false
 edge_promote_fanout = 20
 ```
 
 Person-graph ingest is deterministic. Case extraction distills reusable
-problem/solution evidence. Experimental relation extraction remains off; the
-memory-delta relation path is already active.
+problem/solution evidence. Attention digest is opt-in because attention
+surfaces are raw window, pane, tab, or document titles: enabling it extends
+those values into independently retained `user-attention.md` memory (which
+survives timeline cleanup) and makes them schema-miner input. Same-day re-runs
+supersede that day's digest in place. Relation extraction is also opt-in: it is
+a compatibility enrichment beside the primary windowed memory-delta path. It
+writes shadow edges first, but the same model build promotes edges that already
+meet the evidence floor and shared per-source fan-out cap; enabling it can
+therefore change retrieval and Line output immediately on an existing history.
 
 ## Higher geometry
 

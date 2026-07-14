@@ -183,6 +183,7 @@ def _run_pipeline(cfg: Any) -> PipelineOutcome:
     enrichment_enabled = bool(
         getattr(cfg, "person_graph_enabled", False)
         or getattr(cfg, "case_extraction_enabled", False)
+        or getattr(cfg, "attention_digest_enabled", False)
         or getattr(cfg, "relation_extraction_enabled", False)
     )
     _run_stage(outcome, "entity_relation_enrichment", run_enrichment, enabled=enrichment_enabled)
