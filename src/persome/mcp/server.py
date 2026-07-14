@@ -1640,6 +1640,11 @@ def _start_parent_watchdog(
 
 def run_stdio() -> None:
     """Run the server on stdio. Blocks until the client disconnects."""
+    # One stdio server per editor session shares index.db with the daemon and
+    # every sibling session. Declare client semantics before the first
+    # connection: no WAL checkpoints, no connect-time DDL/migrations — those
+    # belong to the daemon, the single schema/checkpoint owner (#68).
+    fts.declare_client_process()
     # Belt and braces for clients that die without closing the pipe: without
     # this, orphaned stdio servers pile up and can race integrity recovery.
     # Armed before build_server so a client death during startup still gets

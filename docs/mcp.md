@@ -21,6 +21,17 @@ REST/Chat application and never runs database recovery, keeping per-client cold
 starts bounded to MCP tools. Integrity recovery remains a daemon-start and
 maintenance responsibility.
 
+Stdio processes are shared-database clients: they can read and apply explicit
+row-level memory writes, but they do not create or migrate schema and they
+disable per-connection WAL auto-checkpoints. Onboarding normally initializes
+the database already; for a brand-new or externally upgraded data root, run
+`persome start` once before connecting stdio clients. While the daemon is live,
+it pre-initializes every registered store schema, publishes an exact revision
+and schema fingerprint, keeps the schema-owner connection, and performs WAL
+maintenance. A stdio client rejects a missing, stale, future, or mismatched
+receipt, and its SQLite authorizer rejects any schema-changing statement that
+escapes the client-safe store helpers.
+
 Example stdio client configuration:
 
 ```json

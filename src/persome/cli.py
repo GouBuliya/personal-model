@@ -116,7 +116,12 @@ def _init(
     # must never quarantine or rebuild an index while that process has it open.
     # When stopped, this remains the first database-touching operation.
     if recover_integrity and not _read_pid() and (starting_runtime or not _daemon_lock_is_held()):
-        recovered = integrity.check_and_recover()
+        # Editor-spawned stdio MCP processes can outlive the daemon. Recovery
+        # performs raw SQLite repair, VACUUM, and atomic DB replacement, so it
+        # must exclude their cooperating transactions just like a checkpoint.
+        # The gate is reentrant for recovery helpers that use ``fts.cursor()``.
+        with fts.exclusive_database_maintenance():
+            recovered = integrity.check_and_recover()
         if paths.integrity_recovery_pending().exists():
             console.print(
                 "[red]Persome database recovery is incomplete.[/red] "
@@ -941,7 +946,7 @@ def update(
         console.print(
             "[yellow]This Persome CLI is managed by a Python package manager.[/yellow]\n"
             "Upgrade the public distribution, then re-run Runtime proof:\n\n"
-            "  [bold]uv tool upgrade personal-model[/bold]\n"
+            "  [bold]uv tool upgrade --python 3.12 personal-model[/bold]\n"
             "  [bold]persome onboard[/bold]\n\n"
             "For pipx or pip installations, upgrade [bold]personal-model[/bold] with that "
             "manager instead."
@@ -1032,6 +1037,11 @@ def update(
     console.print(
         "[green]✓ Persome update complete[/green] — configuration, credentials, and personal "
         "data were preserved."
+    )
+    console.print(
+        "[yellow]Restart every editor/client connected to Persome before resuming writes.[/yellow] "
+        "A stdio MCP process loaded from the previous release cannot join the new SQLite "
+        "maintenance gate until it reconnects."
     )
 
 
@@ -3373,6 +3383,12 @@ def _private_atomic_crash_artifacts(*targets: Path) -> tuple[Path, ...]:
 
 
 def _clean_captures() -> tuple[int, int]:
+    """Delete capture state as one operation relative to stdio DB clients."""
+    with fts.exclusive_database_maintenance():
+        return _clean_captures_locked()
+
+
+def _clean_captures_locked() -> tuple[int, int]:
     from .evomem import backup as evo_backup
 
     # Recovery copies are part of the deletion boundary too.
@@ -3392,6 +3408,12 @@ def _clean_captures() -> tuple[int, int]:
 
 
 def _clean_timeline() -> int:
+    """Delete timeline state as one operation relative to stdio DB clients."""
+    with fts.exclusive_database_maintenance():
+        return _clean_timeline_locked()
+
+
+def _clean_timeline_locked() -> int:
     from .evomem import backup as evo_backup
 
     evo_backup.scrub_snapshots(("timeline_blocks",))
@@ -3438,6 +3460,12 @@ def _remove_path(path: Path) -> int:
 
 
 def _clean_memory() -> tuple[int, int, int, int]:
+    """Delete every memory authority/projection under one exclusive boundary."""
+    with fts.exclusive_database_maintenance():
+        return _clean_memory_locked()
+
+
+def _clean_memory_locked() -> tuple[int, int, int, int]:
     """Delete all personal-model projections, canonical state, and exports."""
     mem = paths.memory_dir()
     files = _remove_path(mem)
@@ -3584,47 +3612,52 @@ def clean_all(
         console.print("[yellow]Aborted.[/yellow]")
         raise typer.Exit(1)
 
-    known_personal_data = (
-        paths.capture_buffer_dir(),
-        paths.memory_dir(),
-        paths.logs_dir(),
-        paths.exports_dir(),
-        paths.backup_dir(),
-        paths.root() / "projection-md",
-        paths.human_file(),
-        # Legacy Chat-era data written by versions that still shipped the Chat
-        # feature; keep purging it so a full wipe stays a full wipe.
-        paths.root() / "chat-history",
-        paths.root() / "skills",
-        paths.index_db(),
-        paths.index_db().with_name(f"{paths.index_db().name}-wal"),
-        paths.index_db().with_name(f"{paths.index_db().name}-shm"),
-        paths.index_db().with_name(f"{paths.index_db().name}-journal"),
-        paths.writer_state(),
-        paths.model_build_manifest(),
-        paths.model_build_lock(),
-        paths.session_model_lock(),
-        paths.paused_flag(),
-        paths.integrity_recovery_marker(),
-        paths.integrity_recovery_pending(),
-        paths.integrity_config_recovery_pending(),
-        paths.pid_file(),
-    )
-    quarantined_personal_data = tuple(paths.root().glob("*.corrupt.*"))
-    atomic_crash_data = _private_atomic_crash_artifacts(
-        paths.human_file(),
-        paths.model_build_manifest(),
-        paths.integrity_recovery_marker(),
-        paths.integrity_recovery_pending(),
-        paths.integrity_config_recovery_pending(),
-        paths.pid_file(),
-        paths.paused_flag(),
-        paths.writer_state(),
-    )
-    removed = sum(
-        _remove_path(path)
-        for path in (*known_personal_data, *quarantined_personal_data, *atomic_crash_data)
-    )
+    # Hold the same exclusive boundary used by checkpoints from the first
+    # filesystem removal through the last. A stdio memory write must happen
+    # wholly before the wipe or fail against the missing client-owned schema;
+    # it must not keep writing an unlinked index inode after a false success.
+    with fts.exclusive_database_maintenance():
+        known_personal_data = (
+            paths.capture_buffer_dir(),
+            paths.memory_dir(),
+            paths.logs_dir(),
+            paths.exports_dir(),
+            paths.backup_dir(),
+            paths.root() / "projection-md",
+            paths.human_file(),
+            # Legacy Chat-era data written by versions that still shipped the
+            # Chat feature; keep purging it so a full wipe stays a full wipe.
+            paths.root() / "chat-history",
+            paths.root() / "skills",
+            paths.index_db(),
+            paths.index_db().with_name(f"{paths.index_db().name}-wal"),
+            paths.index_db().with_name(f"{paths.index_db().name}-shm"),
+            paths.index_db().with_name(f"{paths.index_db().name}-journal"),
+            paths.writer_state(),
+            paths.model_build_manifest(),
+            paths.model_build_lock(),
+            paths.session_model_lock(),
+            paths.paused_flag(),
+            paths.integrity_recovery_marker(),
+            paths.integrity_recovery_pending(),
+            paths.integrity_config_recovery_pending(),
+            paths.pid_file(),
+        )
+        quarantined_personal_data = tuple(paths.root().glob("*.corrupt.*"))
+        atomic_crash_data = _private_atomic_crash_artifacts(
+            paths.human_file(),
+            paths.model_build_manifest(),
+            paths.integrity_recovery_marker(),
+            paths.integrity_recovery_pending(),
+            paths.integrity_config_recovery_pending(),
+            paths.pid_file(),
+            paths.paused_flag(),
+            paths.writer_state(),
+        )
+        removed = sum(
+            _remove_path(path)
+            for path in (*known_personal_data, *quarantined_personal_data, *atomic_crash_data)
+        )
     console.print(
         f"[green]Done. Removed {removed} personal data artifact(s). "
         "Config, env, and the installed venv were kept.[/green]"
