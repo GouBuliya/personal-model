@@ -18,6 +18,7 @@ from persome.writer.llm import call_llm, extract_text
 
 class _Handler(BaseHTTPRequestHandler):
     requests: list[dict[str, Any]] = []
+    token_limit_error: str | None = None
 
     def log_message(self, format: str, *args: Any) -> None:
         return None
@@ -32,7 +33,54 @@ class _Handler(BaseHTTPRequestHandler):
                 "body": body,
             }
         )
+        if self.token_limit_error == "reject_completion" and "max_completion_tokens" in body:
+            self._json_error(
+                "Unrecognized request argument supplied: max_completion_tokens",
+            )
+            return
+        if self.token_limit_error == "reject_legacy" and "max_tokens" in body:
+            self._json_error(
+                "Unsupported parameter: 'max_tokens' is not supported with this model.",
+                param="max_tokens",
+                code="unsupported_parameter",
+            )
+            return
+        if self.token_limit_error == "unrelated":
+            self._json_error(
+                "The requested model was not found.", param="model", code="model_not_found"
+            )
+            return
+        if self.token_limit_error == "conflicting_unrecognized":
+            self._json_error(
+                "Unrecognized request argument supplied: max_completion_tokens",
+                param="model",
+                code="invalid_request_error",
+            )
+            return
+        if self.token_limit_error == "verbose_unrecognized":
+            self._json_error(
+                "Request failed: Unrecognized request argument supplied: max_completion_tokens",
+            )
+            return
         self._json_completion(body)
+
+    def _json_error(
+        self, message: str, *, param: str | None = None, code: str | None = None
+    ) -> None:
+        payload = {
+            "error": {
+                "message": message,
+                "type": "invalid_request_error",
+                "param": param,
+                "code": code,
+            }
+        }
+        raw = json.dumps(payload).encode()
+        self.send_response(400)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
 
     def _json_completion(self, body: dict[str, Any]) -> None:
         message: dict[str, Any] = {"role": "assistant", "content": "ok"}
@@ -73,8 +121,9 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def _server() -> Iterator[tuple[str, list[dict[str, Any]]]]:
+def _server(*, token_limit_error: str | None = None) -> Iterator[tuple[str, list[dict[str, Any]]]]:
     _Handler.requests = []
+    _Handler.token_limit_error = token_limit_error
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -82,6 +131,7 @@ def _server() -> Iterator[tuple[str, list[dict[str, Any]]]]:
     try:
         yield f"http://{host}:{port}/v1", _Handler.requests
     finally:
+        _Handler.token_limit_error = None
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
@@ -124,7 +174,7 @@ def test_openai_writer_uses_completion_token_limit_parameter(monkeypatch) -> Non
         cfg = Config(
             models={
                 "default": ModelConfig(
-                    provider="openai",
+                    provider="OpenAI",
                     protocol="openai",
                     model="gpt-5.4",
                     base_url=base_url,
@@ -180,5 +230,74 @@ def test_azure_onboarding_probe_uses_completion_token_limit_parameter(monkeypatc
 
     assert result.completion_ok is True
     assert result.tool_call_ok is True
-    assert [request["body"]["max_completion_tokens"] for request in requests] == [8, 128]
+    assert [request["body"]["max_completion_tokens"] for request in requests] == [8, 512]
     assert all("max_tokens" not in request["body"] for request in requests)
+
+
+@pytest.mark.parametrize("provider", ["azure-openai", "openai"])
+def test_official_profile_falls_back_for_legacy_endpoint(monkeypatch, provider) -> None:
+    monkeypatch.setenv("PERSOME_LLM_API_KEY", "wire-secret")
+    with _server(token_limit_error="reject_completion") as (base_url, requests):
+        profile = make_profile(
+            provider,
+            model="arbitrary-deployment-name",
+            base_url=base_url,
+            api_key_env="PERSOME_LLM_API_KEY",
+            api_key="wire-secret",
+            protocol="openai",
+        )
+
+        result = probe_profile(profile)
+
+    assert result.completion_ok is True
+    assert result.tool_call_ok is True
+    assert len(requests) == 3
+    assert requests[0]["body"]["max_completion_tokens"] == 8
+    assert requests[1]["body"]["max_tokens"] == 8
+    assert requests[2]["body"]["max_tokens"] == 512
+    assert all("max_completion_tokens" not in request["body"] for request in requests[1:])
+
+
+def test_compatible_profile_falls_forward_for_current_endpoint(monkeypatch) -> None:
+    monkeypatch.setenv("PERSOME_LLM_API_KEY", "wire-secret")
+    with _server(token_limit_error="reject_legacy") as (base_url, requests):
+        profile = make_profile(
+            "custom-openai",
+            model="gpt-5.4",
+            base_url=base_url,
+            api_key_env="PERSOME_LLM_API_KEY",
+            api_key="wire-secret",
+            protocol="openai",
+        )
+
+        result = probe_profile(profile)
+
+    assert result.completion_ok is True
+    assert result.tool_call_ok is True
+    assert len(requests) == 3
+    assert requests[0]["body"]["max_tokens"] == 8
+    assert requests[1]["body"]["max_completion_tokens"] == 8
+    assert requests[2]["body"]["max_completion_tokens"] == 512
+    assert all("max_tokens" not in request["body"] for request in requests[1:])
+
+
+@pytest.mark.parametrize(
+    "token_limit_error", ["unrelated", "conflicting_unrecognized", "verbose_unrecognized"]
+)
+def test_token_limit_fallback_does_not_retry_ambiguous_400(monkeypatch, token_limit_error) -> None:
+    monkeypatch.setenv("PERSOME_LLM_API_KEY", "wire-secret")
+    with _server(token_limit_error=token_limit_error) as (base_url, requests):
+        profile = make_profile(
+            "azure-openai",
+            model="missing-deployment",
+            base_url=base_url,
+            api_key_env="PERSOME_LLM_API_KEY",
+            api_key="wire-secret",
+            protocol="openai",
+        )
+
+        result = probe_profile(profile)
+
+    assert result.completion_ok is False
+    assert result.tool_call_ok is False
+    assert len(requests) == 1

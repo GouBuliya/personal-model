@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from . import env_file, paths
-from .providers import LLM_API_KEY_ENV, ResolvedLLMProfile, openai_token_limit_kwargs
+from .providers import LLM_API_KEY_ENV, ResolvedLLMProfile, create_openai_chat_completion
 
 _PROBE_TOOL_NAME = "persome_setup_check"
 _PROBE_TOOL_DESCRIPTION = "Confirm that this model can call Persome memory tools."
@@ -61,10 +61,12 @@ def probe_profile(profile: ResolvedLLMProfile, *, timeout: float = 20.0) -> Prob
                 base_url=profile.base_url,
                 timeout=timeout,
             )
-            client.chat.completions.create(
+            create_openai_chat_completion(
+                profile,
+                client.chat.completions.create,
+                limit=8,
                 model=profile.wire_model,
                 messages=[{"role": "user", "content": "Reply with exactly: ok"}],
-                **openai_token_limit_kwargs(profile, 8),
             )
     except Exception as exc:  # noqa: BLE001
         return ProbeResult(
@@ -121,12 +123,18 @@ def probe_profile(profile: ResolvedLLMProfile, *, timeout: float = 20.0) -> Prob
         ]
         for tool_choice in choices:
             try:
-                tool_response = client.chat.completions.create(
+                tool_response = create_openai_chat_completion(
+                    profile,
+                    client.chat.completions.create,
+                    # Completion limits include hidden reasoning tokens on
+                    # current OpenAI models. Leave enough room for the forced
+                    # tool call instead of misclassifying budget exhaustion as
+                    # missing tool support.
+                    limit=512,
                     model=profile.wire_model,
                     messages=[{"role": "user", "content": prompt}],
                     tools=[tool],
                     tool_choice=tool_choice,
-                    **openai_token_limit_kwargs(profile, 128),
                 )
             except Exception as exc:  # noqa: BLE001
                 tool_error = _safe_error(exc, profile.api_key)
