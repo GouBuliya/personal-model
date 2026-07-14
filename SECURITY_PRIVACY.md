@@ -35,6 +35,13 @@ remains local. `[capture].ocr_policy` records `auto`, explicit `enabled`, or
 explicit `disabled` intent; ordinary onboarding and updates preserve explicit
 intent and tier. `persome ocr disable` is the durable opt-out.
 
+`attention_digest_enabled` is off by default. Enabling it copies dwell-ranked
+`attention_surface` values — raw window, pane, tab, or document titles — from
+timeline blocks into durable `user-attention.md` evomem facts and makes them
+eligible schema/Face evidence. Those titles are bounded and quoted but not
+anonymized, and capture or timeline cleanup does not remove the derived facts.
+Use `persome clean memory` (or `persome clean all`) to erase them.
+
 Lock-screen detection is privacy-conservative: when both macOS probes are
 unavailable or error, capture pauses until a probe can establish that the
 session is unlocked.

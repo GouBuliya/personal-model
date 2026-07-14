@@ -121,13 +121,22 @@ minted. Cards enter the public deterministic evomem write entrance.
 
 ### Attention digest
 
-`attention_digest` deterministically folds the day's attention-locus dwell
-(the Step-1 `attention_*` columns on timeline blocks) into one ranked
-`user-attention.md` fact per calendar day — no LLM. Surfaces under five
-minutes of total dwell are excluded, and a same-day re-run supersedes that
-day's digest in place instead of appending. Because `user-` is a
-schema-miner fact prefix, sustained-focus regularities become eligible Face
-evidence through the existing promotion gates.
+`attention_digest` is disabled by default. When explicitly enabled, it
+deterministically folds the day's attention-locus dwell (the Step-1
+`attention_*` columns on timeline blocks) into one ranked
+`user-attention.md` fact per calendar day — no LLM. The surface value is a raw,
+screen-derived window, pane, tab, or document title; it is whitespace-normalized,
+length-bounded, and quoted as data, but it is not anonymized. Enabling this
+stage therefore copies that title into independently retained durable memory
+and schema-miner input; `persome clean timeline` does not remove the digest.
+
+Only observed block duration counts toward dwell; tolerated gaps in the
+trajectory view are not counted. Surfaces under five minutes are excluded. A
+same-day re-run supersedes that day's digest atomically instead of appending,
+and both the initial and successor nodes record the local day boundary,
+observation time, exact dwell, and contributing timeline-block IDs. Because
+`user-` is a schema-miner fact prefix, enabled digests can become Face evidence
+through the existing promotion gates.
 
 ### Faces
 

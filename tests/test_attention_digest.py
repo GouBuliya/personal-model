@@ -7,6 +7,7 @@ input. One digest per calendar day: same-day re-runs supersede in place.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -77,6 +78,38 @@ def test_digest_written_ranked_and_floored(ac_root: Path) -> None:
     assert content.startswith("Attention digest 2026-06-18:")
     assert content.index("ProjA") < content.index("ProjB")
     assert "ProjC" not in content
+    node = digests[0]
+    metadata = json.loads(node.schema_summary)
+    assert metadata["kind"] == "attention_digest"
+    assert metadata["day"] == "2026-06-18"
+    assert metadata["through"] == _NOW.isoformat()
+    assert metadata["surfaces"][0]["dwell_seconds"] == 8 * 60
+    assert len(metadata["surfaces"][0]["source_block_ids"]) == 8
+    assert node.occurred_at == _NOW.isoformat()
+    assert node.valid_from == "2026-06-18T00:00:00+08:00"
+    assert node.confidence == "high"
+
+
+def test_sparse_blocks_do_not_turn_unobserved_gaps_into_dwell(ac_root: Path) -> None:
+    # The trajectory renderer joins same-surface blocks across tolerated gaps.
+    # A durable fact must count the four observed minutes, not the 10-minute span.
+    _insert([_blk(minute, "ProjA") for minute in (0, 3, 6, 9)])
+    result = attention_digest.run_attention_digest(_CFG, now=_NOW)
+    assert not result.committed
+    assert result.skipped_reason == "no dwell"
+
+
+def test_surface_is_bounded_and_rendered_as_quoted_data(ac_root: Path) -> None:
+    surface = "  title\nwith\tcontrol  " + "x" * 300
+    _insert([_blk(m, surface) for m in range(5)])
+    result = attention_digest.run_attention_digest(_CFG, now=_NOW)
+    assert result.committed
+    node = _latest_digests()[0]
+    metadata = json.loads(node.schema_summary)
+    stored = metadata["surfaces"][0]["surface"]
+    assert "\n" not in stored and "\t" not in stored
+    assert len(stored) == attention_digest._MAX_SURFACE_CHARS
+    assert json.dumps(stored, ensure_ascii=False) in node.content
 
 
 def test_same_day_rerun_unchanged_keeps_chain_quiet(ac_root: Path) -> None:
@@ -103,6 +136,32 @@ def test_same_day_rerun_supersedes_in_place(ac_root: Path) -> None:
     assert len(digests) == 1
     assert digests[0].node_id == second.node_id
     assert "ProjB" in digests[0].content
+    mem = EvoMemory()
+    old = mem.store.get(first.node_id)
+    new = mem.store.get(second.node_id)
+    assert old is not None and old.valid_until == later.isoformat()
+    assert new is not None and new.valid_from == "2026-06-18T00:00:00+08:00"
+    assert json.loads(old.schema_summary)["kind"] == "attention_digest"
+    assert json.loads(new.schema_summary)["kind"] == "attention_digest"
+
+
+def test_legacy_naive_block_times_do_not_break_aware_day_bounds(ac_root: Path) -> None:
+    blocks = []
+    for minute in range(5):
+        start = datetime(2026, 6, 18, 17, minute)
+        blocks.append(
+            timeline_store.TimelineBlock(
+                start_time=start,
+                end_time=start + timedelta(minutes=1),
+                attention_surface="LegacyProj",
+                attention_rung="editing",
+                attention_confidence=0.8,
+            )
+        )
+    _insert(blocks)
+    result = attention_digest.run_attention_digest(_CFG, now=datetime(2026, 6, 18, 18, 0))
+    assert result.committed
+    assert result.surfaces == ["LegacyProj"]
 
 
 def test_blocks_outside_today_are_ignored(ac_root: Path) -> None:

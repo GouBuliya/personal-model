@@ -446,11 +446,13 @@ class Config:
     person_graph_enabled: bool = True
     case_extraction_enabled: bool = True
     # Deterministic daily attention-dwell digest → durable user- fact (no LLM).
-    attention_digest_enabled: bool = True
+    # Opt-in: attention surfaces are raw window/pane titles and the digest extends
+    # their lifetime into durable memory + schema-miner input.
+    attention_digest_enabled: bool = False
     # Graph-memory P0-2 (#428): deterministic + LLM relation-edge extraction → SHADOW.
-    # Shadow-first is preserved by the promotion gates (evidence floor + fan-out cap in
-    # promote_edges), so extraction is on by default: edges stay inert until proven.
-    relation_extraction_enabled: bool = True
+    # This is a compatibility enrichment beside the primary memory-delta writer. Keep
+    # it opt-in; promotion runs in the same build and may activate proven history.
+    relation_extraction_enabled: bool = False
 
     edge_promote_fanout: int = 20
 
@@ -560,8 +562,8 @@ def load(path: Path | None = None) -> Config:
         api_require_local_origin=bool(raw.get("api_require_local_origin", True)),
         person_graph_enabled=bool(raw.get("person_graph_enabled", True)),
         case_extraction_enabled=bool(raw.get("case_extraction_enabled", True)),
-        attention_digest_enabled=bool(raw.get("attention_digest_enabled", True)),
-        relation_extraction_enabled=bool(raw.get("relation_extraction_enabled", True)),
+        attention_digest_enabled=bool(raw.get("attention_digest_enabled", False)),
+        relation_extraction_enabled=bool(raw.get("relation_extraction_enabled", False)),
         edge_promote_fanout=int(raw.get("edge_promote_fanout", 20)),
     )
 
@@ -584,8 +586,8 @@ DEFAULT_CONFIG_TEMPLATE = """# Persome configuration
 api_require_local_origin = true
 person_graph_enabled = true
 case_extraction_enabled = true
-attention_digest_enabled = true
-relation_extraction_enabled = true
+attention_digest_enabled = false
+relation_extraction_enabled = false
 edge_promote_fanout = 20
 
 [models.default]

@@ -676,9 +676,9 @@ def _run_evomem_enrichment_once(
             logger.error("evomem enrichment: attention digest failed: %s", exc, exc_info=True)
             errors.append(f"attention_digest: {type(exc).__name__}: {exc}")
 
-    # Graph-memory P0-2 (#428): relation-edge extraction → SHADOW. Gates internally on
-    # relation_extraction_enabled + fully fail-open, like the layers above; shadow-first
-    # is enforced by the promotion gates below, not by keeping extraction off.
+    # Optional compatibility relation extractor → SHADOW. The primary Line writer is
+    # windowed memory-delta; this second entrance stays behind its explicit opt-in.
+    # Eligible history can still become ACTIVE in the promotion pass below.
     if getattr(cfg, "relation_extraction_enabled", False):
         try:
             from ..evomem import relation_extractor

@@ -523,6 +523,35 @@ def test_promote_cap_shared_across_predicates(ac_root) -> None:
     assert all(st[e] == "shadow" for e in knows)
 
 
+def test_promote_existing_active_edges_reserve_cap_before_stronger_shadow(ac_root) -> None:
+    _K = edges.EntityKind
+    with fts.cursor() as conn:
+        first = _seed_knows(conn, 2, obs=3)
+        assert edges.promote_edges(conn, min_observations=3, max_per_identity=2) == 2
+        stronger = _seed_edge(
+            conn,
+            predicate=edges.Predicate.PARTICIPATES_IN,
+            src="self",
+            dst="strong-project",
+            src_kind=_K.SELF,
+            dst_kind=_K.PROJECT,
+            obs=99,
+        )
+        assert edges.promote_edges(conn, min_observations=3, max_per_identity=2) == 0
+        st = _statuses(conn)
+    assert all(st[e] == "active" for e in first)
+    assert st[stronger] == "shadow"
+
+
+def test_promote_never_reactivates_retired_statuses(ac_root) -> None:
+    with fts.cursor() as conn:
+        edge_id = _seed_knows(conn, 1, obs=9)[0]
+        conn.execute("UPDATE relation_edges SET status='archived' WHERE edge_id=?", (edge_id,))
+        assert edges.promote_edges(conn, min_observations=3, max_per_identity=10) == 0
+        st = _statuses(conn)
+    assert st[edge_id] == "archived"
+
+
 # ── §7-6 graph-projection axes: kinds + polarity persist (were validate-only) ──
 
 

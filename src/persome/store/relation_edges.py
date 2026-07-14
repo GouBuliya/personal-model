@@ -501,33 +501,44 @@ def promote_edges(
     predicate — so a hub cannot exceed the cap by spreading edges over
     predicates. ``engaged_with`` is never promoted here (active at write time).
 
-    Idempotent (already-ACTIVE edges count against their identity's cap but
-    are not rewritten). Never demotes. Returns the number promoted.
+    Idempotent. Already-ACTIVE edges reserve slots before any SHADOW candidate
+    is considered, including active edges below today's evidence floor. This
+    keeps the cap hard across repeated runs while preserving the no-demotion
+    contract. Returns the number promoted.
     """
     ensure_schema(conn)
     conn.row_factory = sqlite3.Row
-    preds = tuple(predicates)
+    preds = tuple(dict.fromkeys(Predicate(str(predicate)).value for predicate in predicates))
+    if not preds or max_per_identity <= 0:
+        return 0
     placeholders = ",".join("?" * len(preds))
-    rows = conn.execute(
-        "SELECT edge_id, src_identity, observations, status FROM relation_edges"
+    active_rows = conn.execute(
+        "SELECT src_identity, COUNT(*) AS active_count FROM relation_edges"
         f" WHERE predicate IN ({placeholders})"  # noqa: S608 — placeholders, not values
-        " AND valid_to IS NULL AND observations >= ?"
+        " AND valid_to IS NULL AND status = ? GROUP BY src_identity",
+        (*preds, MemoryStatus.ACTIVE.value),
+    ).fetchall()
+    taken = {row["src_identity"]: int(row["active_count"]) for row in active_rows}
+    rows = conn.execute(
+        "SELECT edge_id, src_identity, observations FROM relation_edges"
+        f" WHERE predicate IN ({placeholders})"  # noqa: S608 — placeholders, not values
+        " AND valid_to IS NULL AND status = ? AND observations >= ?"
         " ORDER BY src_identity, observations DESC, created_at DESC",
-        (*preds, min_observations),
+        (*preds, MemoryStatus.SHADOW.value, min_observations),
     ).fetchall()
     promoted = 0
-    taken: dict[str, int] = {}
     for row in rows:
         src = row["src_identity"]
         if taken.get(src, 0) >= max_per_identity:
             continue
-        taken[src] = taken.get(src, 0) + 1
-        if row["status"] == MemoryStatus.ACTIVE.value:
-            continue  # occupies a cap slot, already promoted
-        conn.execute(
-            "UPDATE relation_edges SET status = ? WHERE edge_id = ?",
-            (MemoryStatus.ACTIVE.value, row["edge_id"]),
+        updated = conn.execute(
+            "UPDATE relation_edges SET status = ?"
+            " WHERE edge_id = ? AND status = ? AND valid_to IS NULL",
+            (MemoryStatus.ACTIVE.value, row["edge_id"], MemoryStatus.SHADOW.value),
         )
+        if updated.rowcount == 0:
+            continue
+        taken[src] = taken.get(src, 0) + 1
         promoted += 1
     return promoted
 
