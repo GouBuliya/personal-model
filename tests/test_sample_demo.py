@@ -2,10 +2,28 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 
 import pytest
 
 from scripts.sample_demo import seed_sample
+
+
+def test_readme_hero_matches_the_deterministic_showcase() -> None:
+    root = Path(__file__).resolve().parents[1]
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    hero = readme.split("## What is it?", maxsplit=1)[0]
+
+    assert hero.startswith("# Persome: Build your Personal Model\n")
+    assert sum(line.startswith("# ") for line in hero.splitlines()) == 1
+    assert "[Personal Model]" not in hero
+    assert "docs/assets/persome-model-hero.png" in hero
+    assert (root / "docs/assets/persome-model-hero.png").is_file()
+    assert "docs/assets/readme/personal-model.png" not in hero
+    assert "(#1-five-minute-synthetic-demo)" in hero
+    assert "(#2-install-with-your-data)" in hero
+    assert "(#3-connect-a-trusted-mcp-client)" in hero
+    assert "424 synthetic Points, 146 Lines, 12 Faces, 4 Volumes, and 1 Root" in hero
 
 
 def test_showcase_seed_builds_dense_sourced_geometry(ac_root) -> None:
