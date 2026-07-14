@@ -109,9 +109,7 @@ def test_writer_run_respects_reducer_disabled(ac_root: Path, monkeypatch) -> Non
     assert result.reduced == 0
 
 
-def test_writer_run_limit_counts_existing_modeled_backlog_first(
-    ac_root: Path, monkeypatch
-) -> None:
+def test_writer_run_limit_counts_existing_modeled_backlog_first(ac_root: Path, monkeypatch) -> None:
     start = datetime(2026, 4, 21, 9, 0, tzinfo=_TZ)
     with fts.cursor() as conn:
         session_store.insert(
