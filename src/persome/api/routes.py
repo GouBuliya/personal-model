@@ -5,6 +5,8 @@ Mounted at root ``/`` inside the MCP server's Starlette app.
 
 from __future__ import annotations
 
+import json
+import os
 import sqlite3
 import threading
 import time
@@ -1016,3 +1018,354 @@ def _node_tree(root: str) -> dict[str, Any]:
             return expand(conn, root, {root}, 0)
     except Exception:  # noqa: BLE001
         return {"id": root, "edges": []}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Legacy /dev memory-graph 3D viewer (persome-core v0.2.2, restored)
+# The pre-redesign 记忆图 canvas. Gated behind PERSOME_DEV=1 (or [dev].enabled);
+# reads relation_edges + schema_faces + roster (all fail-open). HTML lives in
+# api/dev_memory_view.py; optional fact layout via the memory-viz CLI (viz/).
+# ─────────────────────────────────────────────────────────────────────────
+
+def _dev_enabled() -> bool:
+    """Gate for the dev ops dashboard. The Persome app sets ``[dev] enabled`` true
+    for a ``dev``-plan account; ``PERSOME_DEV=1`` forces it on locally. Off by
+    default so a normal account never exposes it."""
+    if os.environ.get("PERSOME_DEV") or os.environ.get("MENS_DEV"):  # Mens is the legacy name
+        return True
+    try:
+        return bool(load_config().dev.enabled)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+
+
+@router.get("/dev/memory", include_in_schema=False, tags=["dev"])
+def dev_memory_view() -> HTMLResponse:
+    """The memory-rebuild §7-6 记忆图: the REAL relation graph + schema tower
+    rendered as the ontology-three canvas (mockup
+    2026-07-02-memory-ontology-three.html adapted to live data via
+    /dev/memory-graph). Same dev gate + same rebuild-free override pattern
+    (<root>/dev_memory.html) as the ops dashboard; embedded there as the
+    记忆图 tab."""
+    if not _dev_enabled():
+        raise HTTPException(status_code=404, detail="not found")
+    override = paths.root() / "dev_memory.html"
+    try:
+        if override.is_file():
+            return HTMLResponse(override.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        pass
+    from .dev_memory_view import MEMORY_VIEW_HTML
+
+    return HTMLResponse(MEMORY_VIEW_HTML)
+
+
+@router.get("/dev/memory-graph", include_in_schema=False, tags=["dev"])
+def dev_memory_graph() -> dict[str, Any]:
+    """Read-only JSON for the 记忆图 (§7-6): nodes (USER + roster identities +
+    Activity endpoints), relation_edges (both statuses — the shadow/ACTIVE
+    split IS the point), and the schema_faces tower, each carrying its
+    bitemporal fields so the client can replay f(T) without refetching.
+    Zero-LLM; fail-open per section (a store predating a table contributes
+    an empty list)."""
+    if not _dev_enabled():
+        raise HTTPException(status_code=404, detail="not found")
+    from ..evomem import identity as identity_mod
+    from ..store import fts as fts_store
+
+    edges: list[dict[str, Any]] = []
+    faces: list[dict[str, Any]] = []
+    with fts_store.cursor() as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            from ..store import relation_edges as _edges_store
+
+            _edges_store.ensure_schema(conn)  # backfills kind/polarity columns on old DBs
+            edges = [
+                {
+                    "a": r["src_identity"],
+                    "b": r["dst_identity"],
+                    "predicate": r["predicate"],
+                    "label": r["label"],
+                    "status": r["status"],
+                    "provenance": r["provenance"],
+                    "confidence": r["confidence"],
+                    "observations": r["observations"],
+                    "recall_count": r["recall_count"],
+                    "valid_from": r["valid_from"],
+                    "valid_to": r["valid_to"],
+                    "last_observed_at": r["last_observed_at"],
+                    "src_kind": r["src_kind"],
+                    "dst_kind": r["dst_kind"],
+                    "polarity": r["polarity"] or "0",
+                }
+                for r in conn.execute(
+                    "SELECT src_identity, dst_identity, predicate, label, status, provenance,"
+                    " confidence, observations, recall_count, valid_from, valid_to,"
+                    " last_observed_at, src_kind, dst_kind, polarity FROM relation_edges"
+                )
+            ]
+        except Exception:  # noqa: BLE001 — table may predate this build
+            edges = []
+        try:
+            from ..store import schema_faces as _faces_store
+
+            _faces_store.ensure_schema(conn)  # backfills the anchors column on old DBs
+            # Optional cache of each face's member facts' REAL relative semantic
+            # positions (embed → local PCA), written by the semantic-layout precompute.
+            # When present, the renderer scatters a face's facts at these REAL positions
+            # (a hull over them = the emergent cluster) instead of a fabricated sunflower.
+            fact_pos: dict = {}
+            try:
+                from .. import paths as _paths
+
+                _fp = _paths.root() / "fact_positions.json"
+                if _fp.exists():
+                    fact_pos = json.loads(_fp.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                fact_pos = {}
+            faces = [
+                {
+                    "id": r["face_id"],
+                    "level": r["level"],
+                    "signature": r["signature"],
+                    "provenance": r["provenance"],
+                    "status": r["status"],
+                    "observations": r["observations"],
+                    "confidence": r["confidence"],
+                    "created_at": r["created_at"],
+                    "valid_to": r["valid_to"],
+                    "anchors": json.loads(r["anchors"] or "[]"),
+                    # n_members = the fact cluster the face was mined from (点=fact,
+                    # 维度判据: 面=fact-set≥3). The entity anchors are a lossy 1-2 point
+                    # projection; the fact count is the face's TRUE dimension.
+                    "n_members": len(json.loads(r["members"] or "[]")),
+                    # fact_pts = the member facts' REAL relative semantic positions
+                    # (embedding local-PCA, normalized). The face is the hull over THESE,
+                    # so it emerges from where the facts actually sit in meaning-space.
+                    "fact_pts": fact_pos.get(r["face_id"], []),
+                }
+                for r in conn.execute(
+                    "SELECT face_id, level, signature, provenance, status, observations,"
+                    " confidence, created_at, valid_to, anchors, members"
+                    " FROM schema_faces WHERE valid_to IS NULL"
+                )
+            ]
+        except Exception:  # noqa: BLE001
+            faces = []
+
+    try:
+        roster = identity_mod.load_roster(load_config())
+        canonicals = set(roster.canonicals)
+    except Exception:  # noqa: BLE001
+        canonicals = set()
+    ids = {"self"} | canonicals
+    # typed non-person points (§7-6 kind-axis producer, 过渡腿): org-*/project-*
+    # entity files enter the graph AS their kind. Edge-less ones land in the
+    # orphan shell — honest per §1.5-2 (grow a substantive edge or be
+    # forgotten), never fabricated edges.
+    # 边端点存的是 canonical（"OpenAI Developers"），typed 点文件名是 slug
+    # （"org-openai-developers.md"）——两者不统一会把点错判成孤儿（英文带空格名
+    # slug≠canonical；CJK 名 slug=canonical 才碰巧没事）。边的 canonical 是身份权威：
+    # 建 slug→canonical 映射，typed 点 id 取回它引用的 canonical，与边对齐。#bug
+    from ..evomem.person_graph import _slug as _canon_slug
+
+    slug_to_canon: dict[str, str] = {}
+    for e in edges:
+        for ident in (e["a"], e["b"]):
+            if ident and ident != "self" and not ident.startswith("event:"):
+                slug_to_canon.setdefault(_canon_slug(ident), ident)
+    # 面锚与节点 id 同源对齐：anchors 存的是 slug（_face_anchors 的 stem.removeprefix），
+    # 但 typed 点 id 走 slug→canonical（chronicleclient→ChronicleClient，大小写/空格名）。
+    # 不归一 → 锚对不上节点 → 面飘空。用同一张映射把 anchors 也映成 canonical。#bug
+    for f in faces:
+        f["anchors"] = [slug_to_canon.get(_canon_slug(a), a) for a in (f.get("anchors") or [])]
+    typed_kinds: dict[str, str] = {}
+    try:
+        with fts_store.cursor() as conn:
+            for row in conn.execute(
+                "SELECT DISTINCT file_name FROM evo_nodes"
+                " WHERE (file_name LIKE 'org-%' OR file_name LIKE 'project-%'"
+                "  OR file_name LIKE 'tool-%')"
+                " AND is_latest = 1 AND status = 'active'"
+            ):
+                stem = row[0].removesuffix(".md")
+                for prefix, kind in (
+                    ("org-", "org"),
+                    ("project-", "project"),
+                    ("tool-", "artifact"),
+                ):
+                    if stem.startswith(prefix):
+                        slug = stem.removeprefix(prefix)
+                        # 点 id = 该 slug 对应的 canonical（与边对齐）；无边者回退 slug
+                        nid = slug_to_canon.get(slug, slug)
+                        if nid:
+                            ids.add(nid)
+                            typed_kinds[nid] = kind
+    except Exception:  # noqa: BLE001 — typed points decorate, fail-open
+        typed_kinds = {}
+    # node 种类 axis (§1.2 / §7-6): recover each identity's EntityKind from the
+    # persisted src_kind/dst_kind edge columns; heuristic fallback for rows
+    # predating the columns (event:* prefix → event, roster → person).
+    kind_by_id: dict[str, str] = {}
+    for e in edges:
+        ids.add(e["a"])
+        ids.add(e["b"])
+        for nid, k in ((e["a"], e.get("src_kind")), (e["b"], e.get("dst_kind"))):
+            if k and kind_by_id.get(nid) in (None, "person"):
+                kind_by_id[nid] = k
+    nodes = []
+    for nid in sorted(ids):
+        if nid == "self":
+            kind, label = "self", "USER"
+        elif nid.startswith("event:"):
+            kind, label = "event", nid
+        else:
+            kind = kind_by_id.get(nid) or typed_kinds.get(nid) or "person"
+            label = nid
+        nodes.append({"id": nid, "kind": kind, "label": label})
+    # §7-8 检索权重状态（看板 stats 行）：当前融合配置 + 边的转正/喂食面
+    from ..store import fts as _fts
+
+    search_state = {
+        "slot_pool_weight": _fts._POOL_WEIGHTS.get("slot"),  # noqa: SLF001
+        "relation_pool_weight": _fts._POOL_WEIGHTS.get("relation"),  # noqa: SLF001
+        "relation_include_shadow": bool(_fts._POOL_WEIGHTS.get("relation_shadow")),  # noqa: SLF001
+        "contains_pool_rerank": bool(_fts._POOL_WEIGHTS.get("contains_rerank")),  # noqa: SLF001
+        "active_edges": sum(1 for e in edges if e["status"] == "active"),
+        "shadow_edges": sum(1 for e in edges if e["status"] == "shadow"),
+    }
+    # sem_geo = the unified semantic fact-space (fact point cloud + k-NN edges + emergent
+    # face clusters), precomputed to <root>/sem_facts.json by `persome memory-viz`
+    # (src/persome/viz/sem_layout.py). XZ = semantic layout, y = normalized deposition time
+    # (driven by the frontend's as-of slider), brightness ∝ connection degree. Fail-open:
+    # absent/corrupt file → {} and the dashboard falls back to the entity force layout.
+    sem_geo: dict = {}
+    try:
+        from .. import paths as _paths2
+
+        _sf = _paths2.root() / "sem_facts.json"
+        if _sf.exists():
+            sem_geo = json.loads(_sf.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        sem_geo = {}
+    return {
+        "generated_at": datetime.now().astimezone().isoformat(),
+        "nodes": nodes,
+        "edges": edges,
+        "faces": faces,
+        "sem_geo": sem_geo,
+        "search": search_state,
+    }
+
+
+@router.get("/dev/memory-node", include_in_schema=False, tags=["dev"])
+def dev_memory_node(id: str) -> dict[str, Any]:
+    """Raw receipts behind one graph node (§2.1 每个向量指回符号收据 — the
+    click-through from the 记忆图 to the symbolic layer). Lazy per-node fetch
+    so the graph payload stays lean. Zero-LLM, read-only, fail-open:
+
+    - ``event:<intents.id>`` → the minting intent row (kind/status/rationale/
+      participants/ts);
+    - any other identity → the latest ACTIVE evo_nodes of its ``person-*.md``
+      entity file (newest first, bounded, truncated) — the consolidation
+      trail the point was distilled from.
+    """
+    if not _dev_enabled():
+        raise HTTPException(status_code=404, detail="not found")
+    from ..store import fts as fts_store
+
+    raw: list[dict[str, Any]] = []
+    source = ""
+    try:
+        with fts_store.cursor() as conn:
+            conn.row_factory = sqlite3.Row
+            if id.startswith("event:"):
+                source = "intents"
+                row = conn.execute(
+                    "SELECT ts, kind, status, rationale, payload FROM intents WHERE id = ?",
+                    (id.removeprefix("event:"),),
+                ).fetchone()
+                if row is not None:
+                    try:
+                        with_people = json.loads(row["payload"] or "{}").get("with") or []
+                    except Exception:  # noqa: BLE001
+                        with_people = []
+                    text = f"[{row['kind']}·{row['status']}] {row['rationale'] or ''}"
+                    if with_people:
+                        text += f"（与：{'、'.join(str(p) for p in with_people)}）"
+                    raw.append({"ts": row["ts"], "text": text[:300]})
+            elif id != "self":
+                source = f"person-{id}.md"
+                for row in conn.execute(
+                    "SELECT content, memory_at FROM evo_nodes"
+                    " WHERE file_name = ? AND is_latest = 1 AND status = 'active'"
+                    " ORDER BY memory_at DESC LIMIT 5",
+                    (source,),
+                ):
+                    raw.append(
+                        {"ts": row["memory_at"], "text": (row["content"] or "").strip()[:300]}
+                    )
+    except Exception:  # noqa: BLE001 — receipts decorate the view, never 500 it
+        raw = []
+    tree = _node_tree(id)
+    return {"id": id, "source": source, "raw": raw, "tree": tree}
+
+
+_TREE_DEPTH = 2
+_TREE_FANOUT = 8
+
+
+def _node_tree(root: str) -> dict[str, Any]:
+    """The relation tree rooted at ONE point (§1.2: 点开一个事物 → 以它为根的
+    整棵树). Bounded BFS over relation_edges — both statuses (the dev view
+    exists to show the shadow/active split), strongest-first per node
+    (observations desc), fan-out ≤ 8, depth ≤ 2, cycle-guarded. Each hop
+    carries predicate/direction/label/strength/status so the path reads as a
+    narrative (§3.4 路径即叙事, rooted at the point instead of USER)."""
+    from ..store import fts as fts_store
+
+    def expand(conn, nid: str, seen: set[str], depth: int) -> dict[str, Any]:
+        node: dict[str, Any] = {"id": nid, "edges": []}
+        if depth >= _TREE_DEPTH:
+            return node
+        try:
+            rows = conn.execute(
+                "SELECT src_identity, dst_identity, predicate, label, status,"
+                " observations, valid_to FROM relation_edges"
+                " WHERE (src_identity = ? OR dst_identity = ?)"
+                " ORDER BY observations DESC, edge_id LIMIT ?",
+                (nid, nid, _TREE_FANOUT * 2),
+            ).fetchall()
+        except Exception:  # noqa: BLE001 — table may predate this build
+            return node
+        for r in rows:
+            if len(node["edges"]) >= _TREE_FANOUT:
+                break
+            src, dst = str(r[0]), str(r[1])
+            other = dst if src == nid else src
+            if other in seen:
+                continue
+            seen.add(other)
+            node["edges"].append(
+                {
+                    "predicate": str(r[2]),
+                    "label": r[3],
+                    "dir": "out" if src == nid else "in",
+                    "status": str(r[4]),
+                    "observations": int(r[5] or 1),
+                    "historical": r[6] is not None,
+                    "child": expand(conn, other, seen, depth + 1),
+                }
+            )
+        return node
+
+    try:
+        with fts_store.cursor() as conn:
+            return expand(conn, root, {root}, 0)
+    except Exception:  # noqa: BLE001
+        return {"id": root, "edges": []}
+
+
