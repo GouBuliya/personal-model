@@ -231,7 +231,9 @@ def test_skill_echo_is_deduplicated_within_session(ac_root: Path, fake_llm) -> N
             conn,
             session_store.SessionRow(
                 id="sess-one",
-                start_time=datetime(2026, 5, 21, 9, 0, tzinfo=_TZ),
+                # Sessions start on event timestamps, not minute boundaries.
+                # The 09:00 block overlaps this session for its final 30 seconds.
+                start_time=datetime(2026, 5, 21, 9, 0, 30, tzinfo=_TZ),
             ),
         )
 

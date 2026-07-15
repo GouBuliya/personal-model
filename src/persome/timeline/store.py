@@ -191,19 +191,22 @@ def claim_skill_observation(
     Timeline classification runs once per minute, while behavioral evidence is
     session-scoped. Without this gate a long session can append the same skill
     echo dozens of times and make one continuous episode look like independent
-    support. If no containing session exists, preserve the legacy best-effort
-    echo rather than silently dropping the observation.
+    support. Minute blocks are wall-clock aligned while sessions may begin at
+    any second, so associate by interval overlap rather than requiring the
+    block start to fall inside the session. If no overlapping session exists,
+    preserve the legacy best-effort echo rather than silently dropping the
+    observation.
     """
     row = conn.execute(
         """
         SELECT id
           FROM sessions
-         WHERE persome_epoch(start_time) <= persome_epoch(?)
+         WHERE persome_epoch(start_time) < persome_epoch(?)
            AND (end_time IS NULL OR persome_epoch(end_time) > persome_epoch(?))
          ORDER BY persome_epoch(start_time) DESC
          LIMIT 1
         """,
-        (block.start_time.isoformat(), block.start_time.isoformat()),
+        (block.end_time.isoformat(), block.start_time.isoformat()),
     ).fetchone()
     if row is None:
         return True
