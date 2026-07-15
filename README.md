@@ -126,6 +126,10 @@ After successful interactive onboarding, the source installer schedules the one-
 - Accessibility is granted to the versioned `mac-ax-helper` and, only when event-driven capture is enabled, `mac-ax-watcher`.
 - Screen Recording is requested only when the effective screenshot or local-OCR policy requires pixels. Persome never requires Full Disk Access.
 - On Apple Silicon, onboarding verifies the isolated local OCR worker when OCR is enabled.
+- Unified localhost onboarding offers a read-only, multi-source import and builds the first model
+  from existing Markdown history. Local folders are always available; Obsidian
+  and Notion appear only when detected on the Mac. The same sources remain
+  available through `persome import-data`; see [the import guide](docs/importing.md).
 - It proves the final lifecycle owner and Runtime generation, then reports a fresh-capture receipt in standard daemon mode or an explicit readiness/privacy receipt for supported alternate modes such as trusted ingest.
 
 An LLM is optional for collection and BM25 recall, but required for semantic modeling. You can configure a hosted/local provider for unattended processing:

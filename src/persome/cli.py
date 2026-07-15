@@ -976,6 +976,76 @@ def onboard(
         console.print(f"[green]✓ Capture privacy state preserved[/green] ({state})")
 
 
+@app.command("import-data")
+def import_data(
+    source: Annotated[
+        str,
+        typer.Option(
+            "--source",
+            help="Data source: obsidian, folder, notion, or anything.",
+        ),
+    ] = "obsidian",
+    path: Annotated[
+        Path | None,
+        typer.Option(
+            "--path",
+            help="Folder to import. Obsidian auto-detects the active registered vault.",
+        ),
+    ] = None,
+    build: Annotated[
+        bool,
+        typer.Option(
+            "--build/--no-build",
+            help="Build the personal model after staging changed documents.",
+        ),
+    ] = True,
+) -> None:
+    """Import local knowledge without modifying the source files."""
+    from . import source_import
+
+    _init()
+    normalized = source.strip().lower()
+    if normalized not in {"obsidian", "folder", "notion", "anything"}:
+        console.print("[red]Unknown source. Choose obsidian, folder, notion, or anything.[/red]")
+        raise typer.Exit(2)
+    if path is None and normalized == "obsidian":
+        vaults = source_import.discover_obsidian_vaults()
+        if not vaults:
+            console.print(
+                "[yellow]No registered Obsidian vault found. Pass --path /path/to/vault.[/yellow]"
+            )
+            raise typer.Exit(1)
+        path = vaults[0]
+        console.print(f"Found active Obsidian vault: [cyan]{path}[/cyan]")
+    if path is None:
+        console.print(
+            "[yellow]Choose an exported/local folder with --path. Notion Markdown exports "
+            "work directly.[/yellow]"
+        )
+        raise typer.Exit(2)
+
+    source_type = "folder" if normalized == "anything" else normalized
+    try:
+        result = source_import.import_folder(path, source_type=source_type)
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]Import failed: {exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(
+        f"[green]✓ Imported {result.imported} new/changed document(s)[/green]; "
+        f"{result.unchanged} unchanged, {result.skipped} skipped."
+    )
+    if build:
+        action = "Building" if result.session_ids else "Verifying"
+        console.print(f"{action} your personal model from the imported history...")
+        outcome = source_import.build_imported_model(config_mod.load())
+        try:
+            source_import.require_complete_model_build(outcome)
+        except RuntimeError as exc:
+            console.print(f"[red]Model build needs attention: {exc}[/red]")
+            raise typer.Exit(1) from exc
+        console.print("[green]✓ Personal model build complete[/green]")
+
+
 @app.command()
 def update(
     source: Annotated[
@@ -2903,6 +2973,11 @@ def model_open(
         min=0.0,
         hidden=True,
     ),
+    onboarding: bool = typer.Option(
+        False,
+        "--onboarding",
+        help="Open the unified setup experience instead of the model.",
+    ),
 ) -> None:
     """Open the local model viewer through a short-lived browser capability."""
     if after and scheduled_after_seconds:
@@ -2941,8 +3016,11 @@ def model_open(
         headers = auth_headers()
         for attempt in range(_MODEL_VIEWER_STARTUP_ATTEMPTS):
             try:
+                bootstrap_endpoint = f"{base_url}{BROWSER_BOOTSTRAP_PATH}"
+                if onboarding:
+                    bootstrap_endpoint += "?view=onboarding"
                 response = httpx.post(
-                    f"{base_url}{BROWSER_BOOTSTRAP_PATH}",
+                    bootstrap_endpoint,
                     headers=headers,
                     timeout=5.0,
                     trust_env=False,
@@ -2994,8 +3072,9 @@ def model_open(
         or parsed.netloc
         or parsed.path != BROWSER_BOOTSTRAP_PATH
         or parsed.fragment
-        or set(query) != {"nonce"}
+        or set(query) not in ({"nonce"}, {"nonce", "view"})
         or len(query["nonce"]) != 1
+        or ("view" in query and query["view"] != ["onboarding"])
     ):
         console.print("[red]The daemon returned an invalid browser capability.[/red]")
         raise typer.Exit(1)
@@ -3004,7 +3083,8 @@ def model_open(
     if not webbrowser.open(bootstrap_url, new=2):
         console.print("[red]The system browser could not be opened.[/red]")
         raise typer.Exit(1)
-    console.print("[green]Opened the authenticated local model viewer.[/green]")
+    destination = "onboarding" if onboarding else "model viewer"
+    console.print(f"[green]Opened the authenticated local {destination}.[/green]")
 
 
 @model_app.callback(invoke_without_command=True)
