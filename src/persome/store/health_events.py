@@ -144,7 +144,6 @@ def query_events(
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     """Read normalized observations newest-first with optional exact filters."""
-    ensure_schema(conn)
     clauses: list[str] = []
     values: list[Any] = []
     for column, value in (("metric", metric), ("provider", provider)):

@@ -88,6 +88,7 @@ def test_pending_model_work_is_empty_on_fresh_root(ac_root: Path) -> None:
 
 
 def test_query_health_events_filters_and_orders(ac_root: Path) -> None:
+    fts.initialize_runtime_schema()
     with fts.cursor() as conn:
         health_events.import_events(
             conn,
@@ -112,6 +113,10 @@ def test_query_health_events_filters_and_orders(ac_root: Path) -> None:
                 },
             ],
         )
+    # Stdio MCP is a shared-database client and must never attempt lazy DDL.
+    # Runtime startup owns schema initialization before clients connect.
+    fts.declare_client_process()
+    with fts.cursor() as conn:
         out = health_events.query_events(
             conn,
             metric="heart_rate",
