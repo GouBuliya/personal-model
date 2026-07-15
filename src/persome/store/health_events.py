@@ -35,7 +35,11 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
 
 
-def import_events(conn: sqlite3.Connection, events: list[dict[str, Any]]) -> dict[str, int]:
+def import_events(
+    conn: sqlite3.Connection,
+    events: list[dict[str, Any]],
+    deleted_events: list[dict[str, Any]] | None = None,
+) -> dict[str, int]:
     """Atomically import a batch using provider IDs as revision identities.
 
     A byte-for-byte replay of the normalized event is a duplicate.  When a
@@ -46,8 +50,15 @@ def import_events(conn: sqlite3.Connection, events: list[dict[str, Any]]) -> dic
     imported_at = datetime.now(UTC).isoformat(timespec="seconds")
     inserted = 0
     corrected = 0
+    deleted = 0
     conn.execute("BEGIN IMMEDIATE")
     try:
+        for deletion in deleted_events or []:
+            cursor = conn.execute(
+                "DELETE FROM health_events WHERE provider = ? AND external_id = ?",
+                (deletion["provider"], deletion["event_id"]),
+            )
+            deleted += max(cursor.rowcount, 0)
         for event in events:
             source = event["source"]
             values = (
@@ -111,6 +122,7 @@ def import_events(conn: sqlite3.Connection, events: list[dict[str, Any]]) -> dic
         "inserted": inserted,
         "corrected": corrected,
         "duplicates": len(events) - inserted - corrected,
+        "deleted": deleted,
     }
 
 

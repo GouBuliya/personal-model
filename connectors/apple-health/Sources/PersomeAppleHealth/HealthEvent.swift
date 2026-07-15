@@ -36,6 +36,21 @@ public struct HealthEvent: Codable, Sendable, Equatable {
     }
 }
 
+public struct HealthEventDeletion: Codable, Sendable, Equatable {
+    public let eventID: String
+    public let provider: String
+
+    enum CodingKeys: String, CodingKey {
+        case provider
+        case eventID = "event_id"
+    }
+
+    public init(eventID: String, provider: String = "apple_health") {
+        self.eventID = eventID
+        self.provider = provider
+    }
+}
+
 public enum HealthValue: Codable, Sendable, Equatable {
     case number(Double)
     case text(String)
@@ -61,14 +76,17 @@ public enum HealthValue: Codable, Sendable, Equatable {
 public struct HealthEventsImport: Codable, Sendable {
     public let schemaVersion = 1
     public let events: [HealthEvent]
+    public let deletedEvents: [HealthEventDeletion]
 
     enum CodingKeys: String, CodingKey {
         case events
+        case deletedEvents = "deleted_events"
         case schemaVersion = "schema_version"
     }
 
-    public init(events: [HealthEvent]) {
+    public init(events: [HealthEvent], deletedEvents: [HealthEventDeletion] = []) {
         self.events = events
+        self.deletedEvents = deletedEvents
     }
 }
 
@@ -76,11 +94,29 @@ public struct HealthImportResult: Codable, Sendable, Equatable {
     public let schemaVersion: Int
     public let received: Int
     public let inserted: Int
+    public let corrected: Int
     public let duplicates: Int
+    public let deleted: Int
 
     enum CodingKeys: String, CodingKey {
-        case received, inserted, duplicates
+        case received, inserted, corrected, duplicates, deleted
         case schemaVersion = "schema_version"
+    }
+
+    public init(
+        schemaVersion: Int,
+        received: Int,
+        inserted: Int,
+        corrected: Int,
+        duplicates: Int,
+        deleted: Int
+    ) {
+        self.schemaVersion = schemaVersion
+        self.received = received
+        self.inserted = inserted
+        self.corrected = corrected
+        self.duplicates = duplicates
+        self.deleted = deleted
     }
 }
 

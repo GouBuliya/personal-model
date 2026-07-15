@@ -493,7 +493,11 @@ def ingest_capture(body: CaptureIngestBody) -> ApiResponse:
 def import_health_events(body: HealthEventsImportBody) -> ApiResponse:
     """Import a normalized, idempotent batch from a trusted local connector."""
     with fts.cursor() as conn:
-        result = health_events.import_events(conn, [event.model_dump() for event in body.events])
+        result = health_events.import_events(
+            conn,
+            [event.model_dump() for event in body.events],
+            [deletion.model_dump() for deletion in body.deleted_events],
+        )
     return ApiResponse(data={"schema_version": body.schema_version, **result})
 
 

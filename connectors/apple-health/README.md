@@ -3,7 +3,9 @@
 This Swift package is the iPhone-side bridge from Apple HealthKit (including
 Apple Watch observations synchronized to the phone) to the owner-local Persome
 Runtime. It requests read-only access, performs anchored incremental queries,
-normalizes samples, and uploads batches to `POST /health-events/import`.
+normalizes samples, and uploads bounded change pages through a
+`HealthEventUploader`. Each page contains additions/corrections and HealthKit
+deletion receipts; its anchor is persisted only after the entire page succeeds.
 
 ## Embed in an iPhone app
 
@@ -11,25 +13,20 @@ normalizes samples, and uploads batches to `POST /health-events/import`.
 2. Enable the HealthKit capability for the app target.
 3. Add `NSHealthShareUsageDescription` to the app's `Info.plist`, explaining
    that selected observations are sent only to the owner's local Persome Runtime.
-4. Create the connector after the user supplies the Runtime URL and local bearer
-   token, then authorize and sync:
+4. Create the connector with an uploader implemented by the host app, then
+   authorize and sync:
 
 ```swift
-let client = PersomeHealthClient(
-    runtimeURL: URL(string: "http://192.168.1.10:8742")!,
-    bearerToken: ownerToken
-)
-let connector = AppleHealthConnector(client: client)
+let connector = AppleHealthConnector(client: secureRelayClient)
 try await connector.requestAuthorization()
 let result = try await connector.sync()
 ```
 
-The current Runtime defaults to loopback-only access. An iPhone cannot reach
-`127.0.0.1` on the Mac; production pairing therefore needs a separately reviewed
-LAN/TLS transport or a phone-to-Mac relay. Do not expose the owner token or an
-unencrypted health endpoint to a public network.
+The Runtime is loopback-only. `PersomeHealthClient` therefore accepts only
+`localhost`, `127.0.0.1`, or `::1` and is intended for the Mac relay and tests.
+Never place the owner bearer on the phone or expose the Runtime over LAN.
 
 The first slice reads steps, heart rate, resting heart rate, active energy,
-sleep analysis, and workouts. Anchors are advanced only after all batches for a
-HealthKit type have uploaded successfully, so interrupted syncs safely replay
-and rely on server-side idempotency.
+sleep analysis, and workouts. Anchored queries use 500-operation pages rather
+than materializing an unlimited history. Interrupted syncs safely replay the
+last unacknowledged page and rely on server-side idempotency.

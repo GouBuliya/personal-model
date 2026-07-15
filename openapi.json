@@ -622,6 +622,30 @@
         "title": "HealthEvent",
         "description": "One normalized observation produced by HealthKit or another connector."
       },
+      "HealthEventDeletion": {
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Event Id"
+          },
+          "provider": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9_-]*$",
+            "title": "Provider"
+          }
+        },
+        "type": "object",
+        "required": [
+          "event_id",
+          "provider"
+        ],
+        "title": "HealthEventDeletion",
+        "description": "Provider-scoped deletion receipt emitted by an anchored source query."
+      },
       "HealthEventSource": {
         "properties": {
           "provider": {
@@ -677,16 +701,20 @@
             },
             "type": "array",
             "maxItems": 1000,
-            "minItems": 1,
             "title": "Events"
+          },
+          "deleted_events": {
+            "items": {
+              "$ref": "#/components/schemas/HealthEventDeletion"
+            },
+            "type": "array",
+            "maxItems": 1000,
+            "title": "Deleted Events"
           }
         },
         "type": "object",
-        "required": [
-          "events"
-        ],
         "title": "HealthEventsImportBody",
-        "description": "Bounded batch of normalized health events."
+        "description": "Bounded atomic batch of normalized health changes."
       },
       "ValidationError": {
         "properties": {

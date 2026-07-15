@@ -4,12 +4,13 @@ import HealthKit
 
 @MainActor
 public final class AppleHealthConnector {
+    private static let pageSize = 500
     private let store: HKHealthStore
-    private let client: PersomeHealthClient
+    private let client: any HealthEventUploader
     private let anchors: UserDefaults
 
     public init(
-        client: PersomeHealthClient,
+        client: any HealthEventUploader,
         store: HKHealthStore = HKHealthStore(),
         anchors: UserDefaults = .standard
     ) {
@@ -24,29 +25,55 @@ public final class AppleHealthConnector {
     }
 
     public func sync() async throws -> HealthImportResult {
-        var totals = HealthImportResult(schemaVersion: 1, received: 0, inserted: 0, duplicates: 0)
+        var totals = HealthImportResult.zero
         for type in Self.readTypes {
-            let (samples, newAnchor) = try await anchoredSamples(for: type)
-            let events = samples.compactMap(Self.normalize)
-            for batch in events.chunked(maxCount: 500) {
-                let result = try await client.upload(batch)
-                totals = totals.adding(result)
-            }
-            save(newAnchor, for: type)
+            let result = try await synchronizeAnchoredHealthPages(
+                initialAnchor: anchor(for: type),
+                fetch: { [store] anchor in
+                    let page = try await Self.anchoredPage(
+                        store: store,
+                        type: type,
+                        anchor: anchor
+                    )
+                    return AnchoredHealthPage(
+                        events: page.samples.compactMap(Self.normalize),
+                        deletedEvents: page.deleted.map {
+                            HealthEventDeletion(eventID: $0.uuid.uuidString)
+                        },
+                        nextAnchor: page.nextAnchor,
+                        hasMore: page.samples.count + page.deleted.count >= Self.pageSize
+                    )
+                },
+                upload: { [client] events, deletedEvents in
+                    try await client.upload(events: events, deletedEvents: deletedEvents)
+                },
+                persist: { [weak self] anchor in self?.save(anchor, for: type) }
+            )
+            totals = totals.adding(result)
         }
         return totals
     }
 
-    private func anchoredSamples(for type: HKSampleType) async throws -> ([HKSample], HKQueryAnchor?) {
+    private static func anchoredPage(
+        store: HKHealthStore,
+        type: HKSampleType,
+        anchor: HKQueryAnchor?
+    ) async throws -> (
+        samples: [HKSample],
+        deleted: [HKDeletedObject],
+        nextAnchor: HKQueryAnchor?
+    ) {
         try await withCheckedThrowingContinuation { continuation in
             let query = HKAnchoredObjectQuery(
                 type: type,
                 predicate: nil,
-                anchor: anchor(for: type),
-                limit: HKObjectQueryNoLimit
-            ) { _, samples, _, newAnchor, error in
+                anchor: anchor,
+                limit: pageSize
+            ) { _, samples, deleted, newAnchor, error in
                 if let error { continuation.resume(throwing: error) }
-                else { continuation.resume(returning: (samples ?? [], newAnchor)) }
+                else {
+                    continuation.resume(returning: (samples ?? [], deleted ?? [], newAnchor))
+                }
             }
             store.execute(query)
         }
@@ -129,23 +156,4 @@ public final class AppleHealthConnector {
 }
 
 public enum ConnectorError: Error { case unavailable }
-
-private extension Array {
-    func chunked(maxCount: Int) -> [[Element]] {
-        stride(from: 0, to: count, by: maxCount).map {
-            Array(self[$0 ..< Swift.min($0 + maxCount, count)])
-        }
-    }
-}
-
-private extension HealthImportResult {
-    func adding(_ other: Self) -> Self {
-        Self(
-            schemaVersion: schemaVersion,
-            received: received + other.received,
-            inserted: inserted + other.inserted,
-            duplicates: duplicates + other.duplicates
-        )
-    }
-}
 #endif

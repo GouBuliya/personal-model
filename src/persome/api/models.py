@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
+
+from ..security.body_limit import HEALTH_IMPORT_MAX_REQUEST_BODY_BYTES
 
 # Capture payloads contain a rendered AX tree and, optionally, one JPEG.  The
 # native producer normally stays well below these limits.  Explicit ceilings
@@ -16,6 +19,7 @@ MAX_CAPTURE_METADATA_BYTES = 128 * 1024
 MAX_CAPTURE_AX_TREE_BYTES = 8 * 1024 * 1024
 MAX_HEALTH_EVENTS_PER_REQUEST = 1000
 MAX_HEALTH_METADATA_BYTES = 64 * 1024
+MAX_HEALTH_STRING_VALUE_BYTES = 4 * 1024
 
 
 def _json_size(value: Any) -> int:
@@ -145,13 +149,46 @@ class HealthEvent(BaseModel):
                 raise ValueError("ended_at must not precede started_at")
         if isinstance(self.value, str) and not self.value.strip():
             raise ValueError("string value must not be empty")
+        if (
+            isinstance(self.value, str)
+            and len(self.value.encode("utf-8")) > MAX_HEALTH_STRING_VALUE_BYTES
+        ):
+            raise ValueError(f"string value exceeds {MAX_HEALTH_STRING_VALUE_BYTES} bytes")
+        if isinstance(self.value, float) and not math.isfinite(self.value):
+            raise ValueError("numeric value must be finite")
         if _json_size(self.metadata) > MAX_HEALTH_METADATA_BYTES:
             raise ValueError(f"metadata exceeds {MAX_HEALTH_METADATA_BYTES} bytes")
         return self
 
 
+class HealthEventDeletion(BaseModel):
+    """Provider-scoped deletion receipt emitted by an anchored source query."""
+
+    event_id: str = Field(min_length=1, max_length=512)
+    provider: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+
+
 class HealthEventsImportBody(BaseModel):
-    """Bounded batch of normalized health events."""
+    """Bounded atomic batch of normalized health changes."""
 
     schema_version: Literal[1] = 1
-    events: list[HealthEvent] = Field(min_length=1, max_length=MAX_HEALTH_EVENTS_PER_REQUEST)
+    events: list[HealthEvent] = Field(
+        default_factory=list, max_length=MAX_HEALTH_EVENTS_PER_REQUEST
+    )
+    deleted_events: list[HealthEventDeletion] = Field(
+        default_factory=list,
+        max_length=MAX_HEALTH_EVENTS_PER_REQUEST,
+    )
+
+    @model_validator(mode="after")
+    def _bounded_batch(self) -> HealthEventsImportBody:
+        operation_count = len(self.events) + len(self.deleted_events)
+        if operation_count < 1:
+            raise ValueError("at least one event or deletion is required")
+        if operation_count > MAX_HEALTH_EVENTS_PER_REQUEST:
+            raise ValueError(f"batch exceeds {MAX_HEALTH_EVENTS_PER_REQUEST} operations")
+        if _json_size(self.model_dump(mode="json")) > HEALTH_IMPORT_MAX_REQUEST_BODY_BYTES:
+            raise ValueError(
+                f"health import payload exceeds {HEALTH_IMPORT_MAX_REQUEST_BODY_BYTES} bytes"
+            )
+        return self
