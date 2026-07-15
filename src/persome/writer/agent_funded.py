@@ -10,12 +10,16 @@ loop.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
-from collections.abc import Iterator
+import threading
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, TypeVar
+
+_T = TypeVar("_T")
 
 _ACTIVE_BRIDGE: ContextVar[SamplingBridge | None] = ContextVar(
     "persome_agent_funded_bridge", default=None
@@ -43,13 +47,52 @@ def _text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-@dataclass(frozen=True)
+class SamplingRequestCancelled(RuntimeError):
+    """The request-scoped Sampling bridge can no longer spend allowance."""
+
+
+class SamplingRequestTimeout(SamplingRequestCancelled):
+    """One client Sampling request exceeded the bridge deadline."""
+
+
+@dataclass
 class SamplingBridge:
     """Thread-safe facade over one connected MCP client session."""
 
     loop: asyncio.AbstractEventLoop
     session: Any
     timeout_seconds: float = 120.0
+    _cancelled: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
+    _pending_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _pending: set[concurrent.futures.Future[Any]] = field(
+        default_factory=set, init=False, repr=False
+    )
+    _cancel_reason: str | None = field(default=None, init=False, repr=False)
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancelled.is_set()
+
+    @property
+    def cancel_reason(self) -> str | None:
+        with self._pending_lock:
+            return self._cancel_reason
+
+    def cancel(self, reason: str = "request_cancelled") -> None:
+        """Reject future Sampling calls and cancel any currently pending one."""
+        with self._pending_lock:
+            if not self._cancelled.is_set():
+                self._cancel_reason = reason
+                self._cancelled.set()
+            pending = tuple(self._pending)
+        for future in pending:
+            future.cancel()
+
+    def _raise_if_cancelled(self) -> None:
+        if self.cancelled:
+            raise SamplingRequestCancelled(
+                f"MCP Sampling bridge cancelled: {self.cancel_reason or 'request_cancelled'}"
+            )
 
     def complete(
         self,
@@ -58,11 +101,36 @@ class SamplingBridge:
         tools: list[dict[str, Any]] | None,
         max_tokens: int,
     ) -> Any:
+        self._raise_if_cancelled()
         future = asyncio.run_coroutine_threadsafe(
             self._complete(messages=messages, tools=tools, max_tokens=max_tokens),
             self.loop,
         )
-        return future.result(timeout=self.timeout_seconds)
+        with self._pending_lock:
+            if self._cancelled.is_set():
+                future.cancel()
+                reason = self._cancel_reason or "request_cancelled"
+            else:
+                self._pending.add(future)
+                reason = None
+        if reason is not None:
+            raise SamplingRequestCancelled(f"MCP Sampling bridge cancelled: {reason}")
+
+        try:
+            return future.result(timeout=self.timeout_seconds)
+        except concurrent.futures.TimeoutError as exc:
+            self.cancel("sampling_timeout")
+            raise SamplingRequestTimeout(
+                f"MCP Sampling request exceeded {self.timeout_seconds:g}s"
+            ) from exc
+        except concurrent.futures.CancelledError as exc:
+            self.cancel(self.cancel_reason or "request_cancelled")
+            raise SamplingRequestCancelled(
+                f"MCP Sampling bridge cancelled: {self.cancel_reason or 'request_cancelled'}"
+            ) from exc
+        finally:
+            with self._pending_lock:
+                self._pending.discard(future)
 
     async def _complete(
         self,
@@ -75,16 +143,40 @@ class SamplingBridge:
 
         from .llm import _build_response
 
+        self._raise_if_cancelled()
         system_parts: list[str] = []
         sampling_messages: list[Any] = []
+        pending_tool_results: list[Any] = []
+
+        def flush_tool_results() -> None:
+            if not pending_tool_results:
+                return
+            sampling_messages.append(
+                types.SamplingMessage(role="user", content=list(pending_tool_results))
+            )
+            pending_tool_results.clear()
+
         for message in messages:
             role = message.get("role")
             if role == "system":
                 system_parts.append(_text(message.get("content")))
                 continue
 
-            content: list[Any] = []
             plain = _text(message.get("content"))
+            if role == "tool":
+                pending_tool_results.append(
+                    types.ToolResultContent(
+                        type="tool_result",
+                        toolUseId=str(message.get("tool_call_id") or ""),
+                        content=[types.TextContent(type="text", text=plain)],
+                    )
+                )
+                continue
+
+            # SEP-1577 requires all results for one assistant tool-use turn to be
+            # in one user message containing only tool_result blocks.
+            flush_tool_results()
+            content: list[Any] = []
             if plain:
                 content.append(types.TextContent(type="text", text=plain))
             if role == "assistant":
@@ -103,14 +195,6 @@ class SamplingBridge:
                             input=arguments if isinstance(arguments, dict) else {},
                         )
                     )
-            elif role == "tool":
-                content.append(
-                    types.ToolResultContent(
-                        type="tool_result",
-                        toolUseId=str(message.get("tool_call_id") or ""),
-                        content=[types.TextContent(type="text", text=plain)],
-                    )
-                )
             if not content:
                 content.append(types.TextContent(type="text", text=""))
             sampling_messages.append(
@@ -119,6 +203,7 @@ class SamplingBridge:
                     content=content,
                 )
             )
+        flush_tool_results()
 
         sampling_tools = None
         if tools:
@@ -168,3 +253,18 @@ class SamplingBridge:
             "toolUse": "tool_calls",
         }.get(stop_reason, "stop")
         return response
+
+
+async def run_request_scoped(
+    bridge: SamplingBridge,
+    func: Callable[[], _T],
+) -> _T:
+    """Run synchronous work while tying its Sampling calls to this request."""
+    try:
+        return await asyncio.to_thread(func)
+    except asyncio.CancelledError:
+        bridge.cancel("request_cancelled")
+        raise
+    except BaseException:
+        bridge.cancel("request_failed")
+        raise

@@ -1606,7 +1606,7 @@ def build_server(
         from mcp import types
 
         from ..writer import agent as writer_agent
-        from ..writer.agent_funded import SamplingBridge, use_bridge
+        from ..writer.agent_funded import SamplingBridge, run_request_scoped, use_bridge
 
         max_sessions = bounded_int(max_sessions, minimum=1, maximum=10)
         capability = types.ClientCapabilities(
@@ -1629,10 +1629,12 @@ def build_server(
             with use_bridge(bridge):
                 return writer_agent.run(cfg, limit=max_sessions)
 
-        result = await asyncio.to_thread(_run)
+        result = await run_request_scoped(bridge, _run)
+        status = "aborted" if bridge.cancelled else "completed"
         return json.dumps(
             {
-                "status": "completed",
+                "status": status,
+                **({"reason": bridge.cancel_reason} if bridge.cancelled else {}),
                 "max_sessions": max_sessions,
                 **asdict(result),
             },

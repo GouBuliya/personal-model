@@ -132,6 +132,9 @@ copied, or persisted by Persome.
 
 The operation must originate in a client tool call and is bounded to 1–10
 sessions. Persome does not initiate MCP Sampling from its background daemon.
+Cancelling the originating tool call cancels any in-flight Sampling request;
+the per-call Sampling deadline does the same, and either path rejects further
+Sampling calls so no additional client allowance is spent.
 Clients that only implement MCP tools return
 `client_missing_sampling_with_tools`; use another compatible client, a local
 provider, or a configured API provider in that case. Existing scheduled writers

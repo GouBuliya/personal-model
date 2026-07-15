@@ -666,6 +666,12 @@ def _call_llm_with_retry(
             return resp
 
         except Exception as exc:  # noqa: BLE001
+            # Cancellation and timeout are terminal for a request-funded run.
+            # Retrying would either waste time or create another allowance spend.
+            from .agent_funded import SamplingRequestCancelled
+
+            if isinstance(exc, SamplingRequestCancelled):
+                raise
             exc_type = type(exc).__name__.lower()
             exc_str = str(exc).lower()
 
