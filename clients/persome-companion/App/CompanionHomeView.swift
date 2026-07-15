@@ -37,7 +37,9 @@ struct CompanionHomeView: View {
                 if let error = model.lastError {
                     Text(error).font(.footnote).foregroundStyle(.red)
                 }
-                Button("Disconnect", role: .destructive) { model.disconnect() }
+                Button("Disconnect", role: .destructive) {
+                    Task { await model.disconnect() }
+                }
             }
         }
         .navigationTitle("Persome")

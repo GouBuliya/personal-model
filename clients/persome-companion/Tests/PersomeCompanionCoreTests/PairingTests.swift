@@ -30,6 +30,24 @@ import Testing
     #expect(json["pairing_id"] as? String == "pair-1")
 }
 
+@Test func companionSessionCarriesServerExpiry() throws {
+    let expiry = Date(timeIntervalSinceNow: 3_600)
+    let session = CompanionSession(
+        bridgeURL: URL(string: "https://192.168.1.8:8744")!,
+        certificateFingerprint: String(repeating: "a", count: 64),
+        deviceID: "iphone-1",
+        sessionToken: "secret",
+        expiresAt: expiry
+    )
+
+    let restored = try JSONDecoder().decode(
+        CompanionSession.self,
+        from: JSONEncoder().encode(session)
+    )
+    #expect(restored.expiresAt == expiry)
+    #expect(restored.isExpired == false)
+}
+
 @Test func pairingRejectsUnpinnedOrInsecurePayloads() {
     #expect(throws: PairingError.insecureEndpoint) {
         try PairingPayload(

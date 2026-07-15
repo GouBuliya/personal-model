@@ -273,6 +273,22 @@ CREATE INDEX idx_memory_deltas_created ON memory_deltas(created_at DESC);
 
 CREATE INDEX idx_memory_deltas_session ON memory_deltas(session_id);
 
+-- ---- store/mobile_events.py ----
+
+CREATE TABLE mobile_event_receipts (
+    device_id   TEXT NOT NULL,
+    event_id    TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    capture_id  TEXT NOT NULL,
+    status      TEXT NOT NULL CHECK(status IN ('pending', 'accepted')),
+    received_at TEXT NOT NULL,
+    accepted_at TEXT,
+    PRIMARY KEY(device_id, event_id)
+);
+
+CREATE INDEX ix_mobile_event_receipts_accepted
+    ON mobile_event_receipts(status, accepted_at);
+
 -- ---- store/owner_aliases.py ----
 
 CREATE TABLE owner_alias_evidence (

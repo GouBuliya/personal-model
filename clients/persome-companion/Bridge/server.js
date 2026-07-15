@@ -22,7 +22,18 @@ export function createBridgeServer({ store, certPath, keyPath, runtime }) {
             device: body.device,
           });
           if (!result.ok) return json(response, 401, { error: `pairing ${result.reason}` });
-          return json(response, 201, { session_token: result.token, device_id: body.device.id });
+          return json(response, 201, {
+            session_token: result.token,
+            session_expires_at: result.expiresAt,
+            device_id: body.device.id,
+          });
+        }
+        if (request.method === "DELETE" && request.url === "/v1/session") {
+          const device = store.authenticate(bearer(request.headers.authorization));
+          if (!device) return json(response, 401, { error: "invalid device session" });
+          store.revoke(device.id);
+          response.writeHead(204, { "cache-control": "no-store" });
+          return response.end();
         }
         if (request.method === "POST" && request.url === "/v1/events") {
           const device = store.authenticate(bearer(request.headers.authorization));
@@ -35,12 +46,32 @@ export function createBridgeServer({ store, certPath, keyPath, runtime }) {
           if (idempotencyKey !== body.event_id) {
             return json(response, 400, { error: "idempotency key must equal event_id" });
           }
-          if (store.hasReceipt(device.id, body.event_id)) {
-            return json(response, 200, { accepted: true, deduped: true });
+          const claim = store.claimReceipt(device.id, body.event_id, body);
+          if (claim.status === "conflict") {
+            return json(response, 409, { error: "event_id was already used for another payload" });
           }
-          const runtimeReceipt = await runtime.forward(body);
-          store.recordReceipt(device.id, body.event_id, runtimeReceipt);
-          store.markSeen(device.id);
+          if (claim.status === "in_progress") {
+            return json(response, 409, { error: "event is already being forwarded; retry later" });
+          }
+          if (claim.status === "accepted") {
+            return json(response, 200, {
+              accepted: true,
+              deduped: true,
+              runtime: claim.runtimeReceipt,
+            });
+          }
+          let runtimeReceipt;
+          try {
+            runtimeReceipt = await runtime.forward(body);
+          } catch (error) {
+            store.releaseReceipt(device.id, body.event_id, claim.payloadHash);
+            throw error;
+          }
+          if (!store.completeReceipt(device.id, body.event_id, claim.payloadHash, runtimeReceipt)) {
+            const error = new Error("event receipt claim was lost");
+            error.statusCode = 503;
+            throw error;
+          }
           return json(response, 202, { accepted: true, deduped: false, runtime: runtimeReceipt });
         }
         return json(response, 404, { error: "not found" });
@@ -62,7 +93,11 @@ export class RuntimeForwarder {
   async forward(event) {
     const response = await this.fetchImpl(`${this.baseURL}/mobile/events/ingest`, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${this.token}` },
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${this.token}`,
+        "idempotency-key": event.event_id,
+      },
       body: JSON.stringify(event),
     });
     if (!response.ok) {
@@ -105,9 +140,11 @@ function validDevice(device) {
   return (
     device &&
     typeof device.id === "string" &&
-    device.id.length >= 1 &&
+    device.id.trim().length >= 1 &&
     device.id.length <= 128 &&
-    ["ios", "android"].includes(device.platform)
+    ["ios", "android"].includes(device.platform) &&
+    (device.name === undefined || device.name === null ||
+      (typeof device.name === "string" && device.name.length <= 128))
   );
 }
 

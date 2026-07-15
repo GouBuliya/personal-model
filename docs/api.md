@@ -24,7 +24,7 @@ runtime schema.
 | GET | `/status` | Daemon, capture, OCR, session, memory, and provider status. |
 | POST | `/captures/ingest` | Ingest one bearer-authenticated capture from a trusted local producer. |
 | POST | `/health-events/import` | Atomically import up to 1,000 normalized wearable/health changes from a trusted local connector. |
-| POST | `/mobile/events/ingest` | Ingest an owner-initiated event forwarded by a paired mobile companion bridge. |
+| POST | `/mobile/events/ingest` | Ingest a paired mobile event; `Idempotency-Key` must equal `event_id`. |
 | GET | `/model` | Open the offline Point/Line/Face/Volume/Root explorer. |
 | GET | `/model/graph` | Read the canonical versioned model snapshot. |
 | GET | `/model/evidence?ref=...` | Resolve a model ID or receipt into direct sources and separately labeled nearby context. |
@@ -115,11 +115,13 @@ polls and turns a request that exceeds 45 seconds into an explicit retry state.
 - `/captures/ingest` assumes a trusted local producer that obtains the owner
   token through an approved local secret channel and sends the bearer header;
   it is not a public upload API.
-- `/mobile/events/ingest` is also loopback-only. A future paired-device bridge
-  terminates encrypted phone transport and forwards validated events with the
-  local bearer; the bearer is never provisioned to the phone. Mobile events
-  retain device, source-app, kind, sensitivity, and owner-initiation provenance
-  while converging on the existing capture → timeline → model pipeline.
+- `/mobile/events/ingest` is also loopback-only. The paired-device bridge
+  terminates pinned TLS and expiring device sessions, then forwards validated
+  events with the local bearer; the bearer is never provisioned to the phone.
+  Runtime receipts reserve `(device.id, event_id)` for 90 days and return the
+  original capture identity on a matching retry; different content under the
+  same identity is a `409`. `captured_at` must include a timezone and is stored
+  as owner-reported provenance alongside the Runtime's separate `received_at`.
 - Model assets and graph data load from the same loopback server with no CDN dependency.
 - LLM and embedding egress only use endpoints configured by the user.
 - Unknown and removed product/admin routes return `404`.

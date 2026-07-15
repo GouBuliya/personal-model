@@ -21,7 +21,11 @@ final class CompanionAppModel: ObservableObject {
 
     init() {
         session = try? keychain.load()
-        if session != nil { connectionState = "Connected to your Mac" }
+        if session?.isExpired == true {
+            connectionState = "Session expired — pair again"
+        } else if session != nil {
+            connectionState = "Connected to your Mac"
+        }
     }
 
     func pair(qrValue: String) async {
@@ -53,7 +57,8 @@ final class CompanionAppModel: ObservableObject {
                 bridgeURL: payload.endpoint,
                 certificateFingerprint: payload.fingerprint,
                 deviceID: result.deviceID,
-                sessionToken: result.sessionToken
+                sessionToken: result.sessionToken,
+                expiresAt: Date(timeIntervalSince1970: TimeInterval(result.sessionExpiresAt) / 1_000)
             )
             try keychain.save(paired)
             UserDefaults(suiteName: CompanionAppGroup.identifier)?.set(
@@ -70,7 +75,32 @@ final class CompanionAppModel: ObservableObject {
         }
     }
 
-    func disconnect() {
+    func disconnect() async {
+        guard let session else {
+            clearLocalSession()
+            return
+        }
+        connectionState = "Revoking this device…"
+        let client = CompanionClient(
+            configuration: CompanionConfiguration(
+                bridgeURL: session.bridgeURL,
+                sessionToken: session.sessionToken
+            ),
+            session: pinnedSession(fingerprint: session.certificateFingerprint)
+        )
+        do {
+            try await client.revoke()
+        } catch CompanionClientError.rejected(statusCode: 401) {
+            // An expired/already-invalid server session is already revoked in effect.
+        } catch {
+            connectionState = "Could not disconnect from your Mac"
+            lastError = String(describing: error)
+            return
+        }
+        clearLocalSession()
+    }
+
+    private func clearLocalSession() {
         try? keychain.delete()
         UserDefaults(suiteName: CompanionAppGroup.identifier)?.removeObject(
             forKey: CompanionAppGroup.deviceIDKey
@@ -78,6 +108,7 @@ final class CompanionAppModel: ObservableObject {
         session = nil
         connectionState = "Not connected"
         pendingCount = 0
+        lastError = nil
     }
 
     func activate() async {
@@ -87,12 +118,15 @@ final class CompanionAppModel: ObservableObject {
     }
 
     func syncNow() async {
-        guard let session, !isSyncing else { return }
+        guard let session, !session.isExpired, !isSyncing else {
+            if session?.isExpired == true { connectionState = "Session expired — pair again" }
+            return
+        }
         isSyncing = true
         defer { isSyncing = false }
         do {
             let queue = try sharedQueue()
-            pendingCount = await queue.count()
+            pendingCount = try await queue.count()
             guard pendingCount > 0 else {
                 connectionState = "Connected to your Mac"
                 return
@@ -107,7 +141,7 @@ final class CompanionAppModel: ObservableObject {
             )
             let engine = SyncEngine(queue: queue, transport: client)
             _ = await engine.flush()
-            pendingCount = await queue.count()
+            pendingCount = try await queue.count()
             lastSyncedAt = Date()
             connectionState = pendingCount == 0
                 ? "Everything is in your Personal Model"
@@ -162,10 +196,12 @@ final class CompanionAppModel: ObservableObject {
 
 private struct PairingResponse: Codable {
     let sessionToken: String
+    let sessionExpiresAt: Int64
     let deviceID: String
 
     enum CodingKeys: String, CodingKey {
         case sessionToken = "session_token"
+        case sessionExpiresAt = "session_expires_at"
         case deviceID = "device_id"
     }
 }
@@ -185,7 +221,8 @@ final class CertificatePinningDelegate: NSObject, URLSessionDelegate, @unchecked
         guard
             challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
             let trust = challenge.protectionSpace.serverTrust,
-            let certificate = SecTrustGetCertificateAtIndex(trust, 0)
+            let certificateChain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
+            let certificate = certificateChain.first
         else {
             completionHandler(.cancelAuthenticationChallenge, nil)
             return

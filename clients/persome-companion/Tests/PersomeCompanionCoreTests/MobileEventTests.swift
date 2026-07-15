@@ -46,10 +46,37 @@ import Testing
     let queue = try EventQueue(fileURL: file)
     try await queue.enqueue(event)
     try await queue.enqueue(event)
-    #expect(await queue.pending().count == 1)
+    #expect(try await queue.pending().count == 1)
 
     let restored = try EventQueue(fileURL: file)
-    #expect(await restored.pending() == [event])
+    #expect(try await restored.pending() == [event])
     try await restored.acknowledge(eventID: event.eventID)
-    #expect(await restored.pending().isEmpty)
+    #expect(try await restored.pending().isEmpty)
+}
+
+@Test func independentQueueInstancesDoNotLoseConcurrentWrites() async throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    let file = root.appending(path: "queue.json")
+    let appQueue = try EventQueue(fileURL: file)
+    let shareQueue = try EventQueue(fileURL: file)
+
+    try await withThrowingTaskGroup(of: Void.self) { group in
+        for index in 0 ..< 40 {
+            let queue = index.isMultiple(of: 2) ? appQueue : shareQueue
+            group.addTask {
+                try await queue.enqueue(
+                    try MobileEvent(
+                        eventID: "event-\(index)",
+                        device: MobileDevice(id: "iphone-1", platform: .ios),
+                        kind: .text,
+                        text: "item \(index)"
+                    )
+                )
+            }
+        }
+        try await group.waitForAll()
+    }
+
+    let ids = Set(try await appQueue.pending().map(\.eventID))
+    #expect(ids.count == 40)
 }

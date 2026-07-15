@@ -85,18 +85,23 @@ public struct CompanionSession: Codable, Equatable, Sendable {
     public let certificateFingerprint: String
     public let deviceID: String
     public let sessionToken: String
+    public let expiresAt: Date
 
     public init(
         bridgeURL: URL,
         certificateFingerprint: String,
         deviceID: String,
-        sessionToken: String
+        sessionToken: String,
+        expiresAt: Date
     ) {
         self.bridgeURL = bridgeURL
         self.certificateFingerprint = certificateFingerprint
         self.deviceID = deviceID
         self.sessionToken = sessionToken
+        self.expiresAt = expiresAt
     }
+
+    public var isExpired: Bool { expiresAt <= Date() }
 }
 
 public enum PairingError: Error, Equatable {

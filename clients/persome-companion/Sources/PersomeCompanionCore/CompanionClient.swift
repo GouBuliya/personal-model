@@ -48,6 +48,20 @@ public struct CompanionClient: EventTransport {
             throw CompanionClientError.rejected(statusCode: http.statusCode)
         }
     }
+
+    public func revoke() async throws {
+        let endpoint = configuration.bridgeURL.appending(path: "v1/session")
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(configuration.sessionToken)", forHTTPHeaderField: "Authorization")
+        let (_, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw CompanionClientError.invalidResponse
+        }
+        guard (200 ..< 300).contains(http.statusCode) else {
+            throw CompanionClientError.rejected(statusCode: http.statusCode)
+        }
+    }
 }
 
 public actor SyncEngine {
@@ -62,7 +76,8 @@ public actor SyncEngine {
     @discardableResult
     public func flush() async -> Int {
         var sent = 0
-        for event in await queue.pending() {
+        guard let pending = try? await queue.pending() else { return 0 }
+        for event in pending {
             do {
                 try await transport.send(event)
                 try await queue.acknowledge(eventID: event.eventID)

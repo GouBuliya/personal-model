@@ -6,6 +6,7 @@ import asyncio
 import base64
 import binascii
 import contextlib
+import fcntl
 import hashlib
 import json
 import queue
@@ -20,6 +21,7 @@ from .. import index_health, paths
 from ..config import CaptureConfig, Config
 from ..logger import get
 from ..store import fts as fts_store
+from ..store import mobile_events as mobile_event_store
 from . import (
     ax_capture,
     cmux_source,
@@ -49,6 +51,10 @@ _last_ocr_ts: dict[str, float] = {}
 # A far-future client timestamp sorts after the reducer watermark and used to
 # evade retention indefinitely. Allow ordinary clock skew, not arbitrary time.
 _MAX_INGEST_FUTURE_SKEW = timedelta(minutes=5)
+
+
+class MobileEventConflictError(ValueError):
+    """A device reused one event identity for different immutable content."""
 
 
 def _should_trigger_ocr(cfg: CaptureConfig, meta: dict[str, str]) -> bool:
@@ -488,7 +494,12 @@ def ingest_capture(cfg: Config, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_mobile_event_capture(
-    cfg: CaptureConfig, payload: dict[str, Any]
+    cfg: CaptureConfig,
+    payload: dict[str, Any],
+    *,
+    received_at: str | None = None,
+    payload_hash: str | None = None,
+    capture_timestamp: str | None = None,
 ) -> dict[str, Any] | None:
     """Convert a mobile observation into the canonical S1 capture shape.
 
@@ -516,7 +527,7 @@ def build_mobile_event_capture(
     capture = build_ingest_capture(
         cfg,
         {
-            "timestamp": payload.get("captured_at"),
+            "timestamp": capture_timestamp or payload.get("captured_at"),
             "trigger": {
                 "event_type": "MobileEvent",
                 "event_id": payload.get("event_id"),
@@ -562,29 +573,126 @@ def build_mobile_event_capture(
         "source_app": payload.get("source_app"),
         "sensitivity": payload.get("sensitivity", "private"),
         "owner_initiated": True,
+        "provenance": "owner_reported",
+        "transport": "paired_companion_bridge",
+        "captured_at": payload.get("captured_at"),
+        "received_at": received_at or _now_iso(),
+        "payload_sha256": payload_hash,
     }
     return capture
 
 
 def ingest_mobile_event(cfg: Config, payload: dict[str, Any]) -> dict[str, Any]:
-    """Persist one mobile event through the same runner used by screen capture."""
-    out = build_mobile_event_capture(cfg.capture, payload)
-    if out is None:
-        return {"id": None, "deduped": False, "skipped": True, "source": "mobile"}
-    runner = _active_runner
-    if runner is not None:
-        stem = runner.commit_prebuilt(out)
-        return {
-            "id": stem,
-            "deduped": stem is None,
-            "skipped": False,
-            "source": "mobile",
-        }
-    path = _write_capture(out)
-    return {"id": path.stem, "deduped": False, "skipped": False, "source": "mobile"}
+    """Persist one mobile identity exactly once across retries and bridge crashes.
+
+    The receipt is claimed before persistence and uses a deterministic capture
+    ID. A process crash can therefore leave a pending receipt or a capture file,
+    but a retry always resumes the same identity instead of creating another
+    capture. The file lock covers independent Runtime HTTP worker processes.
+    """
+    device_id = str((payload.get("device") or {}).get("id") or "")
+    event_id = str(payload.get("event_id") or "")
+    payload_hash = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    normalized_timestamp = _sanitize_ingest_timestamp(payload.get("captured_at"))
+    identity_hash = hashlib.sha256(f"{device_id}\0{event_id}".encode()).hexdigest()[:20]
+    proposed_capture_id = f"{_safe_filename(normalized_timestamp)}--m-{identity_hash}"
+
+    lock = paths.open_private_lock_file(paths.mobile_event_ingest_lock())
+    try:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        with fts_store.cursor() as conn:
+            mobile_event_store.prune(conn)
+            receipt = mobile_event_store.get(conn, device_id=device_id, event_id=event_id)
+
+        if receipt is not None and receipt.payload_hash != payload_hash:
+            raise MobileEventConflictError(
+                "event_id was already accepted with different immutable content"
+            )
+        if receipt is not None and receipt.status == "accepted":
+            return {
+                "id": receipt.capture_id,
+                "deduped": True,
+                "skipped": False,
+                "source": "mobile",
+            }
+
+        received_at = receipt.received_at if receipt is not None else _now_iso()
+        capture_id = receipt.capture_id if receipt is not None else proposed_capture_id
+        capture_path = paths.capture_buffer_dir() / f"{capture_id}.json"
+        if receipt is not None and capture_path.exists():
+            existing = json.loads(capture_path.read_text(encoding="utf-8"))
+            existing_mobile = existing.get("mobile_event") or {}
+            if existing_mobile.get("payload_sha256") != payload_hash:
+                raise MobileEventConflictError("pending mobile capture does not match its receipt")
+            _index_capture(capture_id, existing)
+            with fts_store.cursor() as conn:
+                mobile_event_store.accept(
+                    conn,
+                    device_id=device_id,
+                    event_id=event_id,
+                    payload_hash=payload_hash,
+                    accepted_at=_now_iso(),
+                )
+            return {
+                "id": capture_id,
+                "deduped": True,
+                "skipped": False,
+                "source": "mobile",
+            }
+
+        out = build_mobile_event_capture(
+            cfg.capture,
+            payload,
+            received_at=received_at,
+            payload_hash=payload_hash,
+            capture_timestamp=normalized_timestamp,
+        )
+        if out is None:
+            return {"id": None, "deduped": False, "skipped": True, "source": "mobile"}
+
+        if receipt is None:
+            with fts_store.cursor() as conn:
+                receipt = mobile_event_store.claim(
+                    conn,
+                    device_id=device_id,
+                    event_id=event_id,
+                    payload_hash=payload_hash,
+                    capture_id=capture_id,
+                    received_at=received_at,
+                )
+            if receipt.payload_hash != payload_hash:
+                raise MobileEventConflictError(
+                    "event_id was concurrently claimed with different immutable content"
+                )
+
+        runner = _active_runner
+        if runner is not None:
+            stem = runner.commit_prebuilt(out, force=True, capture_id=capture_id)
+        else:
+            stem = _write_capture(out, capture_id=capture_id).stem
+        if stem != capture_id:
+            raise RuntimeError("mobile capture persistence returned the wrong identity")
+        with fts_store.cursor() as conn:
+            if not mobile_event_store.accept(
+                conn,
+                device_id=device_id,
+                event_id=event_id,
+                payload_hash=payload_hash,
+                accepted_at=_now_iso(),
+            ):
+                raise RuntimeError("mobile event receipt disappeared before acceptance")
+        return {"id": capture_id, "deduped": False, "skipped": False, "source": "mobile"}
+    finally:
+        with contextlib.suppress(OSError):
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        lock.close()
 
 
-def _write_capture(out: dict[str, Any]) -> Path:
+def _write_capture(out: dict[str, Any], *, capture_id: str | None = None) -> Path:
     """Persist a built capture dict to the buffer, index it for search, and log."""
     ts = out["timestamp"]
     # Pop the private OCR payload BEFORE serializing — it's raw JPEG bytes (not
@@ -597,7 +705,7 @@ def _write_capture(out: dict[str, Any]) -> Path:
     if ocr_jpeg is not None:
         out["ocr_submitted"] = True
 
-    path = paths.capture_buffer_dir() / f"{_safe_filename(ts)}.json"
+    path = paths.capture_buffer_dir() / f"{capture_id or _safe_filename(ts)}.json"
     # The JSON authority and its searchable SQLite projection are one logical
     # operation relative to secure clean/full wipe. The shared activity gate
     # preserves normal capture concurrency, while maintenance waits until both
@@ -691,6 +799,8 @@ def _content_fingerprint(out: dict[str, Any]) -> str:
             focused.get("value") or "",
             out.get("visible_text") or "",
             out.get("url") or "",
+            str((out.get("mobile_event") or {}).get("device", {}).get("id") or ""),
+            str((out.get("mobile_event") or {}).get("event_id") or ""),
         ]
     )
     return hashlib.sha256(payload.encode("utf-8", errors="replace")).hexdigest()
@@ -832,7 +942,13 @@ class _CaptureRunner:
         except Exception as exc:  # noqa: BLE001
             logger.warning("capture_receipt_hook failed: %s", exc)
 
-    def commit_prebuilt(self, out: dict[str, Any]) -> str | None:
+    def commit_prebuilt(
+        self,
+        out: dict[str, Any],
+        *,
+        force: bool = False,
+        capture_id: str | None = None,
+    ) -> str | None:
         """Persist a capture built elsewhere (the ingest path) through this runner.
 
         Same content-dedup + session hook as `run`, minus the OS
@@ -844,7 +960,12 @@ class _CaptureRunner:
         threadpool).
         """
         with self._lock:
-            path = self._commit(out, out.get("trigger"))
+            path = self._commit(
+                out,
+                out.get("trigger"),
+                force=force,
+                capture_id=capture_id,
+            )
             return path.stem if path is not None else None
 
     def _commit(
@@ -853,6 +974,7 @@ class _CaptureRunner:
         trigger: dict[str, Any] | None,
         *,
         force: bool = False,
+        capture_id: str | None = None,
     ) -> Path | None:
         """Content-dedup → write → fire hooks. Caller must hold ``self._lock``.
 
@@ -871,7 +993,11 @@ class _CaptureRunner:
             )
             return None
         self._last_fingerprint = fingerprint
-        path = _write_capture(out)
+        path = (
+            _write_capture(out)
+            if capture_id is None
+            else _write_capture(out, capture_id=capture_id)
+        )
         reason = str((out.get("trigger") or {}).get("event_type") or "capture")
         self._publish_receipt(path, reason)
         if self._pre_capture_hook is not None and trigger is not None:

@@ -7,8 +7,8 @@ The first vertical slice is deliberately small:
 1. A Share Extension turns owner-selected text or URLs into `MobileEvent`.
 2. `EventQueue` persists events locally and survives offline periods.
 3. `SyncEngine` delivers in order and acknowledges only successful events.
-4. `CompanionClient` sends to a paired Mac bridge at `POST /v1/events` with a
-   short-lived device session and an idempotency key.
+4. `CompanionClient` sends to a paired Mac bridge at `POST /v1/events` with an
+   expiring device session and an idempotency key.
 5. The bridge forwards to the Runtime's loopback-only
    `POST /mobile/events/ingest`; the phone never receives the Runtime bearer.
 
@@ -26,8 +26,13 @@ the UIKit adapter ready to add to the Xcode project.
 ## Paired Mac bridge
 
 The zero-dependency Node bridge exposes TLS 1.3 on the LAN, stores only hashes
-of device session tokens, limits a pairing to five guesses, supports revocation,
-and forwards accepted events to the Runtime over loopback.
+of 90-day device session tokens, limits a pairing to five guesses, supports
+local and in-app revocation, and forwards accepted events to the Runtime over
+loopback. Receipt claims are serialized in an owner-only state file; concurrent
+retries cannot both forward, expired claims can retry after a crash, and
+accepted receipts are capped and retained for 30 days. Runtime-level receipts
+provide the durable `(device_id, event_id)` idempotency boundary beyond that
+bridge cache.
 
 Provide a locally trusted/pinned certificate and key, then:
 
@@ -50,9 +55,13 @@ HTTPS/fingerprint validation, a certificate-pinned pairing request, and
 ThisDeviceOnly Keychain storage for the resulting device session.
 
 The Share Extension writes directly to an App Group queue shared with the main
-app; it does not rely on cross-process notifications. After installing Xcode
-and XcodeGen, generate the project with `xcodegen generate`.
+app; every read-modify-write reloads under a stable advisory file lock so the
+two processes cannot overwrite each other's events. It does not rely on
+cross-process notifications. After installing Xcode and XcodeGen, generate the
+project with `xcodegen generate`.
 
 The main app drains that queue on launch, foreground activation, manual refresh,
 and `BGAppRefreshTask`. It uses the pinned bridge certificate for every event,
 acknowledges only successful deliveries, and exposes pending/last-sync state.
+Disconnect first revokes the bridge session; a network failure keeps the local
+credential so revocation can be retried instead of silently leaving access live.

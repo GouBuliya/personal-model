@@ -37,7 +37,7 @@ test("pairing expires and repeated guesses lock it", () => {
   );
 
   const locked = store.createPairing();
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
     assert.equal(
       store.consumePairing({
         pairingId: locked.pairingId,
@@ -57,6 +57,28 @@ test("pairing expires and repeated guesses lock it", () => {
   );
 });
 
+test("device sessions expire and state updates from independent store instances do not overwrite", () => {
+  let now = 1_000;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "persome-bridge-"));
+  const file = path.join(root, "state.json");
+  const first = new BridgeStore(file, () => now);
+  const second = new BridgeStore(file, () => now);
+  const one = first.createPairing();
+  const two = second.createPairing();
+
+  const paired = first.consumePairing({
+    pairingId: one.pairingId,
+    code: one.code,
+    device: { id: "iphone-1", platform: "ios" },
+    sessionTtlMs: 10,
+  });
+  assert.equal(paired.ok, true);
+  assert.ok(first.load().pairings[two.pairingId]);
+  assert.ok(second.authenticate(paired.token));
+  now = 1_011;
+  assert.equal(second.authenticate(paired.token), null);
+});
+
 test("revoked device can no longer authenticate", () => {
   const store = makeStore();
   const pairing = store.createPairing();
@@ -68,4 +90,13 @@ test("revoked device can no longer authenticate", () => {
   assert.ok(store.authenticate(paired.token));
   assert.equal(store.revoke("iphone-1"), true);
   assert.equal(store.authenticate(paired.token), null);
+});
+
+test("receipt identities cannot collide on colon-delimited ids", () => {
+  const store = makeStore(() => 1_000);
+  const first = store.claimReceipt("a:b", "c", { value: 1 });
+  const second = store.claimReceipt("a", "b:c", { value: 2 });
+  assert.equal(first.status, "claimed");
+  assert.equal(second.status, "claimed");
+  assert.equal(Object.keys(store.load().receipts).length, 2);
 });

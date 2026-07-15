@@ -35,6 +35,6 @@ private actor RecordingTransport: EventTransport {
     let engine = SyncEngine(queue: queue, transport: transport)
 
     #expect(await engine.flush() == 1)
-    #expect(await queue.pending().map(\.eventID) == ["two", "three"])
+    #expect(try await queue.pending().map(\.eventID) == ["two", "three"])
     #expect(await transport.ids == ["one"])
 }

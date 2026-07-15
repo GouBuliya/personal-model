@@ -232,15 +232,28 @@
         "summary": "Ingest Mobile Event",
         "description": "Ingest one high-signal observation from a paired mobile companion.\n\nPairing and transport terminate in an owner-controlled desktop bridge. This\nRuntime endpoint remains bearer-authenticated and loopback-only; the bridge\nforwards the validated event into the canonical capture pipeline.",
         "operationId": "ingest_mobile_event_mobile_events_ingest_post",
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Must equal the immutable event_id",
+              "title": "Idempotency-Key"
+            },
+            "description": "Must equal the immutable event_id"
+          }
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/MobileEventIngestBody"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -811,13 +824,14 @@
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 64
+                "format": "date-time"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Captured At"
+            "title": "Captured At",
+            "description": "Owner-reported, timezone-aware capture time; server receipt time is separate"
           },
           "device": {
             "$ref": "#/components/schemas/MobileDevice"
