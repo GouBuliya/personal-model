@@ -24,7 +24,7 @@ dependencies = [
     "python-frontmatter>=1.1",
     "mss>=9.0",
     "Pillow>=10.0",
-    "mcp>=1.0",
+    "mcp>=1.23.0",
     "fastapi>=0.115",
     # Imported directly by the local API/streaming surface. Declare these instead
     # of relying on FastAPI or MCP to keep pulling them transitively.

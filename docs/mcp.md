@@ -62,6 +62,8 @@ Example stdio client configuration:
 | `verify_fact` | Check a claim against current and superseded memory. |
 | `remember` | Append an explicit, auditable memory. |
 | `correct_memory` | Supersede or revoke memory through the correction workflow. |
+| `process_pending_model_work` | Process a bounded number of pending sessions with the connected client's model allowance through MCP Sampling. |
+| `get_pending_model_work` | Inspect the semantic session backlog without invoking a model. |
 
 ## Capture and state tools
 
@@ -110,12 +112,33 @@ port = 8742
   canonical `GET /health` is public.
 - MCP returns local personal data, including raw screen text from capture tools;
   only connect trusted clients.
-- The MCP server does not forward results to a model provider by itself. A
-  connected agent may do so.
+- Read tools do not invoke a model provider. The explicit
+  `process_pending_model_work` tool sends modeling prompts and tool results back
+  to the originating trusted client through MCP Sampling; the client remains in
+  control of its model, authentication, approval policy, and allowance.
 - Screenshots are excluded unless a tool call explicitly requests one.
 - `get_model_snapshot` redacts detectable secrets and local paths by default.
 - Write tools are explicit and auditable; the removed computer-use tools are
   not part of this server.
+
+## Agent-funded modeling
+
+`process_pending_model_work(max_sessions=1)` is the provider-neutral path for
+using a model entitlement already available in Codex, Claude, or another MCP
+client. Persome negotiates the client's `sampling` and `sampling.tools`
+capabilities. When supported, stage prompts run through
+`sampling/createMessage`; no subscription credential or OAuth token is read,
+copied, or persisted by Persome.
+
+The operation must originate in a client tool call and is bounded to 1–10
+sessions. Persome does not initiate MCP Sampling from its background daemon.
+Cancelling the originating tool call cancels any in-flight Sampling request;
+the per-call Sampling deadline does the same, and either path rejects further
+Sampling calls so no additional client allowance is spent.
+Clients that only implement MCP tools return
+`client_missing_sampling_with_tools`; use another compatible client, a local
+provider, or a configured API provider in that case. Existing scheduled writers
+continue to use the configured provider route.
 
 The same loopback ASGI app serves `/model` and the authenticated REST
 routes. Use `persome model open` for a one-time browser bootstrap.

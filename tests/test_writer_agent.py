@@ -109,6 +109,41 @@ def test_writer_run_respects_reducer_disabled(ac_root: Path, monkeypatch) -> Non
     assert result.reduced == 0
 
 
+def test_writer_run_limit_counts_existing_modeled_backlog_first(ac_root: Path, monkeypatch) -> None:
+    start = datetime(2026, 4, 21, 9, 0, tzinfo=_TZ)
+    with fts.cursor() as conn:
+        session_store.insert(
+            conn,
+            session_store.SessionRow(
+                id="already-reduced",
+                start_time=start,
+                end_time=start + timedelta(minutes=5),
+                status="reduced",
+            ),
+        )
+
+    seen: dict[str, Any] = {}
+
+    def fake_reduce_all_pending(cfg, *, limit=None):  # type: ignore[no-untyped-def]
+        seen["reduction_limit"] = limit
+        return []
+
+    finalized: list[str] = []
+
+    def fake_finalize(cfg, *, session_id, **kwargs):  # type: ignore[no-untyped-def]
+        finalized.append(session_id)
+        return agent.SessionModelResult(session_id=session_id, skipped_reason="test")
+
+    monkeypatch.setattr(agent.session_reducer, "reduce_all_pending", fake_reduce_all_pending)
+    monkeypatch.setattr(agent, "finalize_session", fake_finalize)
+
+    cfg = config_mod.load(ac_root / "config.toml")
+    agent.run(cfg, limit=1)
+
+    assert seen["reduction_limit"] == 0
+    assert finalized == ["already-reduced"]
+
+
 def test_terminal_finalizer_applies_default_person_model(
     ac_root: Path,
     fake_llm,

@@ -215,6 +215,10 @@ selected projections and preserve receipts/history.
   `persome llm setup`. Anthropic Messages and OpenAI-compatible Chat
   Completions share one response/tool-loop contract; keys come from
   `<PERSOME_ROOT>/env`.
+- During an explicit MCP `process_pending_model_work` request, the same stage
+  contract is temporarily backed by MCP Sampling. The connected client spends
+  its own model allowance; Persome receives completions, never its login token.
+  This override is request-scoped and does not enable unattended daemon calls.
 - Terminal finalization sets `sessions.modeled_at` only after every enabled
   stage completes or reports a deliberate benign skip.
 - Semantic-stage errors degrade the model and remain retryable; they do not

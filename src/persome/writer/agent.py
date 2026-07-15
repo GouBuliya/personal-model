@@ -249,18 +249,29 @@ def finalize_session(
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
-def run(cfg: Config) -> WriterRunResult:
+def run(cfg: Config, *, limit: int | None = None) -> WriterRunResult:
     """Reduce pending sessions, then finish every unmodeled reduced session."""
     result = WriterRunResult()
     if not cfg.reducer.enabled:
         logger.info("writer run: reducer disabled, nothing to do")
         return result
 
-    reduce_results = session_reducer.reduce_all_pending(cfg)
+    reduction_limit = limit
+    if limit is not None:
+        # Existing reduced sessions already consume this request's allowance.
+        # Only reduce enough additional sessions to keep the unique session
+        # count within the user-approved bound.
+        with fts.cursor() as conn:
+            already_pending = session_store.list_pending_modeling(conn)
+        reduction_limit = max(0, limit - len(already_pending[:limit]))
+
+    reduce_results = session_reducer.reduce_all_pending(cfg, limit=reduction_limit)
     result.reduced = sum(1 for rr in reduce_results if rr.succeeded)
 
     with fts.cursor() as conn:
         pending = session_store.list_pending_modeling(conn)
+    if limit is not None:
+        pending = pending[: max(0, limit)]
     reduced_by_id = {rr.session_id: rr for rr in reduce_results}
     for row in pending:
         rr = reduced_by_id.get(row.id)

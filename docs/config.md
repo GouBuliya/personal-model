@@ -85,8 +85,10 @@ Common model stages are `timeline`, `reducer`, `classifier`, `memory_delta`,
 `cross_domain_sweeper`, `root_synthesis`, `contradiction_check`, and
 `memory_decay`. Tool-loop stages require function/tool calling; JSON stages
 require reliable structured output. Without a hosted credential or keyless
-local endpoint, Persome still captures and serves BM25, but semantic model
-stages remain degraded.
+local endpoint, Persome still captures and serves BM25. A connected client that
+advertises MCP Sampling with tools can explicitly call
+`process_pending_model_work` to process a bounded backlog with the client's own
+model allowance; otherwise semantic model stages remain degraded.
 
 Hosted presets currently include Anthropic, OpenAI, DeepSeek, OpenRouter,
 Gemini, Groq, Mistral, xAI, Qwen, Moonshot/Kimi, Zhipu GLM, SiliconFlow,
