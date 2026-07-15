@@ -241,8 +241,22 @@ def health() -> ApiResponse:
         index_state = "unknown"
         capture_state = "unknown"
     else:
-        index_state = str((report.get("index") or {}).get("status") or "unknown")
-        capture_state = str((report.get("capture") or {}).get("state") or "unknown")
+        raw_index_state = str((report.get("index") or {}).get("status") or "unknown")
+        raw_capture_state = str((report.get("capture") or {}).get("state") or "unknown")
+        index_state = (
+            "ok"
+            if raw_index_state == "ok"
+            else "unknown"
+            if raw_index_state == "unknown"
+            else "degraded"
+        )
+        capture_state = (
+            "ok"
+            if raw_capture_state in {"active", "idle", "paused"}
+            else "unknown"
+            if raw_capture_state == "unknown"
+            else "degraded"
+        )
         if report.get("status") != "ok":
             degraded = True
     return ApiResponse(

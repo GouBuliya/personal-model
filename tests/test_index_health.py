@@ -32,6 +32,7 @@ def fresh_counters(monkeypatch: pytest.MonkeyPatch) -> dict:
         "last_index_error": None,
         "last_index_error_at": None,
         "queue_dropped_total": 0,
+        "consecutive_queue_drops": 0,
         "last_queue_drop_at": None,
         "last_snapshot_ok": None,
         "last_snapshot_at": None,
@@ -94,6 +95,45 @@ def test_unindexed_buffer_backlog_degrades(ac_root: Path, fresh_counters: dict) 
     assert report["backlog"]["backlog"] == 3
     assert report["status"] == "degraded"
     assert any("rebuild-captures-index" in a for a in report["recommended_actions"])
+
+
+def test_orphaned_index_row_does_not_hide_unindexed_capture(
+    ac_root: Path, fresh_counters: dict
+) -> None:
+    _seed_schema()
+    missing = paths.capture_buffer_dir() / "missing-from-index.json"
+    missing.write_text("{}")
+    with fts.cursor() as conn:
+        conn.execute(
+            "INSERT INTO captures (id, timestamp, visible_text) VALUES (?, ?, ?)",
+            ("orphaned-index-row", "2026-07-14T00:00:00+00:00", "stale"),
+        )
+        conn.commit()
+
+    report = index_health.build_report(Config())
+
+    assert report["backlog"] == {
+        "buffer_files": 1,
+        "indexed_captures": 1,
+        "backlog": 1,
+        "orphaned_index_rows": 1,
+    }
+
+
+def test_recent_queue_drop_degrades_capture_pipeline(ac_root: Path, fresh_counters: dict) -> None:
+    _seed_schema()
+    index_health.record_queue_drop()
+
+    report = index_health.build_report(Config())
+
+    assert report["status"] == "degraded"
+    assert report["capture"]["state"] == "broken"
+    assert report["capture"]["consecutive_queue_drops"] == 1
+    assert "queue dropped" in report["capture"]["detail"]
+    assert any("queue" in a and "cannot replay" in a for a in report["recommended_actions"])
+
+    index_health.record_queue_accept()
+    assert fresh_counters["consecutive_queue_drops"] == 0
 
 
 def test_corrupt_index_is_reported_not_masked(

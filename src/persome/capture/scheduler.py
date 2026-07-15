@@ -778,6 +778,7 @@ class _CaptureRunner:
         """Enqueue a capture for the worker thread; drop with a warning if full."""
         try:
             self._queue.put_nowait(trigger)
+            index_health.record_queue_accept()
         except queue.Full:
             index_health.record_queue_drop()
             logger.warning(

@@ -771,7 +771,9 @@ def status() -> None:
     else:
         idx = health_report.get("index") or {}
         cap = health_report.get("capture") or {}
-        backlog = (health_report.get("backlog") or {}).get("backlog") or 0
+        backlog_report = health_report.get("backlog") or {}
+        backlog = backlog_report.get("backlog") or 0
+        orphaned = backlog_report.get("orphaned_index_rows") or 0
         stale_note = " [yellow](stale report)[/yellow]" if health_report.get("stale") else ""
         idx_status = str(idx.get("status") or "unknown")
         idx_style = "green" if idx_status == "ok" else "red"
@@ -790,6 +792,12 @@ def status() -> None:
             table.add_row(
                 "Index Backlog",
                 f"[yellow]{backlog} captures not searchable yet[/yellow] "
+                "(run `persome rebuild-captures-index --merge`)",
+            )
+        if orphaned:
+            table.add_row(
+                "Index Orphans",
+                f"[yellow]{orphaned} index rows have no capture file[/yellow] "
                 "(run `persome rebuild-captures-index --merge`)",
             )
         snap = health_report.get("snapshot") or {}

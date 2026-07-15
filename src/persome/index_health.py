@@ -52,6 +52,7 @@ _counters: dict[str, Any] = {
     "last_index_error": None,
     "last_index_error_at": None,
     "queue_dropped_total": 0,
+    "consecutive_queue_drops": 0,
     "last_queue_drop_at": None,
     "last_snapshot_ok": None,
     "last_snapshot_at": None,
@@ -87,7 +88,14 @@ def record_queue_drop() -> None:
     """Heartbeat: the bounded capture queue dropped a trigger."""
     with _lock:
         _counters["queue_dropped_total"] += 1
+        _counters["consecutive_queue_drops"] += 1
         _counters["last_queue_drop_at"] = _now_iso()
+
+
+def record_queue_accept() -> None:
+    """Heartbeat: the capture queue accepted a trigger after any full-queue streak."""
+    with _lock:
+        _counters["consecutive_queue_drops"] = 0
 
 
 def record_snapshot_outcome(ok: bool, error: str | None = None) -> None:
@@ -156,19 +164,24 @@ def _check_sqlite_indexes() -> tuple[str, list[str]]:
 
 
 def _index_backlog() -> dict[str, int]:
-    """Buffer-vs-index gap: captures on disk that search cannot see yet."""
+    """Return exact buffer/index drift without letting stale rows hide gaps."""
     from .store import fts as fts_store
 
-    buffer_files = 0
     buf = paths.capture_buffer_dir()
-    if buf.is_dir():
-        buffer_files = sum(1 for p in buf.iterdir() if p.suffix == ".json")
+    buffer_ids = (
+        {p.stem for p in buf.iterdir() if p.is_file() and p.suffix == ".json"}
+        if buf.is_dir()
+        else set()
+    )
     with fts_store.cursor() as conn:
-        indexed = int(conn.execute("SELECT COUNT(*) FROM captures").fetchone()[0])
+        indexed_ids = {str(row[0]) for row in conn.execute("SELECT id FROM captures")}
+    missing_ids = buffer_ids - indexed_ids
+    orphaned_ids = indexed_ids - buffer_ids
     return {
-        "buffer_files": buffer_files,
-        "indexed_captures": indexed,
-        "backlog": max(0, buffer_files - indexed),
+        "buffer_files": len(buffer_ids),
+        "indexed_captures": len(indexed_ids),
+        "backlog": len(missing_ids),
+        "orphaned_index_rows": len(orphaned_ids),
     }
 
 
@@ -183,7 +196,11 @@ def _age_seconds(iso_ts: str | None) -> float | None:
 
 
 def _classify_capture_state(
-    counters: dict[str, Any], *, paused: bool, failure_streak_threshold: int
+    counters: dict[str, Any],
+    *,
+    paused: bool,
+    failure_streak_threshold: int,
+    queue_drop_window_seconds: int,
 ) -> tuple[str, str | None]:
     """Separate intentional silence from a broken pipeline.
 
@@ -201,6 +218,13 @@ def _classify_capture_state(
             f"{streak} consecutive captures FTS insert failures; "
             f"last: {counters.get('last_index_error')}"
         )
+    queue_drop_age = _age_seconds(counters.get("last_queue_drop_at"))
+    if queue_drop_age is not None and queue_drop_age <= queue_drop_window_seconds:
+        return "broken", (
+            "capture queue dropped a trigger recently; "
+            f"{int(counters.get('consecutive_queue_drops') or 0)} consecutive, "
+            f"{int(counters.get('queue_dropped_total') or 0)} total"
+        )
     capture_age = _age_seconds(counters.get("last_capture_ok_at"))
     if capture_age is not None and capture_age < 300:
         return "active", None
@@ -211,7 +235,12 @@ def build_report(cfg: Config) -> dict[str, Any]:
     """Run one self-check pass and return the health report dict."""
     counters = _counters_snapshot()
     index_status, problems = _check_sqlite_indexes()
-    backlog: dict[str, int] = {"buffer_files": -1, "indexed_captures": -1, "backlog": 0}
+    backlog: dict[str, int] = {
+        "buffer_files": -1,
+        "indexed_captures": -1,
+        "backlog": 0,
+        "orphaned_index_rows": 0,
+    }
     if index_status == "ok":
         try:
             backlog = _index_backlog()
@@ -223,11 +252,21 @@ def build_report(cfg: Config) -> dict[str, Any]:
         counters,
         paused=paused,
         failure_streak_threshold=cfg.index_health.failure_streak_threshold,
+        queue_drop_window_seconds=max(300, cfg.index_health.tick_seconds * 2),
     )
+    index_failure_broken = (
+        int(counters.get("consecutive_index_failures") or 0)
+        >= cfg.index_health.failure_streak_threshold
+    )
+    queue_drop_age = _age_seconds(counters.get("last_queue_drop_at"))
+    recent_queue_drop = queue_drop_age is not None and queue_drop_age <= max(
+        300, cfg.index_health.tick_seconds * 2
+    )
+    index_drift = max(backlog["backlog"], backlog["orphaned_index_rows"])
     degraded = (
         index_status != "ok"
         or capture_state == "broken"
-        or backlog["backlog"] > cfg.index_health.backlog_warn_threshold
+        or index_drift > cfg.index_health.backlog_warn_threshold
         or counters.get("last_snapshot_ok") is False
     )
     report: dict[str, Any] = {
@@ -246,6 +285,8 @@ def build_report(cfg: Config) -> dict[str, Any]:
             "index_failures_total": counters.get("index_failures_total"),
             "last_index_error": counters.get("last_index_error"),
             "queue_dropped_total": counters.get("queue_dropped_total"),
+            "consecutive_queue_drops": counters.get("consecutive_queue_drops"),
+            "last_queue_drop_at": counters.get("last_queue_drop_at"),
         },
         "snapshot": {
             "last_ok": counters.get("last_snapshot_ok"),
@@ -259,11 +300,12 @@ def build_report(cfg: Config) -> dict[str, Any]:
             actions.append(
                 "restart the daemon so startup integrity can quarantine/recover the index"
             )
-        if (
-            backlog["backlog"] > cfg.index_health.backlog_warn_threshold
-            or capture_state == "broken"
-        ):
+        if index_drift > cfg.index_health.backlog_warn_threshold or index_failure_broken:
             actions.append("run `persome rebuild-captures-index --merge`")
+        if recent_queue_drop:
+            actions.append(
+                "check daemon load and capture-queue warnings; dropped triggers cannot replay"
+            )
         if counters.get("last_snapshot_ok") is False:
             actions.append("check `snapshot` alerts in the daemon log")
         report["recommended_actions"] = actions
@@ -318,6 +360,7 @@ def degradation_note() -> dict[str, Any] | None:
     if report.get("status") == "ok":
         return None
     backlog = int((report.get("backlog") or {}).get("backlog") or 0)
+    orphaned = int((report.get("backlog") or {}).get("orphaned_index_rows") or 0)
     capture_state = str((report.get("capture") or {}).get("state") or "unknown")
     index_status = str((report.get("index") or {}).get("status") or "unknown")
     parts: list[str] = []
@@ -327,11 +370,14 @@ def degradation_note() -> dict[str, Any] | None:
         parts.append("capture indexing is failing")
     if backlog:
         parts.append(f"{backlog} captured screens are not searchable yet")
+    if orphaned:
+        parts.append(f"{orphaned} capture index rows have no source file")
     return {
         "status": "degraded",
         "index": index_status,
         "capture_state": capture_state,
         "index_backlog": backlog,
+        "orphaned_index_rows": orphaned,
         "note": "; ".join(parts) + " — results may be incomplete",
     }
 
