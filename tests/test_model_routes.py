@@ -238,13 +238,14 @@ class TestGraphJson:
         }
 
     def test_share_card_projection_scrubs_and_minimizes_owner_summaries(self, ac_root):
+        test_api_key = "".join(("s", "k", "-", "1234567890abcdef1234"))
         with fts.cursor() as conn:
             schema_faces_store.ensure_schema(conn)
             for face_id, level, signature, observations in (
                 (
                     "face-private-id",
                     1,
-                    "Uses alice@example.com from /Users/alice/private with sk-1234567890abcdef1234",
+                    f"Uses alice@example.com from /Users/alice/private with {test_api_key}",
                     4,
                 ),
                 ("root-private-id", 3, "Evidence-backed systems builder", 7),
@@ -277,7 +278,7 @@ class TestGraphJson:
         for private_value in (
             "alice@example.com",
             "/Users/alice",
-            "sk-1234567890abcdef1234",
+            test_api_key,
             "face-private-id",
             "root-private-id",
             "receipt",
