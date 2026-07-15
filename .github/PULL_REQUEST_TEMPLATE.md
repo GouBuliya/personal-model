@@ -1,50 +1,50 @@
-# Goal
+# 目标
 
-- Goal document: <!-- docs/evolutions/<goal>.md -->
-- Acceptance criteria covered:
-  - <!-- Copy the exact criteria this slice proves. -->
-- Worktree lane: <!-- lane id and branch -->
-- Depends on: <!-- PR URL, branch, or "none" -->
-- Base PR: <!-- PR URL or "main" -->
+- 目标文档：<!-- docs/evolutions/<goal>.md -->
+- 本 PR 覆盖的验收标准：
+  - <!-- 复制本次切片实际验证的验收标准。 -->
+- Worktree 通道：<!-- 通道 ID 和分支名 -->
+- 依赖项：<!-- PR 链接、分支名或“无” -->
+- 基础 PR：<!-- PR 链接或 main -->
 
-# Change
+# 变更
 
-## What
+## 做了什么
 
-<!-- One or two sentences: what does this PR change? -->
+<!-- 用一两句话说明本 PR 的改动。 -->
 
-## Why
+## 为什么
 
-<!-- The problem or need. Link issues: Fixes #123 -->
+<!-- 说明待解决的问题或需求；如有关联 Issue，请填写 Fixes #123。 -->
 
-# How verified
+# 验证
 
-- Command: `make check`
-- Result: <!-- PASS with a short receipt or CI URL -->
-- Additional scoped checks:
-  - <!-- command + result -->
+- 命令：`make check`
+- 结果：<!-- PASS，并附简短回执或 CI 链接 -->
+- 其他范围内检查：
+  - <!-- 命令及结果 -->
 
-# Compound engineering
+# 复利工程
 
-- Friction found:
-  - <!-- Link each item to its classification in the goal document. -->
-- Infrastructure delta:
-  - <!-- SOP, Skill, Hook, Repository Map, verification, or "No change". -->
-- No-change justification:
-  - <!-- Required when no shared infrastructure changed. -->
-- Metrics delta:
-  - CI reruns:
-  - Rework cycles:
-  - Review-fix cycles:
-  - Retained infrastructure improvements:
+- 发现的摩擦：
+  - <!-- 链接到目标文档中的摩擦分类。 -->
+- 基建沉淀：
+  - <!-- SOP、Skill、Hook、Repository Map、验证设施，或“无变更”。 -->
+- 无变更说明：
+  - <!-- 未修改共享基建时必填。 -->
+- 指标变化：
+  - CI 重跑次数：
+  - 返工次数：
+  - Review 修复轮次：
+  - 保留的基建改进数：
 
 ---
 
-- [ ] Goal document is current and contains this lane's checkpoint
-- [ ] Acceptance criteria and canonical documentation changed with behavior
-- [ ] `make check` passes and the receipt is recorded in the goal document
-- [ ] Compound-engineering friction is classified with a retained delta or reason
-- [ ] Commits are signed off (`git commit -s`) — DCO required, see CONTRIBUTING.md
-- [ ] No real names / emails / tokens in code or test fixtures (synthetic data only)
-- [ ] Secret scan passes (`scripts/secret_scan.py`)
-- [ ] Human-authored repository text is English (`scripts/language_scan.py` passes)
+- [ ] 目标文档已更新，并包含当前通道的检查点
+- [ ] 行为变更同步更新了验收标准和权威文档
+- [ ] `make check` 已通过，回执已记录到目标文档
+- [ ] 复利工程摩擦已有分类，并记录了沉淀结果或不改进的原因
+- [ ] 提交已签署 DCO（`git commit -s`，详见 CONTRIBUTING.md）
+- [ ] 代码和测试数据不含真实姓名、邮箱或令牌，仅使用合成数据
+- [ ] Secret scan 已通过（`scripts/secret_scan.py`）
+- [ ] 除明确豁免的 PR 模板外，仓库文本使用英文（`scripts/language_scan.py` 已通过）

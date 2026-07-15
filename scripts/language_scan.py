@@ -1,7 +1,8 @@
 """Enforce English for human-authored repository text.
 
-The bundled PP-OCRv6 recognition dictionary is the only exception: its CJK
-characters are model data required to recognize a user's multilingual screen.
+The bundled PP-OCRv6 recognition dictionary is model data required for
+multilingual screens. PR templates are intentionally Chinese collaboration
+surfaces. These paths are the only CJK exceptions.
 """
 
 from __future__ import annotations
@@ -11,7 +12,11 @@ import sys
 from pathlib import Path
 
 CJK_SOURCE_TEXT = re.compile(r"[\u3000-\u303f\u3400-\u9fff\uff00-\uffef]")
-ALLOWLIST = {Path("ocr_models/PP-OCRv6_tiny_rec/inference.yml")}
+ALLOWLIST = {
+    Path(".github/PULL_REQUEST_TEMPLATE.md"),
+    Path("ocr_models/PP-OCRv6_tiny_rec/inference.yml"),
+    Path("templates/compound-engineering/.github/PULL_REQUEST_TEMPLATE.md"),
+}
 TEXT_SUFFIXES = {
     ".cff",
     ".css",
@@ -74,10 +79,10 @@ def main() -> int:
             if CJK_SOURCE_TEXT.search(line):
                 findings.append(f"{relative}:{line_number}: {line.strip()[:160]}")
     if findings:
-        print("Non-English CJK text found outside the OCR dictionary:")
+        print("Non-English CJK text found outside the language-policy allowlist:")
         print("\n".join(f"  {item}" for item in findings))
         return 1
-    print("English-language gate clean; bundled PP-OCRv6 character data is allowlisted.")
+    print("English-language gate clean; approved multilingual assets are allowlisted.")
     return 0
 
 

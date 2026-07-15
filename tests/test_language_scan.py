@@ -15,3 +15,11 @@ def test_claude_config_is_scanned_but_embedded_worktrees_are_skipped(tmp_path: P
 
     assert config in files
     assert embedded not in files
+
+
+def test_chinese_pr_templates_are_explicitly_allowlisted() -> None:
+    assert Path(".github/PULL_REQUEST_TEMPLATE.md") in language_scan.ALLOWLIST
+    assert (
+        Path("templates/compound-engineering/.github/PULL_REQUEST_TEMPLATE.md")
+        in language_scan.ALLOWLIST
+    )

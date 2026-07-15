@@ -3,8 +3,8 @@
 Goal: compound-engineering-harness
 Status: BLOCKED
 Started: 2026-07-15T20:56:00+08:00
-Updated: 2026-07-15T21:18:00+08:00
-Current PR: not-opened
+Updated: 2026-07-15T21:34:00+08:00
+Current PR: https://github.com/GouBuliya/personal-model/pull/1
 Current lane: bootstrap
 Next action: Resolve the pre-existing repository language-gate violations, then rerun make check.
 Auto-merge: authorized
@@ -65,7 +65,8 @@ Out of scope:
 
 - Preserve the current checkout's unrelated uncommitted work.
 - Implement in an isolated worktree from `main`.
-- Keep repository-authored content English and synthetic.
+- Keep repository-authored content English and synthetic, except for the
+  explicitly allowlisted Chinese PR collaboration templates.
 - Do not commit, push, or create a PR without a separate explicit request.
 - Keep `persome-core` runtime behavior unchanged.
 
@@ -109,6 +110,8 @@ use the worktree lane protocol directly.
 - Store metrics per goal to avoid a central mutable ledger and parallel merge
   conflicts.
 - Bootstrap safely through templates plus a standard-library Python renderer.
+- Use Chinese by default in both the repository PR template and the portable
+  bootstrap template, with narrow language-gate allowlisting for those files.
 
 ## Friction ledger
 
@@ -140,6 +143,14 @@ use the worktree lane protocol directly.
   `docs/design-philosophy-intent.md` contain pre-existing CJK prose.
 - Disposition: report the blocker without expanding this infrastructure change
   into an unrelated documentation translation.
+
+### F5: PR collaboration language differs from repository source language
+
+- Classification: policy
+- Evidence: contributors need Chinese PR prompts while source, prompts, and
+  durable documentation remain English.
+- Disposition: use Chinese in the two PR templates and allowlist only their
+  exact paths in the language gate.
 
 ## Compound engineering delta
 
@@ -179,15 +190,26 @@ use the worktree lane protocol directly.
 - Lane: bootstrap
 - Command: `make language`
 - Result: BLOCKED
-- Timestamp: 2026-07-15T21:18:00+08:00
-- Evidence: three pre-existing committed Markdown files contain CJK prose
+- Timestamp: 2026-07-15T21:34:00+08:00
+- Evidence: the two Chinese PR templates are explicitly exempted; only the
+  three pre-existing committed Markdown files still contain disallowed CJK
+  prose
+
+### Chinese PR template policy
+
+- Lane: bootstrap
+- Command: `uv run pytest tests/test_language_scan.py tests/test_compound_engineering.py -q`
+- Result: PASS
+- Timestamp: 2026-07-15T21:34:00+08:00
+- Evidence: 9 tests passed; exact-path template exemptions and bootstrap
+  behavior are covered
 
 ## Metrics
 
 - Start: 2026-07-15T20:56:00+08:00
 - Delivery: blocked at repository baseline gate
 - Lead time: 22 minutes to implementation-complete state
-- PRs opened: 0
+- PRs opened: 1
 - PRs merged: 0
 - CI reruns: 0
 - Rework cycles: 1
@@ -196,7 +218,8 @@ use the worktree lane protocol directly.
 
 ## Delivery record
 
-Implementation is complete on `feat/subevolution-harness`. Focused and full
-offline tests pass. The delivery remains `BLOCKED` because the existing
-English-only repository gate fails on three documents outside this change. No
-commit, push, or PR has been created.
+Implementation is complete on `feat/subevolution-harness` and PR #1 is open.
+Focused and full offline tests pass. The delivery remains `BLOCKED` because the
+existing English-only repository gate fails on three documents outside this
+change. The PR templates default to Chinese through a narrowly documented
+language-policy exception.

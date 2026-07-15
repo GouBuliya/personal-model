@@ -64,7 +64,9 @@ uv run python scripts/pii_scan.py   # must exit 0
 
 ## Repository language
 
-Human-authored source, prompts, documentation, and fixtures use English. Run
+Human-authored source, prompts, documentation, and fixtures use English. PR
+descriptions use Chinese by default, so the repository and portable-bootstrap
+PR templates are explicitly allowlisted. Run
 `uv run python scripts/language_scan.py` before pushing. Multilingual parser
 test values use Unicode escapes, and the bundled PP-OCRv6 character dictionary
 is allowlisted because changing it would break local OCR.

@@ -1,47 +1,47 @@
-# Goal
+# 目标
 
-- Goal document: <!-- docs/evolutions/<goal>.md -->
-- Acceptance criteria covered:
-  - <!-- Copy the exact criteria this slice proves. -->
-- Worktree lane: <!-- lane id and branch -->
-- Depends on: <!-- PR URL, branch, or "none" -->
-- Base PR: <!-- PR URL or "{{DEFAULT_BRANCH}}" -->
+- 目标文档：<!-- docs/evolutions/<goal>.md -->
+- 本 PR 覆盖的验收标准：
+  - <!-- 复制本次切片实际验证的验收标准。 -->
+- Worktree 通道：<!-- 通道 ID 和分支名 -->
+- 依赖项：<!-- PR 链接、分支名或“无” -->
+- 基础 PR：<!-- PR 链接或 "{{DEFAULT_BRANCH}}" -->
 
-# Change
+# 变更
 
-## What
+## 做了什么
 
-<!-- One or two sentences describing the change. -->
+<!-- 用一两句话说明本 PR 的改动。 -->
 
-## Why
+## 为什么
 
-<!-- The problem or need. Link an issue when available. -->
+<!-- 说明待解决的问题或需求；如有关联 Issue，请填写。 -->
 
-# Verification
+# 验证
 
-- Command: `make check`
-- Result: <!-- PASS with a short receipt or CI URL -->
-- Additional scoped checks:
-  - <!-- command and result -->
+- 命令：`make check`
+- 结果：<!-- PASS，并附简短回执或 CI 链接 -->
+- 其他范围内检查：
+  - <!-- 命令及结果 -->
 
-# Compound engineering
+# 复利工程
 
-- Friction found:
-  - <!-- Link to classified goal-document entries. -->
-- Infrastructure delta:
-  - <!-- SOP, Skill, Hook, Map, verification, or "No change". -->
-- No-change justification:
-  - <!-- Required when no shared infrastructure changed. -->
-- Metrics delta:
-  - CI reruns:
-  - Rework cycles:
-  - Review-fix cycles:
-  - Retained infrastructure improvements:
+- 发现的摩擦：
+  - <!-- 链接到目标文档中的摩擦分类。 -->
+- 基建沉淀：
+  - <!-- SOP、Skill、Hook、Repository Map、验证设施，或“无变更”。 -->
+- 无变更说明：
+  - <!-- 未修改共享基建时必填。 -->
+- 指标变化：
+  - CI 重跑次数：
+  - 返工次数：
+  - Review 修复轮次：
+  - 保留的基建改进数：
 
 ---
 
-- [ ] Goal document and lane checkpoint are current
-- [ ] Acceptance criteria and canonical docs changed with behavior
-- [ ] `make check` passes and has a recorded receipt
-- [ ] Friction has a retained delta or a concrete no-change reason
-- [ ] Repository commit, privacy, language, and review policies are satisfied
+- [ ] 目标文档和当前通道检查点已更新
+- [ ] 行为变更同步更新了验收标准和权威文档
+- [ ] `make check` 已通过并已记录回执
+- [ ] 摩擦项已有基建沉淀或明确的不改进原因
+- [ ] 已遵守仓库的提交、隐私、语言和评审政策
