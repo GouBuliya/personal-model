@@ -313,13 +313,24 @@ def apply_retention(
 def run_daily_backup(
     cfg: Config, *, db_path: Path | None = None, now: datetime | None = None
 ) -> Path | None:
-    """The daily-tick entry point: snapshot (verified) + retention. Never raises."""
-    # Structural violations (real corruption) still discard the snapshot;
-    # alert-only findings such as projection_reconciliation drift must not.
-    # Blocking on them left #68 with no fresh snapshot for two days — a
-    # logical 12-row drift silently vetoed every physical backup while the
-    # database itself was still perfectly copyable.
+    """The daily-tick entry point: snapshot (verified) + retention. Never raises.
+
+    ``structural_only=True``: only structural (§3.3 class 1-5) violations may
+    discard the physical snapshot. Logical reconciliation drift (e.g. the
+    alert-only ``projection_reconciliation`` check) still alerts, but must not
+    leave the owner without any recent backup — during the 2026-07-14 index
+    corruption a 12-row projection drift had silently blocked dailies for two
+    days, widening the recovery window to the last good snapshot.
+    """
+    from .. import index_health
+
     dest = create_snapshot(db_path=db_path, now=now, structural_only=True)
+    index_health.record_snapshot_outcome(
+        dest is not None,
+        None
+        if dest is not None
+        else "daily snapshot failed verification or write; see snapshot alerts",
+    )
     try:
         apply_retention(
             keep_daily=cfg.evomem.snapshot_keep_daily,

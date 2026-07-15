@@ -1252,6 +1252,23 @@ function showModelLoadError(error) {
   errorEl.hidden = false;
 }
 
+function updateHealthBanner(health) {
+  let banner = document.getElementById("index-health-banner");
+  if (!health) {
+    if (banner) banner.hidden = true;
+    return;
+  }
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id = "index-health-banner";
+    banner.setAttribute("role", "status");
+    document.body.appendChild(banner);
+  }
+  const label = health.status === "unknown" ? "Runtime health unknown" : "Evidence layer degraded";
+  banner.textContent = `${label}: ${health.note || ""} — see \`persome status\``;
+  banner.hidden = false;
+}
+
 async function loadModelOnce(force) {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), MODEL_GRAPH_TIMEOUT_MS);
@@ -1271,6 +1288,7 @@ async function loadModelOnce(force) {
     model = payload.model;
     modelGeneratedAt = payload.generated_at || "";
     modelFingerprint = nextFingerprint;
+    updateHealthBanner(payload.index_health || null);
     shareReady = Boolean(
       model.points.length || model.faces.length || model.volumes.length || model.root,
     );

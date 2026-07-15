@@ -35,7 +35,16 @@ _CORRUPTION_SIGNATURES = ("file is not a database", "database disk image is malf
 
 _MIN_SECURE_FTS_SQLITE = (3, 42, 0)
 _FTS_TABLES = ("entries", "captures_fts")
-_SECURE_FTS_MIGRATION_VERSION = 20260711
+# The legacy secure-FTS purge is two durable milestones in ``user_version``:
+# REBUILD (the FTS tables no longer contain pre-secure-delete segments) and
+# COMPACT (the zeroed pages have been checkpointed into the main file and the
+# WAL truncated, so no pre-purge page image survives in any artifact).
+_SECURE_FTS_REBUILD_VERSION = 20260711
+_SECURE_FTS_COMPACT_VERSION = 20260714
+# During the one-time purge, lock waits are bounded to this instead of the
+# connection's 10s busy timeout: a loser of the migration race must defer,
+# not queue a second full-database rewrite behind the winner.
+_PURGE_BUSY_TIMEOUT_MS = 100
 # Bump whenever a daemon-owned schema step changes. This is deliberately
 # independent from PRAGMA user_version, which already tracks the secure-FTS
 # migration. Clients require an exact match: an older binary must not assume a
@@ -515,6 +524,88 @@ def entry_metadata_map(
     }
 
 
+def _is_locked_error(exc: sqlite3.OperationalError) -> bool:
+    return any(label in str(exc).lower() for label in ("locked", "busy"))
+
+
+def _purge_legacy_fts_segments(conn: sqlite3.Connection) -> None:
+    """One-time purge of FTS segment bytes deleted before secure-delete shipped.
+
+    Two durable milestones, both recorded in ``user_version``:
+
+      1. REBUILD — both FTS tables are rebuilt from live content INSIDE ONE
+         IMMEDIATE transaction together with the version bump, so the rewrite
+         is atomic, serialized across connections and processes by SQLite's
+         write lock, and can never run twice. ``secure_delete`` zeroes the
+         legacy segments within the same commit.
+      2. COMPACT — checkpoint + VACUUM + checkpoint flushes the zeroed pages
+         into the main file and truncates the WAL so no pre-purge page image
+         survives in any artifact. Best-effort per connection, retried until
+         one connection finds a quiet moment; the daily
+         ``wal_checkpoint(TRUNCATE)`` tick also finishes a pending WAL flush.
+
+    2026-07-13 index.db corruption postmortem: the previous single-milestone
+    form RAISED on a busy checkpoint after the rebuild had already committed,
+    so on a live daemon (which always has concurrent readers) the migration
+    never recorded progress and re-ran the full double-FTS rebuild + VACUUM
+    on every ``connect()`` for days — starving capture indexing, failing the
+    daily ``VACUUM INTO`` snapshot (connect raised before the copy), and
+    keeping a full-database rewrite permanently racing every other writer and
+    the hard-exit daemon restart path. A connection must NEVER be refused
+    because the one-time compaction cannot win a quiet moment right now.
+    """
+    user_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    if user_version >= _SECURE_FTS_COMPACT_VERSION:
+        return
+    # Bound lock waits: a migration loser defers to the winner instead of
+    # stalling its caller for the connection's full 10s busy timeout.
+    conn.execute(f"PRAGMA busy_timeout={_PURGE_BUSY_TIMEOUT_MS}")
+    try:
+        if user_version < _SECURE_FTS_REBUILD_VERSION:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError as exc:
+                if not _is_locked_error(exc):
+                    raise
+                logger.info("legacy FTS purge deferred: another writer owns the database")
+                return
+            try:
+                # Re-check under the write lock: the racing winner may have
+                # already rebuilt while this connection waited.
+                user_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+                if user_version < _SECURE_FTS_REBUILD_VERSION:
+                    for table in _FTS_TABLES:
+                        conn.execute(f"INSERT INTO {table}({table}) VALUES('rebuild')")
+                    conn.execute(f"PRAGMA user_version={_SECURE_FTS_REBUILD_VERSION}")
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+        checkpoint = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        if checkpoint is not None and int(checkpoint[0]) != 0:
+            logger.info("legacy FTS compaction deferred: WAL busy")
+            return
+        # A racing connection may have finished compaction while this one was
+        # checkpointing; VACUUM is a full-file rewrite, never repeat it.
+        if int(conn.execute("PRAGMA user_version").fetchone()[0]) >= _SECURE_FTS_COMPACT_VERSION:
+            return
+        try:
+            conn.execute("VACUUM")
+        except sqlite3.OperationalError as exc:
+            if not _is_locked_error(exc):
+                raise
+            logger.info("legacy FTS compaction deferred: VACUUM lost the database lock")
+            return
+        conn.execute(f"PRAGMA user_version={_SECURE_FTS_COMPACT_VERSION}")
+        checkpoint = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        if checkpoint is not None and int(checkpoint[0]) != 0:
+            # The zeroed post-VACUUM pages are committed; only the final WAL
+            # truncate is pending, and the daily checkpoint tick finishes it.
+            logger.info("legacy FTS compaction: final WAL truncate deferred")
+    finally:
+        conn.execute("PRAGMA busy_timeout=10000")
+
+
 def _disable_checkpoint_on_close(conn: sqlite3.Connection) -> None:
     """Make every Persome connection close without an implicit WAL checkpoint."""
     option = sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE
@@ -707,21 +798,7 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     try:
         for table in _FTS_TABLES:
             conn.execute(f"INSERT INTO {table}({table}, rank) VALUES('secure-delete', 1)")
-        # Releases before the secure-delete boundary may contain terms from
-        # rows that were logically deleted while FTS5 retained old segment
-        # bytes. Rebuild from live content and VACUUM exactly once per DB.
-        user_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-        if user_version < _SECURE_FTS_MIGRATION_VERSION:
-            for table in _FTS_TABLES:
-                conn.execute(f"INSERT INTO {table}({table}) VALUES('rebuild')")
-            checkpoint = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-            if checkpoint is not None and int(checkpoint[0]) != 0:
-                raise sqlite3.OperationalError("legacy FTS purge could not checkpoint WAL")
-            conn.execute("VACUUM")
-            conn.execute(f"PRAGMA user_version={_SECURE_FTS_MIGRATION_VERSION}")
-            checkpoint = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-            if checkpoint is not None and int(checkpoint[0]) != 0:
-                raise sqlite3.OperationalError("legacy FTS purge left a busy WAL")
+        _purge_legacy_fts_segments(conn)
     except sqlite3.Error as exc:
         conn.close()
         raise RuntimeError("SQLite secure FTS5 setup or legacy-content purge failed") from exc
@@ -812,7 +889,7 @@ def _requires_exclusive_connect_setup(db_path: Path) -> bool:
         )
         _disable_checkpoint_on_close(probe)
         row = probe.execute("PRAGMA user_version").fetchone()
-        return row is None or int(row[0]) < _SECURE_FTS_MIGRATION_VERSION
+        return row is None or int(row[0]) < _SECURE_FTS_COMPACT_VERSION
     except sqlite3.Error:
         # Let the full connection produce the actionable corruption/setup
         # error, but do so only after excluding every cooperating transaction.

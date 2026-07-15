@@ -264,6 +264,36 @@ If `captures_fts` falls out of sync (e.g. capture worker crashed mid-write, or t
 persome rebuild-captures-index
 ```
 
+## Index health and the capture heartbeat
+
+A runtime that is silent by design must let its owner tell *intentional*
+silence from a *broken* pipeline. The capture path feeds an in-process
+heartbeat (`src/persome/index_health.py`): every buffer write, every
+write-through FTS insert outcome, and every bounded-queue drop is recorded.
+The daemon's `index-health` task (default every `index_health.tick_seconds`
+= 300s; runs in `--capture-only` too) then:
+
+- verifies the main B-tree (`PRAGMA quick_check`) plus both FTS5 inverted
+  indexes (`captures_fts` is reconciled against its external-content
+  `captures` table);
+- measures the buffer-vs-index backlog (on-disk captures that search cannot
+  see yet);
+- classifies the pipeline as `active` / `paused` / `idle` / `broken`
+  (`broken` = `index_health.failure_streak_threshold` consecutive FTS insert
+  failures);
+- publishes the report to the private `~/.persome/.index-health.json`
+  sidecar.
+
+The report surfaces on `persome status` (Index Health / Capture Pipeline /
+Index Backlog rows), on `GET /status` (`index_health`), coarsely on the
+unauthenticated `GET /health` (`index`, `capture_pipeline` states only), and
+as a warning banner in the `/model` viewer. When the evidence chain is
+unavailable, downstream readers degrade explicitly: `search_captures`
+returns an in-band `index_health` note while degraded, and raises an
+actionable error instead of a raw SQLite traceback when the index is
+corrupt. The self-check only observes — repair stays with startup integrity
+recovery and `persome rebuild-captures-index`.
+
 ## Pause
 
 ```bash

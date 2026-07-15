@@ -62,6 +62,7 @@ class TestRegistryEnabledPredicates:
             "session",
             "reducer-retry",
             "daily-safety-net",
+            "index-health",
             "wal-checkpoint",
             "timeline",
             "flush",
@@ -74,6 +75,7 @@ class TestRegistryEnabledPredicates:
             "session",
             "reducer-retry",
             "daily-safety-net",
+            "index-health",
             "wal-checkpoint",
             "mcp",
         }

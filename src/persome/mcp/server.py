@@ -25,7 +25,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 
-from .. import __version__
+from .. import __version__, index_health
 from ..config import Config
 from ..config import load as load_config
 from ..logger import get
@@ -1472,7 +1472,14 @@ def build_server(
             app_name=app_name,
             limit=limit,
         )
-        return json.dumps({"query": query, "results": results}, ensure_ascii=False)
+        payload: dict[str, Any] = {"query": query, "results": results}
+        # When the evidence chain is degraded (index corruption, failing
+        # capture indexing, or an unindexed-buffer backlog), say so in-band —
+        # an empty/thin result set must never masquerade as "nothing happened".
+        health_note = index_health.degradation_note()
+        if health_note is not None:
+            payload["index_health"] = health_note
+        return json.dumps(payload, ensure_ascii=False)
 
     @server.tool()
     def current_context(

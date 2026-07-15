@@ -380,14 +380,20 @@ def _check_evo_projection(conn: sqlite3.Connection) -> list[Violation]:
     evo_heads = conn.execute(
         "SELECT COUNT(*) FROM evo_nodes WHERE is_latest=1 AND status='active'"
     ).fetchone()[0]
+    # Compare like-for-like: the backfill only maps TOP-LEVEL memory files
+    # into evo_nodes (it skips subdirectory markdown such as skills/, which is
+    # direct-authored, never evo-projected). Counting subdirectory entries on
+    # this side produced a permanent false drift (12 skills rows, 2026-07-14)
+    # that read as reconciliation failure on every snapshot verification.
     live_entries = conn.execute(
-        "SELECT COUNT(*) FROM entries WHERE superseded=0 AND prefix != 'event'"
+        "SELECT COUNT(*) FROM entries"
+        " WHERE superseded=0 AND prefix != 'event' AND path NOT LIKE '%/%'"
     ).fetchone()[0]
     if evo_heads != live_entries:
         return [
             Violation(
                 "projection_reconciliation",
-                f"evo_nodes active heads ({evo_heads}) != non-event "
+                f"evo_nodes active heads ({evo_heads}) != non-event top-level "
                 f"entries.superseded=0 rows ({live_entries})",
                 structural=False,
             )

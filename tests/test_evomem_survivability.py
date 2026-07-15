@@ -370,9 +370,10 @@ def test_structural_only_snapshot_tolerates_alert_only_findings(
 ) -> None:
     alert_only = [integrity.Violation("projection_reconciliation", "count drift", False)]
     monkeypatch.setattr(integrity, "verify_snapshot", lambda path: list(alert_only))
-    # Default semantics: any violation rejects the snapshot.
+    # Default semantics (strict callers): any violation rejects the snapshot.
+    # The daily tick now opts into structural_only=True via run_daily_backup.
     assert backup.create_snapshot() is None
-    # Daily-tick/backfill semantics: alert-only findings alert but don't reject.
+    # structural_only semantics: alert-only findings alert but don't reject.
     dest = backup.create_snapshot(structural_only=True)
     assert dest is not None and dest.exists()
     assert any(
@@ -606,3 +607,33 @@ def test_wal_checkpoint_truncate_works(ac_root: Path) -> None:
     busy, log_pages, ckpt = fts.checkpoint("TRUNCATE")
     assert busy == 0
     assert log_pages >= 0 and ckpt >= 0
+
+
+def test_evo_projection_ignores_subdirectory_entries(evo_table: Path) -> None:
+    """skills/ markdown is direct-authored and never backfilled into evo_nodes;
+    its live entries must not count against head-set reconciliation (the
+    2026-07-14 permanent 12-row false drift that blocked daily snapshots)."""
+    with fts.cursor() as conn:
+        entries.create_file(conn, name="project-s.md", description="d", tags=[])
+        entries.append_entry(conn, name="project-s.md", content="tracked", tags=[])
+        entries.create_file(conn, name="skills/skill-demo.md", description="d", tags=[])
+        entries.append_entry(conn, name="skills/skill-demo.md", content="direct", tags=[])
+        entries.append_entry(conn, name="skills/skill-demo.md", content="direct-2", tags=[])
+        _insert_evo(conn, "only-head")  # matches the 1 top-level live entry
+        violations = integrity.run_checks(conn)
+    assert not _checks_named(violations, "projection_reconciliation")
+
+
+def test_daily_backup_survives_alert_only_reconciliation_drift(
+    ac_root: Path, alerts: list, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """run_daily_backup must not let logical drift block the physical snapshot:
+    on 2026-07-14 a 12-row projection drift silently discarded every daily
+    for two days, widening the corruption-recovery window."""
+    alert_only = [integrity.Violation("projection_reconciliation", "count drift", False)]
+    monkeypatch.setattr(integrity, "verify_snapshot", lambda path: list(alert_only))
+    dest = backup.run_daily_backup(Config())
+    assert dest is not None and dest.exists()
+    assert any(
+        t == "integrity_alert" and p["check"] == "snapshot_verification" for _, t, p in alerts
+    )

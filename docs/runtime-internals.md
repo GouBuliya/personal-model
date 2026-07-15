@@ -183,6 +183,21 @@ persome launchagent status
 tail -f ~/.persome/logs/launchd.err.log
 ```
 
+## Index health sidecar
+
+`~/.persome/.index-health.json` (owner-only, atomically replaced) is the
+latest report from the daemon's periodic `index-health` task: main-index and
+FTS5 integrity, buffer-vs-index backlog, the capture heartbeat
+(`active`/`paused`/`idle`/`broken`), and the last daily-snapshot outcome. It
+exists so status surfaces and stdio MCP processes can read health without
+opening the database — when the database itself is the casualty, the sidecar
+is still readable. Readers must treat a report older than three ticks as
+`stale` (published as such by `index_health.read_report`) rather than trust
+a dead daemon's last good word. Configuration lives under `[index_health]`
+in `config.toml` (`enabled`, `tick_seconds`, `failure_streak_threshold`,
+`backlog_warn_threshold`).
+
+
 The generated LaunchAgent applies a 30-second throttle between rapid exits and
 relaunches so a crash loop cannot immediately stack a new Runtime generation
 onto failing SQLite siblings.

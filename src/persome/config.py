@@ -280,6 +280,23 @@ class SchemaConfig:
 
 
 @dataclass
+class IndexHealthConfig:
+    # Periodic FTS/main-index self-check + capture heartbeat (index_health.py).
+    # A silent-by-default runtime must let its owner distinguish intentional
+    # silence from a broken pipeline, so this stays ON — the pass is local,
+    # read-mostly, and bounded by the FTS index size.
+    enabled: bool = True
+    tick_seconds: int = 300
+    # Consecutive write-through captures-FTS insert failures before the capture
+    # pipeline reports ``broken`` (one-off hiccups under write contention are
+    # normal; a streak means every new capture is invisible to search).
+    failure_streak_threshold: int = 3
+    # Buffer-vs-index gap above which health degrades: this many on-disk
+    # captures are not searchable yet (`persome rebuild-captures-index`).
+    backlog_warn_threshold: int = 50
+
+
+@dataclass
 class EvomemConfig:
     # Snapshot and integrity side channels for evomem write authority.
     #
@@ -439,6 +456,7 @@ class Config:
     orphan_reaper: OrphanReaperConfig = field(default_factory=OrphanReaperConfig)
     skill_check: SkillCheckConfig = field(default_factory=SkillCheckConfig)
     schema: SchemaConfig = field(default_factory=SchemaConfig)
+    index_health: IndexHealthConfig = field(default_factory=IndexHealthConfig)
     # Cross-cutting runtime/model feature flags. Capture privacy controls live
     # under CaptureConfig because capture workers receive that object directly.
     api_require_local_origin: bool = True
@@ -557,6 +575,7 @@ def load(path: Path | None = None) -> Config:
         orphan_reaper=_build_dataclass(OrphanReaperConfig, _as_dict(raw.get("orphan_reaper"))),
         skill_check=_build_dataclass(SkillCheckConfig, _as_dict(raw.get("skill_check"))),
         schema=_build_dataclass(SchemaConfig, _as_dict(raw.get("schema"))),
+        index_health=_build_dataclass(IndexHealthConfig, _as_dict(raw.get("index_health"))),
         # Competitive-enhancement flat toggles (spec 2026-06-23): top-level TOML
         # scalars so config.toml can override the safe defaults.
         api_require_local_origin=bool(raw.get("api_require_local_origin", True)),

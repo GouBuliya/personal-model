@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .. import paths
+from .. import index_health, paths
 from ..capture import s1_parser, screenshot_crypto
 from ..capture.timestamps import (
     parse_capture_path_timestamp,
@@ -312,16 +312,31 @@ def search_captures(
     up with `read_recent_capture(at=<timestamp>, app_name=<app>)` for the
     full visible_text + screenshot.
     """
-    with fts_store.cursor() as conn:
-        hits = fts_store.search_captures(
-            conn,
-            query=query,
-            since=since,
-            until=until,
-            app_name=app_name,
-            limit=limit,
-        )
-        indexed_text = {hit.id: fts_store.get_capture_visible_text(conn, hit.id) for hit in hits}
+    try:
+        with fts_store.cursor() as conn:
+            hits = fts_store.search_captures(
+                conn,
+                query=query,
+                since=since,
+                until=until,
+                app_name=app_name,
+                limit=limit,
+            )
+            indexed_text = {
+                hit.id: fts_store.get_capture_visible_text(conn, hit.id) for hit in hits
+            }
+    except sqlite3.Error as exc:
+        # Degrade explicitly instead of leaking a raw SQLite traceback: the
+        # evidence chain is unavailable, and the caller must not mistake that
+        # for "nothing matched".
+        if index_health.is_corruption_error(exc):
+            raise RuntimeError(
+                "captures index unavailable (database/FTS corruption: "
+                f"{exc}); the raw-capture evidence layer is degraded and results "
+                "would be incomplete. Check `persome status`, then rebuild with "
+                "`persome rebuild-captures-index --merge`."
+            ) from exc
+        raise
     out: list[dict[str, Any]] = []
     for h in hits:
         projection = _buffer_projection(h.id)

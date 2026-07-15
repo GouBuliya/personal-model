@@ -280,6 +280,25 @@ writes shadow edges first, but the same model build promotes edges that already
 meet the evidence floor and shared per-source fan-out cap; enabling it can
 therefore change retrieval and Line output immediately on an existing history.
 
+## Index health
+
+```toml
+[index_health]
+enabled = true
+tick_seconds = 300
+failure_streak_threshold = 3
+backlog_warn_threshold = 50
+```
+
+The daemon's periodic self-check over the main SQLite B-tree and both FTS5
+indexes, plus the capture heartbeat that separates intentional silence
+(`paused`, `idle`) from a broken pipeline (`broken`). Reports publish to the
+owner-only `.index-health.json` sidecar and surface through `persome status`,
+`GET /health` / `GET /status`, the `/model` viewer banner, and the
+`search_captures` degradation note. See
+[`runtime-internals.md`](runtime-internals.md) and
+[`capture.md`](capture.md).
+
 ## Higher geometry
 
 ```toml

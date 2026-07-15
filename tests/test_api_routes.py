@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from persome import __version__
+from persome import __version__, index_health
 from persome.api import build_api_app, routes
 
 
@@ -32,6 +32,8 @@ def test_health_returns_ok(monkeypatch) -> None:
             "ocr_worker": "ready",
             "ocr_enabled": True,
             "ocr_tier": "tiny",
+            "index": "unknown",
+            "capture_pipeline": "unknown",
         },
     }
 
@@ -59,6 +61,8 @@ def test_health_reports_enabled_ocr_degradation(monkeypatch) -> None:
         "ocr_worker": "not_started",
         "ocr_enabled": True,
         "ocr_tier": "tiny",
+        "index": "unknown",
+        "capture_pipeline": "unknown",
     }
 
 
@@ -77,6 +81,8 @@ def test_health_reports_failed_daemon_ocr_worker(monkeypatch) -> None:
         "ocr_worker": "failed",
         "ocr_enabled": True,
         "ocr_tier": "tiny",
+        "index": "unknown",
+        "capture_pipeline": "unknown",
     }
 
 
@@ -95,7 +101,35 @@ def test_health_reports_warming_daemon_ocr_worker_as_degraded(monkeypatch) -> No
         "ocr_worker": "warming",
         "ocr_enabled": True,
         "ocr_tier": "tiny",
+        "index": "unknown",
+        "capture_pipeline": "unknown",
     }
+
+
+def test_health_coarsens_private_capture_and_index_states(monkeypatch) -> None:
+    monkeypatch.setattr(
+        routes.ocr_health,
+        "inspect",
+        lambda capture: SimpleNamespace(enabled=False, ready=True, state="disabled", tier="none"),
+    )
+    monkeypatch.setattr(routes.ocr_health, "worker_state", lambda: "not_started")
+    monkeypatch.setattr(
+        index_health,
+        "read_report",
+        lambda: {
+            "status": "degraded",
+            "index": {"status": "corrupt"},
+            "capture": {"state": "paused"},
+        },
+    )
+    client = TestClient(build_api_app(auth_enabled=False))
+
+    data = client.get("/health").json()["data"]
+
+    assert data["status"] == "degraded"
+    assert data["index"] == "degraded"
+    assert data["capture_pipeline"] == "ok"
+    assert "paused" not in data.values()
 
 
 def test_onboarding_capture_returns_exact_daemon_receipt(tmp_path, monkeypatch) -> None:

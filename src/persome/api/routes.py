@@ -224,17 +224,50 @@ router = APIRouter()
 
 @router.get("/health", response_model=ApiResponse, tags=["system"])
 def health() -> ApiResponse:
-    """Return liveness plus the configured local-OCR readiness state."""
+    """Return liveness plus OCR readiness and coarse index/capture health.
+
+    This is the one unauthenticated route, so it only exposes non-personal
+    component states (``ok`` / ``degraded`` / ``unknown``), never counts,
+    paths, or capture content — those live on the bearer-protected /status.
+    """
+    from .. import index_health
+
     current = ocr_health.inspect(_get_cfg().capture)
     worker = ocr_health.worker_state()
-    status = "degraded" if current.enabled and (not current.ready or worker != "ready") else "ok"
+    degraded = current.enabled and (not current.ready or worker != "ready")
+
+    report = index_health.read_report()
+    if report is None or report.get("stale"):
+        index_state = "unknown"
+        capture_state = "unknown"
+    else:
+        raw_index_state = str((report.get("index") or {}).get("status") or "unknown")
+        raw_capture_state = str((report.get("capture") or {}).get("state") or "unknown")
+        index_state = (
+            "ok"
+            if raw_index_state == "ok"
+            else "unknown"
+            if raw_index_state == "unknown"
+            else "degraded"
+        )
+        capture_state = (
+            "ok"
+            if raw_capture_state in {"active", "idle", "paused"}
+            else "unknown"
+            if raw_capture_state == "unknown"
+            else "degraded"
+        )
+        if report.get("status") != "ok":
+            degraded = True
     return ApiResponse(
         data={
-            "status": status,
+            "status": "degraded" if degraded else "ok",
             "ocr": current.state,
             "ocr_worker": worker,
             "ocr_enabled": current.enabled,
             "ocr_tier": current.tier,
+            "index": index_state,
+            "capture_pipeline": capture_state,
         }
     )
 
@@ -355,6 +388,13 @@ def status(check_models: bool = False) -> ApiResponse:
         latest = newest_capture_path(bufs)
         last = latest.name if latest else "(none)"
         data["buffer"] = f"{len(bufs)} files, last: {last}"
+
+    # Owner-facing index health + capture heartbeat: the sidecar the daemon's
+    # index-health tick publishes, so a broken pipeline is visible here even
+    # when this route is served by a different process than the daemon.
+    from .. import index_health
+
+    data["index_health"] = index_health.read_report() or {"status": "unknown"}
 
     with fts.cursor() as conn:
         sess_row = conn.execute(
@@ -509,6 +549,13 @@ def model_graph() -> dict[str, Any]:
             "generated_at": datetime.now().astimezone().isoformat(),
             "model": snapshot,
         }
+        # Surface evidence-layer degradation in the viewer: a model rendered
+        # over a broken capture/index pipeline must say so, not look current.
+        from .. import index_health
+
+        health_note = index_health.degradation_note()
+        if health_note is not None:
+            payload["index_health"] = health_note
         _model_graph_cache = (root_key, time.monotonic(), payload)
         return payload
 

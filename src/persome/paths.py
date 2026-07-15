@@ -115,6 +115,15 @@ def writer_state() -> Path:
     return root() / ".writer-state.json"
 
 
+def index_health_file() -> Path:
+    """Latest index-health/capture-heartbeat report published by the daemon.
+
+    Written by ``index_health.check_once`` on every health tick; read by the
+    CLI, REST status surfaces, and MCP stdio processes so downstream features
+    can degrade explicitly when the evidence chain is unavailable."""
+    return root() / ".index-health.json"
+
+
 def integrity_recovery_marker() -> Path:
     """One-time marker written by the startup integrity check when it had to
     quarantine a corrupt DB / config (#202). Operators and embedding clients

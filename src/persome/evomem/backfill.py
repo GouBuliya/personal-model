@@ -227,7 +227,12 @@ def _build_nodes(report: BackfillReport, *, user_id: str, agent_id: str) -> list
 
 
 def _fts_live_head_ids(conn: sqlite3.Connection) -> set[str]:
-    rows = conn.execute("SELECT id FROM entries WHERE superseded=0 AND prefix != 'event'")
+    # Same universe as _build_nodes: top-level memory files only. Subdirectory
+    # markdown (skills/) is skipped by the backfill, so counting its entries
+    # here made head-set equality impossible by construction.
+    rows = conn.execute(
+        "SELECT id FROM entries WHERE superseded=0 AND prefix != 'event' AND path NOT LIKE '%/%'"
+    )
     return {r["id"] for r in rows}
 
 
