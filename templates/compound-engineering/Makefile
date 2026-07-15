@@ -1,0 +1,6 @@
+.PHONY: check
+
+CHECK_COMMAND = {{CHECK_COMMAND}}
+
+check:
+	$(CHECK_COMMAND)

@@ -17,6 +17,9 @@ The default gate is fully offline: no network, no API key. LLM calls are mocked
 via `PERSOME_LLM_MOCK=1`.
 
 ```bash
+# Complete local gate used by compound-engineering deliveries
+make check
+
 # Offline unit gate (what CI runs; ~2 min)
 PERSOME_LLM_MOCK=1 uv run pytest -m "not macos and not integration" -q
 
@@ -69,11 +72,21 @@ is allowlisted because changing it would break local OCR.
 ## Branches and pull requests
 
 1. Fork (or branch) off `main`; name branches `feat/<scope>`, `fix/<scope>`,
-   `docs/<scope>`, `chore/<scope>`.
+   `docs/<scope>`, or `chore/<scope>`. Compound-engineering lanes use
+   `deliver/<goal>/<lane>-<slice>` and follow `docs/ai-delivery-sop.md`.
 2. Keep commits in Conventional Commit style: `type(scope): summary`.
 3. Open the PR against `main` and fill in the template (What / Why / How
    verified).
 4. CI must be green: offline test gate + PII scan on ubuntu and macos runners.
+
+To enable the tracked pre-push policy for delivery lanes in a checkout:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+This is an explicit developer setup step; repository automation does not change
+Git configuration.
 
 ## Contributor acknowledgements
 

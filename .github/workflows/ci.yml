@@ -57,13 +57,13 @@ jobs:
             --require-hashes --disable-pip --progress-spinner off
 
       - name: Lint (ruff check)
-        run: uv run --no-sync ruff check .
+        run: make lint-check
 
       - name: Format (ruff check)
-        run: uv run --no-sync ruff format --check .
+        run: make format-check
 
       - name: Shell syntax
-        run: bash -n install.sh uninstall.sh resources/*.sh
+        run: make shell
 
       - name: Apple Health Swift package
         if: runner.os == 'macOS'
@@ -79,23 +79,21 @@ jobs:
         # The default offline gate: no network, no API key. Markers deselected:
         #   macos       — needs real AX permission / Swift capture helpers
         #   integration — talks to real LLM providers
-        env:
-          PERSOME_LLM_MOCK: "1"
-        run: uv run --no-sync pytest -m "not macos and not integration" -q
+        run: make test
 
       - name: PII scan
         # Hard privacy gate: the whole tree (source + test fixtures) must be
         # free of real names / emails / tokens. Must exit 0.
-        run: uv run --no-sync python scripts/pii_scan.py
+        run: make pii
 
       - name: Secret and token scan
-        run: uv run --no-sync python scripts/secret_scan.py
+        run: make secret
 
       - name: English-language source gate
-        run: uv run --no-sync python scripts/language_scan.py
+        run: make language
 
       - name: Documentation links and assets
-        run: uv run --no-sync python scripts/check_doc_links.py
+        run: make docs
 
       - name: Synthetic MCP transport smoke
         env:

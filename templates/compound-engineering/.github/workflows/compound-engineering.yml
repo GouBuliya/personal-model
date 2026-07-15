@@ -1,0 +1,29 @@
+name: Compound engineering
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  delivery-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate delivery goal and branch policy
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: |
+          .githooks/pre-push --check-range "$BASE_SHA" "$HEAD_SHA" "$HEAD_BRANCH"
+
+      # Add language/runtime setup above this step when the repository needs it.
+      - name: Run repository verification contract
+        run: make check
