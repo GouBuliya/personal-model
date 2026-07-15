@@ -21,6 +21,15 @@ daemon starts no OS watcher. Onboarding proves that ingest runner is ready
 instead of manufacturing a daemon AX capture. This mode requires an enabled
 HTTP transport because the authenticated endpoint is its only input channel.
 
+Owner-selected mobile observations join the same S1 path through the paired
+companion bridge and loopback-only `/mobile/events/ingest`. The request's
+`Idempotency-Key` must equal `event_id`. A durable `(device.id, event_id)`
+receipt and deterministic capture ID make bridge retries and process-loss
+recovery idempotent; identity reuse with different content is rejected. Mobile
+captures preserve the timezone-aware owner-reported `captured_at`, a separate
+Runtime `received_at`, and explicit paired-bridge provenance. Distinct event
+identities are never collapsed by screen-content deduplication.
+
 ## Two signal sources
 
 The following two sources apply to daemon capture mode.

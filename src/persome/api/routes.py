@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from .. import __version__, paths, runtime_pid
@@ -38,7 +38,13 @@ from ..security.auth import (
     issue_browser_bootstrap_nonce,
 )
 from ..store import fts, health_events
-from .models import ApiResponse, CaptureIngestBody, HealthEventsImportBody, ModelPing
+from .models import (
+    ApiResponse,
+    CaptureIngestBody,
+    HealthEventsImportBody,
+    MobileEventIngestBody,
+    ModelPing,
+)
 
 logger = get("persome.api")
 
@@ -499,6 +505,26 @@ def import_health_events(body: HealthEventsImportBody) -> ApiResponse:
             [deletion.model_dump() for deletion in body.deleted_events],
         )
     return ApiResponse(data={"schema_version": body.schema_version, **result})
+
+
+@router.post("/mobile/events/ingest", response_model=ApiResponse, tags=["capture"])
+def ingest_mobile_event(
+    body: MobileEventIngestBody,
+    idempotency_key: str = Header(description="Must equal the immutable event_id"),
+) -> ApiResponse:
+    """Ingest one high-signal observation from a paired mobile companion.
+
+    Pairing and transport terminate in an owner-controlled desktop bridge. This
+    Runtime endpoint remains bearer-authenticated and loopback-only; the bridge
+    forwards the validated event into the canonical capture pipeline.
+    """
+    if idempotency_key != body.event_id:
+        raise HTTPException(status_code=400, detail="idempotency key must equal event_id")
+    try:
+        result = scheduler.ingest_mobile_event(_get_cfg(), body.model_dump(mode="json"))
+    except scheduler.MobileEventConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ApiResponse(data=result)
 
 
 # ─── Personal model ───────────────────────────────────────────────────────

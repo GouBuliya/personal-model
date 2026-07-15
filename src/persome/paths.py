@@ -55,6 +55,11 @@ def session_model_lock() -> Path:
     return root() / "session-model.lock"
 
 
+def mobile_event_ingest_lock() -> Path:
+    """Cross-process serialization for mobile identity claim and capture persistence."""
+    return root() / "mobile-event-ingest.lock"
+
+
 def model_build_manifest() -> Path:
     return root() / "model-build.json"
 

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..security.body_limit import HEALTH_IMPORT_MAX_REQUEST_BODY_BYTES
 
@@ -20,6 +20,7 @@ MAX_CAPTURE_AX_TREE_BYTES = 8 * 1024 * 1024
 MAX_HEALTH_EVENTS_PER_REQUEST = 1000
 MAX_HEALTH_METADATA_BYTES = 64 * 1024
 MAX_HEALTH_STRING_VALUE_BYTES = 4 * 1024
+MAX_MOBILE_EVENT_TEXT_BYTES = 512 * 1024
 
 
 def _json_size(value: Any) -> int:
@@ -191,4 +192,60 @@ class HealthEventsImportBody(BaseModel):
             raise ValueError(
                 f"health import payload exceeds {HEALTH_IMPORT_MAX_REQUEST_BODY_BYTES} bytes"
             )
+        return self
+
+
+class MobileDevice(BaseModel):
+    """Stable, non-secret identity attached to a mobile observation."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    id: str = Field(min_length=1, max_length=128)
+    platform: str = Field(pattern="^(ios|android)$")
+    name: str | None = Field(default=None, max_length=128)
+
+
+class MobileEventIngestBody(BaseModel):
+    """One owner-initiated observation from a paired Persome companion."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    schema_version: int = Field(default=1, ge=1, le=1)
+    event_id: str = Field(min_length=1, max_length=128)
+    captured_at: datetime | None = Field(
+        default=None,
+        description="Owner-reported, timezone-aware capture time; server receipt time is separate",
+    )
+    device: MobileDevice
+    kind: str = Field(
+        pattern="^(share|text|url|voice|photo|file|location|usage)$",
+        description="How the mobile observation was produced",
+    )
+    source_app: str | None = Field(default=None, max_length=128)
+    title: str | None = Field(default=None, max_length=512)
+    text: str | None = Field(default=None)
+    url: str | None = Field(default=None, max_length=8192)
+    note: str | None = Field(default=None, max_length=4096)
+    sensitivity: str = Field(default="private", pattern="^(private|sensitive)$")
+
+    @field_validator("captured_at")
+    @classmethod
+    def _aware_plausible_capture_time(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("captured_at must include a timezone offset")
+        if value.astimezone(UTC) > datetime.now(UTC) + timedelta(minutes=5):
+            raise ValueError("captured_at is too far in the future")
+        return value
+
+    @model_validator(mode="after")
+    def _valid_mobile_event(self) -> MobileEventIngestBody:
+        if not any(
+            value and value.strip() for value in (self.title, self.text, self.url, self.note)
+        ):
+            raise ValueError("mobile event must include title, text, url, or note")
+        text_bytes = len((self.text or "").encode("utf-8"))
+        if text_bytes > MAX_MOBILE_EVENT_TEXT_BYTES:
+            raise ValueError(f"text exceeds {MAX_MOBILE_EVENT_TEXT_BYTES} bytes")
         return self

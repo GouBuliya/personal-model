@@ -131,8 +131,10 @@ model stages report degradation rather than silently claiming success.
 - Local clients installed by Persome use stdio by default, so no bearer is
   copied into their configuration. Explicit `install mcp-json --http` writes
   an authenticated owner-only file that must not be committed or shared.
-- `/captures/ingest` is a trusted local producer interface, not a public upload
-  endpoint.
+- `/captures/ingest` and `/mobile/events/ingest` are trusted loopback producer
+  interfaces, not public upload endpoints. The companion's pinned-TLS bridge
+  holds the Runtime bearer locally and gives phones only hashed-at-rest,
+  expiring, revocable device sessions.
 - MCP tool execution itself has no provider egress, but a connected agent may
   send returned personal data to its own model provider.
 - `/model/graph` is a raw owner-local inspection surface. Default CLI/MCP model
