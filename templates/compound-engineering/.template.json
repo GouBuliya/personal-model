@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "template_version": 1,
+  "files": [
+    {
+      "path": "docs/ai-delivery-sop.md"
+    },
+    {
+      "path": ".claude/skills/deliver/SKILL.md"
+    },
+    {
+      "path": ".githooks/pre-push",
+      "mode": "0755"
+    },
+    {
+      "path": ".github/PULL_REQUEST_TEMPLATE.md"
+    },
+    {
+      "path": ".github/workflows/compound-engineering.yml"
+    },
+    {
+      "path": "Makefile"
+    },
+    {
+      "path": "docs/repository-map.md"
+    },
+    {
+      "path": "docs/evolutions/GOAL_TEMPLATE.md"
+    }
+  ]
+}

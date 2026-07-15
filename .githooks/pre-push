@@ -1,0 +1,248 @@
+#!/bin/sh
+
+set -eu
+
+ZERO_OID=0000000000000000000000000000000000000000
+
+error() {
+    printf 'compound-engineering pre-push: %s\n' "$*" >&2
+}
+
+normalize_branch() {
+    case "$1" in
+        refs/heads/*) printf '%s\n' "${1#refs/heads/}" ;;
+        *) printf '%s\n' "$1" ;;
+    esac
+}
+
+default_branch() {
+    remote_name=$1
+    remote_head=$(git symbolic-ref --quiet "refs/remotes/${remote_name}/HEAD" 2>/dev/null || true)
+    if [ -n "$remote_head" ]; then
+        printf '%s\n' "${remote_head#refs/remotes/${remote_name}/}"
+    elif git show-ref --verify --quiet refs/heads/main; then
+        printf '%s\n' main
+    else
+        printf '%s\n' master
+    fi
+}
+
+contains_line() {
+    text=$1
+    needle=$2
+    printf '%s\n' "$text" | awk -v needle="$needle" '
+        index($0, needle) { found = 1 }
+        END { exit(found ? 0 : 1) }
+    '
+}
+
+contains_pattern() {
+    text=$1
+    pattern=$2
+    printf '%s\n' "$text" | awk -v pattern="$pattern" '
+        $0 ~ pattern { found = 1 }
+        END { exit(found ? 0 : 1) }
+    '
+}
+
+field_value() {
+    text=$1
+    field=$2
+    printf '%s\n' "$text" | awk -v prefix="${field}: " '
+        index($0, prefix) == 1 {
+            print substr($0, length(prefix) + 1)
+            found = 1
+            exit
+        }
+        END { if (!found) exit 1 }
+    '
+}
+
+validate_field() {
+    goal_text=$1
+    field=$2
+    value=$(field_value "$goal_text" "$field" 2>/dev/null || true)
+    if [ -z "$value" ]; then
+        error "goal document field '${field}' is missing or empty"
+        return 1
+    fi
+    case "$value" in
+        *TBD*|*TODO*|*UNKNOWN*|*"<"*|*">"*)
+            error "goal document field '${field}' still contains a placeholder"
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+validate_goal_document() {
+    base_oid=$1
+    head_oid=$2
+    branch=$3
+
+    remainder=${branch#deliver/}
+    goal=${remainder%%/*}
+    lane=${remainder#*/}
+    if [ -z "$goal" ] || [ "$lane" = "$remainder" ] || [ -z "$lane" ]; then
+        error "delivery branch must match deliver/<goal>/<lane>-<slice>: ${branch}"
+        return 1
+    fi
+
+    goal_file="docs/evolutions/${goal}.md"
+    if ! git cat-file -e "${head_oid}:${goal_file}" 2>/dev/null; then
+        error "delivery branch must contain ${goal_file}"
+        return 1
+    fi
+
+    changed_goal=$(git diff --name-only "$base_oid" "$head_oid" -- "$goal_file")
+    if [ -z "$changed_goal" ]; then
+        error "${goal_file} must change in every delivery push"
+        return 1
+    fi
+
+    goal_text=$(git show "${head_oid}:${goal_file}")
+    required_headings='
+## Prompt record
+## Definition of done
+## Acceptance criteria
+## Scope
+## Constraints
+## Repository map impact
+## PR dependency DAG
+## Worktree lanes
+## Decision log
+## Friction ledger
+## Compound engineering delta
+## Verification receipts
+## Metrics
+## Delivery record'
+
+    old_ifs=$IFS
+    IFS='
+'
+    for heading in $required_headings; do
+        [ -z "$heading" ] && continue
+        if ! contains_line "$goal_text" "$heading"; then
+            error "${goal_file} is missing required heading: ${heading}"
+            IFS=$old_ifs
+            return 1
+        fi
+    done
+    IFS=$old_ifs
+
+    for field in Goal Status Started Updated "Current PR" "Current lane" "Next action" Auto-merge; do
+        if ! validate_field "$goal_text" "$field"; then
+            return 1
+        fi
+    done
+
+    recorded_goal=$(field_value "$goal_text" Goal)
+    recorded_lane=$(field_value "$goal_text" "Current lane")
+    if [ "$recorded_goal" != "$goal" ]; then
+        error "Goal field '${recorded_goal}' does not match branch goal '${goal}'"
+        return 1
+    fi
+    if [ "$recorded_lane" != "$lane" ]; then
+        error "Current lane '${recorded_lane}' does not match branch lane '${lane}'"
+        return 1
+    fi
+
+    if ! contains_pattern "$goal_text" '^- Classification: (knowledge|procedure|invariant|one-off|covered)$'; then
+        error "${goal_file} must classify at least one friction entry"
+        return 1
+    fi
+    if ! contains_pattern "$goal_text" '^- Outcome: .+'; then
+        error "${goal_file} must record a compound-engineering outcome"
+        return 1
+    fi
+    if ! contains_line "$goal_text" "- Result: PASS"; then
+        error "${goal_file} must contain a passing verification receipt"
+        return 1
+    fi
+    if ! contains_pattern "$goal_text" '^- CI reruns: [0-9]+$' ||
+        ! contains_pattern "$goal_text" '^- Rework cycles: [0-9]+$' ||
+        ! contains_pattern "$goal_text" '^- Review-fix cycles: [0-9]+$' ||
+        ! contains_pattern "$goal_text" '^- Retained infrastructure improvements: [0-9]+$'; then
+        error "${goal_file} must contain numeric compound-engineering metrics"
+        return 1
+    fi
+
+    return 0
+}
+
+check_range() {
+    base_oid=$1
+    head_oid=$2
+    branch=$(normalize_branch "$3")
+    expected_default=$4
+
+    if [ "$branch" = "$expected_default" ]; then
+        error "direct pushes to ${expected_default} are blocked; use a pull request"
+        return 1
+    fi
+
+    if ! git cat-file -e "${base_oid}^{commit}" 2>/dev/null ||
+        ! git cat-file -e "${head_oid}^{commit}" 2>/dev/null; then
+        error "cannot validate non-commit range ${base_oid}..${head_oid}"
+        return 1
+    fi
+
+    if ! git diff --check "$base_oid" "$head_oid"; then
+        error "whitespace errors found in ${branch}"
+        return 1
+    fi
+
+    case "$branch" in
+        deliver/*)
+            validate_goal_document "$base_oid" "$head_oid" "$branch"
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
+
+if [ "${1:-}" = "--check-range" ]; then
+    if [ "$#" -ne 4 ]; then
+        error "usage: .githooks/pre-push --check-range <base> <head> <branch>"
+        exit 2
+    fi
+    default=$(default_branch origin)
+    check_range "$2" "$3" "$4" "$default"
+    exit $?
+fi
+
+remote_name=${1:-origin}
+default=$(default_branch "$remote_name")
+failed=0
+
+while read -r local_ref local_oid remote_ref remote_oid; do
+    [ -z "${local_ref:-}" ] && continue
+    [ "$local_oid" = "$ZERO_OID" ] && continue
+
+    branch=$(normalize_branch "$local_ref")
+    remote_branch=$(normalize_branch "$remote_ref")
+    if [ "$remote_branch" = "$default" ]; then
+        error "direct pushes to ${default} are blocked; use a pull request"
+        failed=1
+        continue
+    fi
+
+    base_oid=$remote_oid
+    if [ "$remote_oid" = "$ZERO_OID" ] ||
+        ! git cat-file -e "${remote_oid}^{commit}" 2>/dev/null; then
+        if git show-ref --verify --quiet "refs/remotes/${remote_name}/${default}"; then
+            base_oid=$(git merge-base "$local_oid" "refs/remotes/${remote_name}/${default}")
+        elif git show-ref --verify --quiet "refs/heads/${default}"; then
+            base_oid=$(git merge-base "$local_oid" "refs/heads/${default}")
+        else
+            base_oid=$(git rev-list --max-parents=0 "$local_oid" | awk 'NR == 1 { print; exit }')
+        fi
+    fi
+
+    if ! check_range "$base_oid" "$local_oid" "$branch" "$default"; then
+        failed=1
+    fi
+done
+
+exit "$failed"

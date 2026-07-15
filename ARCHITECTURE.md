@@ -5,6 +5,10 @@ things: observation, state formation, personal-model construction, and model
 access. Product notification lifecycles, computer-use actuation, meetings,
 task dashboards, and evaluation harnesses are outside this repository.
 
+Repository-side compound-engineering documents, Claude Code skills, templates,
+and Git policy hooks support development only. They are not packaged into or
+executed by the Persome Runtime.
+
 ## Data flow
 
 ```text

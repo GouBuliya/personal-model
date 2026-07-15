@@ -61,6 +61,18 @@ uv run pytest tests/test_openapi_drift.py tests/test_db_schema_drift.py -q
 
 Commits require DCO sign-off: `git commit -s`.
 
+## Compound engineering delivery
+
+For prompt-to-PR delivery, follow `docs/ai-delivery-sop.md` and use the Claude
+Code `/deliver` skill. Keep durable state in `docs/evolutions/<goal>.md`, read
+`docs/repository-map.md` before splitting work, use one worktree per PR lane,
+and run `make check` as the complete offline gate.
+
+Ordinary branches use `feat/`, `fix/`, `docs/`, or `chore/`. Documented
+delivery lanes use `deliver/<goal>/<lane>-<slice>`. One Claude Code session is
+the only code writer; independent worktrees may overlap only for background
+verification.
+
 ## Pipeline
 
 There is one production path:
@@ -99,6 +111,7 @@ cross-process idempotent. Do not add another session-modeling entrance.
 | Capture through model build | `docs/architecture.md`, `docs/capture.md`, `docs/timeline.md`, `docs/session.md`, `docs/writer.md` |
 | Configuration and secrets | `docs/config.md`, `docs/runtime-internals.md` |
 | Privacy boundary | `SECURITY_PRIVACY.md` |
+| AI coding delivery and repository ownership | `docs/ai-delivery-sop.md`, `docs/repository-map.md` |
 
 Update matching docs in the same change as behavior.
 
