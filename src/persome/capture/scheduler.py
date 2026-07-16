@@ -42,6 +42,7 @@ from .timestamps import (
     parse_capture_timestamp,
 )
 from .watcher import AXWatcherProcess
+from .window_context import WindowContextCache
 
 logger = get("persome.capture")
 
@@ -329,10 +330,106 @@ def _daemon_ocr_jpeg_provider(cfg: CaptureConfig) -> Callable[[], bytes | None]:
     return _provide
 
 
+def _window_meta_from_ax(result: ax_capture.AXCaptureResult) -> window_meta.WindowMeta | None:
+    """Derive authoritative window metadata from a successful AX capture.
+
+    Reads the frontmost app (``is_frontmost``, falling back to the first app) and
+    its first window title — the same shape ``screen_state`` and ``s1_parser``
+    consume. Returns ``None`` when the tree names no usable app.
+    """
+    apps = result.apps or []
+    if not isinstance(apps, list):
+        return None
+    front = next((a for a in apps if isinstance(a, dict) and a.get("is_frontmost")), None)
+    if front is None:
+        front = next((a for a in apps if isinstance(a, dict)), None)
+    if front is None:
+        return None
+    app_name = str(front.get("name") or "")
+    bundle_id = str(front.get("bundle_id") or "")
+    title = ""
+    windows = front.get("windows")
+    if isinstance(windows, list) and windows and isinstance(windows[0], dict):
+        title = str(windows[0].get("title") or "")
+    if not app_name and not title and not bundle_id:
+        return None
+    return window_meta.WindowMeta(app_name=app_name, title=title, bundle_id=bundle_id)
+
+
+def _window_meta_from_trigger(
+    cfg: CaptureConfig, trigger: dict[str, Any] | None
+) -> window_meta.WindowMeta | None:
+    """Reuse the triggering watcher event's window identity when still fresh.
+
+    The dispatcher stamps ``_observed_monotonic`` / ``_app_name`` / ``_pid`` on the
+    trigger. Queue delay can make the request stale, so freshness is checked
+    against the same ``window_context_cache_seconds`` budget as the cache.
+    """
+    if not trigger:
+        return None
+    observed = trigger.get("_observed_monotonic")
+    if not isinstance(observed, (int, float)) or isinstance(observed, bool):
+        return None
+    if (time.monotonic() - float(observed)) > cfg.window_context_cache_seconds:
+        return None
+    app_name = str(trigger.get("_app_name") or "")
+    bundle_id = str(trigger.get("bundle_id") or "")
+    window_title = str(trigger.get("window_title") or "")
+    pid = trigger.get("_pid")
+    has_identity = bundle_id or (isinstance(pid, int) and not isinstance(pid, bool) and pid > 0)
+    if not has_identity or (not app_name and not window_title):
+        return None
+    return window_meta.WindowMeta(app_name=app_name, title=window_title, bundle_id=bundle_id)
+
+
+def _ax_target_from_trigger(trigger: dict[str, Any] | None) -> ax_capture.AXTarget | None:
+    """The application a capture is aimed at, for AX-circuit keying."""
+    if not trigger:
+        return None
+    pid = trigger.get("_pid")
+    pid = pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0 else None
+    return ax_capture.AXTarget(pid=pid, bundle_id=str(trigger.get("bundle_id") or ""))
+
+
+def _public_trigger(trigger: dict[str, Any]) -> dict[str, Any]:
+    """Strip the private ``_``-prefixed fast-path keys before persistence.
+
+    The on-disk trigger contract is ``event_type`` / ``bundle_id`` /
+    ``window_title`` / ``details`` — the fast-path identity is in-memory only.
+    """
+    return {k: v for k, v in trigger.items() if not k.startswith("_")}
+
+
+def _resolve_window_meta(
+    cfg: CaptureConfig,
+    ax_result: ax_capture.AXCaptureResult | None,
+    trigger: dict[str, Any] | None,
+    context_cache: WindowContextCache | None,
+) -> tuple[window_meta.WindowMeta, str]:
+    """Resolve window metadata AX-first, AppleScript last (see the capture spec)."""
+    if ax_result is not None:
+        meta = _window_meta_from_ax(ax_result)
+        if meta is not None:
+            return meta, "ax"
+    meta = _window_meta_from_trigger(cfg, trigger)
+    if meta is not None:
+        return meta, "watcher"
+    if context_cache is not None:
+        cached = context_cache.resolve(trigger)
+        if cached is not None:
+            return cached, "cache"
+    meta = window_meta.active_window()
+    if context_cache is not None:
+        context_cache.remember_meta(meta)
+    return meta, "applescript"
+
+
 def _build_capture(
     cfg: CaptureConfig,
     provider: ax_capture.AXProvider,
     trigger: dict[str, Any] | None,
+    *,
+    context_cache: WindowContextCache | None = None,
 ) -> dict[str, Any] | None:
     """Build an enriched capture dict in memory. Returns None if capturing is paused."""
     if _should_skip_capture(cfg):
@@ -341,32 +438,48 @@ def _build_capture(
     out: dict[str, Any] = {
         "timestamp": _now_iso(),
         "schema_version": 2,
-        "trigger": trigger or {"event_type": "heartbeat"},
+        "trigger": _public_trigger(trigger) if trigger else {"event_type": "heartbeat"},
     }
 
-    meta = window_meta.active_window()
+    # AX first: a successful tree is the authoritative metadata source AND gives
+    # the secure-input signal. The circuit is keyed by the triggering app so a
+    # wedged app (e.g. Enterprise WeChat) stops re-stalling every event.
+    ax_result: ax_capture.AXCaptureResult | None = None
+    if provider.available:
+        target = _ax_target_from_trigger(trigger)
+        ax_result = provider.capture_frontmost(focused_window_only=True, target=target)
+        if ax_result is not None:
+            out["ax_tree"] = ax_result.raw_json
+            out["ax_metadata"] = ax_result.metadata
+    else:
+        out["ax_unavailable"] = True
+
+    # Circuit open: no fresh AX tree exists, so secure-input state is unknown. The
+    # privacy invariant wins over coverage — persist metadata only, no pixels/OCR.
+    circuit_open = getattr(provider, "last_status", "ok") == "circuit_open"
+    if circuit_open:
+        out["ax_unavailable"] = True
+        out["ax_skip_reason"] = "circuit_open"
+        out["secure_state_unknown"] = True
+
+    meta, meta_source = _resolve_window_meta(cfg, ax_result, trigger, context_cache)
     out["window_meta"] = {
         "app_name": meta.app_name,
         "title": meta.title,
         "bundle_id": meta.bundle_id,
     }
+    out["meta_source"] = meta_source
 
-    if provider.available:
-        result = provider.capture_frontmost(focused_window_only=True)
-        if result is not None:
-            out["ax_tree"] = result.raw_json
-            out["ax_metadata"] = result.metadata
-    else:
-        out["ax_unavailable"] = True
-
-    if cfg.include_screenshot:
+    if cfg.include_screenshot and not circuit_open:
         shot = screenshot.grab(
             max_width=cfg.screenshot_max_width, jpeg_quality=cfg.screenshot_jpeg_quality
         )
         if shot is not None:
             _attach_screenshot(cfg, out, shot.image_base64, shot.mime_type, shot.width, shot.height)
 
-    return _finalize_capture(cfg, out, ocr_jpeg_provider=_daemon_ocr_jpeg_provider(cfg))
+    # An open circuit must never submit OCR — starve the OCR JPEG provider.
+    ocr_jpeg_provider = (lambda: None) if circuit_open else _daemon_ocr_jpeg_provider(cfg)
+    return _finalize_capture(cfg, out, ocr_jpeg_provider=ocr_jpeg_provider)
 
 
 def _ingest_ocr_jpeg_provider(payload: dict[str, Any]) -> Callable[[], bytes | None]:
@@ -857,11 +970,13 @@ class _CaptureRunner:
         *,
         pre_capture_hook: Callable[[dict[str, Any]], None] | None = None,
         capture_receipt_hook: Callable[[Path | None, str], None] | None = None,
+        context_cache: WindowContextCache | None = None,
     ) -> None:
         self._cfg = cfg
         self._provider = provider
         self._pre_capture_hook = pre_capture_hook
         self._capture_receipt_hook = capture_receipt_hook
+        self._context_cache = context_cache
         self._lock = threading.Lock()
         self._last_fingerprint: str | None = None
         self._queue: queue.Queue[Any] = queue.Queue(maxsize=self._MAX_PENDING)
@@ -904,7 +1019,9 @@ class _CaptureRunner:
                     logger.debug("OS capture skipped: runner is ingest-only")
                     self._publish_receipt(None, capture_gate_reason(self._cfg) or "ingest-ready")
                     return
-                out = _build_capture(self._cfg, self._provider, trigger)
+                out = _build_capture(
+                    self._cfg, self._provider, trigger, context_cache=self._context_cache
+                )
                 if out is None:
                     self._publish_receipt(None, capture_gate_reason(self._cfg) or "capture-skipped")
                     return
@@ -924,6 +1041,7 @@ class _CaptureRunner:
                     self._cfg,
                     self._provider,
                     {"event_type": "OnboardingProbe"},
+                    context_cache=self._context_cache,
                 )
                 if out is None:
                     self._publish_receipt(None, capture_gate_reason(self._cfg) or "capture-skipped")
@@ -1049,17 +1167,29 @@ async def run_forever(
 
     provider: ax_capture.AXProvider | None = None
     if not ingest_only:
-        provider = ax_capture.create_provider(depth=cfg.ax_depth, timeout=cfg.ax_timeout_seconds)
+        provider = ax_capture.create_provider(
+            depth=cfg.ax_depth,
+            timeout=cfg.ax_timeout_seconds,
+            circuit_failures=cfg.ax_timeout_circuit_failures,
+            circuit_seconds=cfg.ax_timeout_circuit_seconds,
+        )
         if not provider.available:
             logger.warning(
                 "AX capture unavailable: %s", getattr(provider, "reason", "unknown reason")
             )
+
+    # One cache shared by the dispatcher (which observes watcher identity) and the
+    # runner (which reuses it to skip AppleScript). Off for ingest — no watcher.
+    context_cache: WindowContextCache | None = None
+    if not ingest_only:
+        context_cache = WindowContextCache(cache_seconds=cfg.window_context_cache_seconds)
 
     runner = _CaptureRunner(
         cfg,
         provider,
         pre_capture_hook=pre_capture_hook,
         capture_receipt_hook=capture_receipt_hook,
+        context_cache=context_cache,
     )
     runner.start_worker()
     _set_active_runner(runner)
@@ -1091,6 +1221,7 @@ async def run_forever(
                     min_capture_gap_seconds=cfg.min_capture_gap_seconds,
                     dedup_interval_seconds=cfg.dedup_interval_seconds,
                     same_window_dedup_seconds=cfg.same_window_dedup_seconds,
+                    context_cache=context_cache,
                 )
                 watcher.on_event(dispatcher.on_event)
                 watcher.start()
