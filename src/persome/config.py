@@ -66,6 +66,17 @@ class CaptureConfig:
     screenshot_jpeg_quality: int = 80
     ax_depth: int = 100
     ax_timeout_seconds: int = 3
+    # Fast path: reuse frontmost window identity from a recent watcher event
+    # (pid/app/bundle/title) instead of an AppleScript round-trip. A cached entry
+    # is usable only while no older than this many seconds and not in conflict
+    # with the triggering event's bundle/pid.
+    window_context_cache_seconds: float = 5.0
+    # AX timeout circuit breaker (per pid+bundle, process-local): open the circuit
+    # after this many consecutive confirmed subprocess timeouts...
+    ax_timeout_circuit_failures: int = 2
+    # ...and keep it open (no helper subprocess, metadata-only capture) for this
+    # many seconds before allowing a single half-open probe.
+    ax_timeout_circuit_seconds: float = 120.0
     # OCR fallback for AX-poor apps (WeChat, Feishu, etc.) — on-device PP-OCRv6.
     enable_ocr_fallback: bool = False
     # ``auto`` = fresh/unconfigured; onboarding may enable the supported
@@ -700,6 +711,9 @@ screenshot_max_width = 1920
 screenshot_jpeg_quality = 80
 ax_depth = 100                # Electron apps (Claude Desktop, VS Code, Slack) have deep DOM; 8 only reaches the chrome
 ax_timeout_seconds = 3
+window_context_cache_seconds = 5.0   # reuse recent watcher window identity instead of an AppleScript round-trip
+ax_timeout_circuit_failures = 2      # consecutive confirmed AX subprocess timeouts (per pid+bundle) before the circuit opens
+ax_timeout_circuit_seconds = 120.0   # how long an open circuit skips the helper (metadata-only capture) before a half-open probe
 # OCR fallback for apps that block Accessibility API (WeChat, Feishu, NetEase Music, etc.)
 # On-device PP-OCRv6 — the focused-window screenshot is OCR'd locally; nothing leaves the machine.
 enable_ocr_fallback = false   # install.sh verifies the worker, then writes true on supported Macs

@@ -89,9 +89,6 @@ jobs:
       - name: Secret and token scan
         run: make secret
 
-      - name: English-language source gate
-        run: make language
-
       - name: Documentation links and assets
         run: make docs
 

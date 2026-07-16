@@ -28,6 +28,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ..logger import get
+from .window_context import WindowContextCache
 
 logger = get("persome.capture")
 
@@ -57,12 +58,14 @@ class EventDispatcher:
         min_capture_gap_seconds: float = 2.0,
         dedup_interval_seconds: float = 1.0,
         same_window_dedup_seconds: float = 5.0,
+        context_cache: WindowContextCache | None = None,
     ) -> None:
         self._capture_fn = capture_fn
         self._debounce_seconds = debounce_seconds
         self._min_capture_gap = min_capture_gap_seconds
         self._dedup_interval = dedup_interval_seconds
         self._same_window_dedup = same_window_dedup_seconds
+        self._context_cache = context_cache
 
         self._lock = threading.Lock()
         self._debounce_timer: threading.Timer | None = None
@@ -89,6 +92,16 @@ class EventDispatcher:
         window_title = raw.get("window_title", "") or ""
         dedup_key = (event_type, bundle_id, window_title)
 
+        # Feed the fast-path cache before we discard the watcher's pid/app_name:
+        # the event already names the frontmost app, so a capture can reuse it
+        # instead of shelling out to AppleScript. Runs before dedup so a
+        # rapid-fire event that we won't re-capture still refreshes context.
+        observed_monotonic: float | None = None
+        if self._context_cache is not None:
+            ctx = self._context_cache.observe_event(raw)
+            if ctx is not None:
+                observed_monotonic = ctx.observed_monotonic
+
         now = time.monotonic()
         last = self._last_event_time.get(dedup_key, 0.0)
         if now - last < self._dedup_interval:
@@ -102,6 +115,18 @@ class EventDispatcher:
             "bundle_id": bundle_id,
             "window_title": window_title,
         }
+        # Private (``_``-prefixed) watcher identity for the fast path. The scheduler
+        # reads these to reuse window metadata / target the AX circuit, then strips
+        # them before persistence — the on-disk trigger contract (event_type,
+        # bundle_id, window_title, details) is unchanged.
+        app_name = raw.get("app_name")
+        if isinstance(app_name, str) and app_name:
+            trigger["_app_name"] = app_name
+        pid = raw.get("pid")
+        if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
+            trigger["_pid"] = pid
+        if observed_monotonic is not None:
+            trigger["_observed_monotonic"] = observed_monotonic
         # Preserve the attention-localization payload the watcher attaches to
         # pointer events: UserMouseClick carries details.{button, x, y, element}
         # — the cursor position plus the AX element hit-tested under the cursor.

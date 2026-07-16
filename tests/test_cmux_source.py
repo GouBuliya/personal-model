@@ -396,8 +396,9 @@ class TestMaybeInject:
 
 class FakeProvider:
     available = True
+    last_status = "ok"
 
-    def capture_frontmost(self, *, focused_window_only: bool = True):
+    def capture_frontmost(self, *, focused_window_only: bool = True, target=None):  # noqa: ANN001
         return AXCaptureResult(raw_json={"apps": []}, timestamp="2026-01-01T00:00:00Z", apps=[])
 
 

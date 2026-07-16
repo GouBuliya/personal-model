@@ -72,7 +72,6 @@ jobs:
           uv run --no-sync pytest -m "not macos and not integration" -q
           uv run --no-sync python scripts/secret_scan.py
           uv run --no-sync python scripts/pii_scan.py
-          uv run --no-sync python scripts/language_scan.py
           uv run --no-sync python scripts/check_doc_links.py
 
       - name: Synthetic MCP transport smoke

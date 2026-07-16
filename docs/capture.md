@@ -144,6 +144,29 @@ Diagnostic:
 
 A 10×+ ratio means there's content past depth 30 you'd miss.
 
+## Window metadata fast path
+
+Window metadata (`app_name`, `title`, `bundle_id`) has three sources, tried in order so the common case never pays for AppleScript:
+
+1. **AX output** — a successful `mac-ax-helper` tree already names the frontmost app and its focused window; this is the authoritative source (`meta_source=ax`).
+2. **Watcher context** — the `mac-ax-watcher` event that triggered the capture already carries `pid`/`app`/`bundle`/`title`. The dispatcher stamps this identity (plus a monotonic receive time) onto the trigger, so a capture can reuse it (`meta_source=watcher`) when it is no older than `window_context_cache_seconds` and does not conflict with the trigger's bundle/pid.
+3. **Latest-frontmost cache** — a short process-local cache of the most recent reliable watcher event (and remembered AppleScript results), used for heartbeat/manual captures and when the trigger is stale (`meta_source=cache`).
+4. **AppleScript** — `window_meta.active_window()` (`osascript`, ~168 ms) is the last resort (`meta_source=applescript`); its result is remembered in the cache.
+
+Freshness always uses a monotonic clock, never the wall-clock event timestamp, so a system clock change cannot turn stale context fresh. A bundle/pid conflict rejects reuse — attributing content to the wrong app is worse than paying the lookup. The watcher identity is in-memory only: the persisted `trigger` contract stays `event_type` / `bundle_id` / `window_title` / `details`.
+
+## AX timeout circuit breaker
+
+The `mac-ax-helper` subprocess is killed after `ax_timeout_seconds + 1` seconds (the extra second is process start + cleanup, not extra traversal budget). Without memory, a wedged app re-stalls on every event; a process-local circuit breaker keyed by `(pid, bundle_id)` prevents that:
+
+- two consecutive confirmed subprocess timeouts open the circuit for `ax_timeout_circuit_seconds`;
+- while open, no helper subprocess is spawned;
+- one half-open probe is allowed after the deadline — success closes the circuit, another timeout reopens it;
+- a restarted process (new pid) and other bundles keep independent state;
+- non-timeout errors fail open and do not count toward opening.
+
+While a circuit is open there is no fresh AX tree, so the secure-input signal is unknown. The privacy invariant wins over coverage: that capture is metadata-only — `ax_unavailable`, `ax_skip_reason="circuit_open"`, and `secure_state_unknown` are set, and neither a screenshot nor OCR is persisted. Ordinary AX-poor captures that did run the helper keep the normal OCR fallback and its per-window rate limit.
+
 ## What's in a capture file
 
 ```json

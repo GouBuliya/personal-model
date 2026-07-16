@@ -29,14 +29,16 @@ class _FakeProvider:
     """Minimal ax_capture.AXProvider stand-in returning a canned AX result."""
 
     available = True
+    last_status = "ok"
 
     def __init__(self, ax_tree: dict[str, Any] | None = None) -> None:
         self._ax_tree = ax_tree if ax_tree is not None else _normal_ax_tree()
 
-    def capture_frontmost(self, *, focused_window_only: bool = True) -> Any:
+    def capture_frontmost(self, *, focused_window_only: bool = True, target: Any = None) -> Any:
         class _Result:
             raw_json = self._ax_tree
             metadata = {"node_count": 1}
+            apps = self._ax_tree.get("apps", [])
 
         return _Result()
 
@@ -52,6 +54,7 @@ class _Cfg:
     ocr_tier = "tiny"
     ocr_structured = False
     cmux_source_enabled = False
+    window_context_cache_seconds = 5.0
     # privacy toggles (default on); flipped per test
     pause_on_lock = True
     suppress_secure_input = True

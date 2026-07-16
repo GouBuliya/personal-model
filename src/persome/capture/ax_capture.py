@@ -17,8 +17,10 @@ import subprocess
 import tempfile
 import threading
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from .. import paths
 from ..logger import get
@@ -26,10 +28,100 @@ from .ax_models import AXCaptureResult
 
 logger = get("persome.capture")
 
-_SUBPROCESS_TIMEOUT = 10  # seconds (covers --timeout 3 + overhead)
 _AX_TRUST_CACHE_SECONDS = 1.0
 _ax_trust_cache: dict[bool, tuple[float, bool]] = {}
 _ax_trust_lock = threading.Lock()
+
+# Per-attempt outcome the scheduler reads to decide metadata source / OCR policy.
+AXStatus = Literal["ok", "timeout", "circuit_open", "error", "unavailable"]
+
+
+@dataclass(frozen=True)
+class AXTarget:
+    """The application a capture is aimed at, for circuit keying."""
+
+    pid: int | None = None
+    bundle_id: str = ""
+
+    @property
+    def trackable(self) -> bool:
+        """Circuit tracking needs both a positive PID and a non-empty bundle."""
+        return self.pid is not None and self.pid > 0 and bool(self.bundle_id)
+
+    @property
+    def key(self) -> tuple[int, str]:
+        return (self.pid or 0, self.bundle_id)
+
+
+@dataclass
+class AXCircuitState:
+    consecutive_timeouts: int = 0
+    open_until: float = 0.0
+
+
+class AXTimeoutCircuit:
+    """Process-local, per-(pid, bundle) breaker for confirmed AX subprocess timeouts.
+
+    A new application process gets a fresh circuit even with the same bundle id.
+    State resets on daemon restart and is never persisted. Only Python
+    ``subprocess.TimeoutExpired`` outcomes count toward opening; non-timeout errors
+    fail open without incrementing.
+    """
+
+    def __init__(
+        self,
+        *,
+        failure_threshold: int = 2,
+        open_seconds: float = 120.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._failure_threshold = max(1, int(failure_threshold))
+        self._open_seconds = float(open_seconds)
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._states: dict[tuple[int, str], AXCircuitState] = {}
+
+    def allow(self, target: AXTarget) -> bool:
+        """Whether a helper subprocess may run for ``target`` right now.
+
+        Untracked targets always pass. A tracked target passes while closed and
+        for the single half-open probe once the open deadline elapses.
+        """
+        if not target.trackable:
+            return True
+        with self._lock:
+            state = self._states.get(target.key)
+            if state is None:
+                return True
+            return self._clock() >= state.open_until
+
+    def record_timeout(self, target: AXTarget) -> None:
+        if not target.trackable:
+            return
+        with self._lock:
+            state = self._states.setdefault(target.key, AXCircuitState())
+            state.consecutive_timeouts += 1
+            if state.consecutive_timeouts >= self._failure_threshold:
+                state.open_until = self._clock() + self._open_seconds
+                logger.warning(
+                    "AX circuit open: bundle=%s pid=%s timeouts=%d open=%.0fs",
+                    target.bundle_id,
+                    target.pid,
+                    state.consecutive_timeouts,
+                    self._open_seconds,
+                )
+
+    def record_success(self, target: AXTarget) -> None:
+        if not target.trackable:
+            return
+        with self._lock:
+            state = self._states.get(target.key)
+            if state is None:
+                return
+            was_open = state.open_until > self._clock() or state.consecutive_timeouts > 0
+            self._states.pop(target.key, None)
+        if was_open:
+            logger.info("AX circuit recovered: bundle=%s pid=%s", target.bundle_id, target.pid)
 
 
 def _binary_ax_trusted(binary: Path) -> bool:
@@ -361,7 +453,12 @@ class AXProvider(Protocol):
     @property
     def available(self) -> bool: ...
 
-    def capture_frontmost(self, *, focused_window_only: bool = True) -> AXCaptureResult | None: ...
+    @property
+    def last_status(self) -> AXStatus: ...
+
+    def capture_frontmost(
+        self, *, focused_window_only: bool = True, target: AXTarget | None = None
+    ) -> AXCaptureResult | None: ...
 
 
 class UnavailableAXProvider:
@@ -372,31 +469,65 @@ class UnavailableAXProvider:
     def available(self) -> bool:
         return False
 
-    def capture_frontmost(self, *, focused_window_only: bool = True) -> AXCaptureResult | None:
+    @property
+    def last_status(self) -> AXStatus:
+        return "unavailable"
+
+    def capture_frontmost(
+        self, *, focused_window_only: bool = True, target: AXTarget | None = None
+    ) -> AXCaptureResult | None:
         return None
 
 
 class MacAXHelperProvider:
     """Subprocess wrapper around the vendored mac-ax-helper Swift binary."""
 
-    def __init__(self, *, helper_path: Path, depth: int, timeout: int, raw: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        helper_path: Path,
+        depth: int,
+        timeout: int,
+        raw: bool = False,
+        circuit: AXTimeoutCircuit | None = None,
+    ) -> None:
         self._helper_path = str(helper_path)
         self._depth = depth
         self._timeout = timeout
         self._raw = raw
+        self._circuit = circuit
+        # The native traversal budget is `--timeout <ax_timeout_seconds>`; the
+        # Python wait adds one second for process start + cleanup, then kills. It
+        # is NOT extra traversal budget.
+        self._subprocess_timeout = max(1.0, float(timeout) + 1.0)
+        self._last_status: AXStatus = "ok"
 
     @property
     def available(self) -> bool:
         return True
 
-    def capture_frontmost(self, *, focused_window_only: bool = True) -> AXCaptureResult | None:
-        return self._run(focused_window_only=focused_window_only)
+    @property
+    def last_status(self) -> AXStatus:
+        return self._last_status
+
+    def capture_frontmost(
+        self, *, focused_window_only: bool = True, target: AXTarget | None = None
+    ) -> AXCaptureResult | None:
+        return self._run(focused_window_only=focused_window_only, target=target)
 
     def _run(
         self,
         *,
         focused_window_only: bool = False,
+        target: AXTarget | None = None,
     ) -> AXCaptureResult | None:
+        if target is not None and self._circuit is not None and not self._circuit.allow(target):
+            self._last_status = "circuit_open"
+            logger.debug(
+                "AX skipped (circuit open): bundle=%s pid=%s", target.bundle_id, target.pid
+            )
+            return None
+
         args: list[str] = [self._helper_path]
         if focused_window_only:
             args.append("--focused-window-only")
@@ -407,15 +538,23 @@ class MacAXHelperProvider:
         args.extend(["--timeout", str(self._timeout)])
 
         try:
-            proc = subprocess.run(args, capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT)
+            proc = subprocess.run(
+                args, capture_output=True, text=True, timeout=self._subprocess_timeout
+            )
         except subprocess.TimeoutExpired:
-            logger.warning("mac-ax-helper timed out after %ds", _SUBPROCESS_TIMEOUT)
+            self._last_status = "timeout"
+            logger.warning("mac-ax-helper timed out after %.0fs", self._subprocess_timeout)
+            if target is not None and self._circuit is not None:
+                self._circuit.record_timeout(target)
             return None
         except OSError as exc:
+            # Non-timeout failure: fail open, do not count toward the circuit.
+            self._last_status = "error"
             logger.error("Failed to run mac-ax-helper: %s", exc)
             return None
 
         if proc.returncode == 2:
+            self._last_status = "error"
             logger.warning(
                 "Accessibility permission not granted. "
                 "Run `persome onboard` to grant mac-ax-helper in System Settings → "
@@ -423,6 +562,7 @@ class MacAXHelperProvider:
             )
             return None
         if proc.returncode != 0:
+            self._last_status = "error"
             logger.warning(
                 "mac-ax-helper exited %d: %s", proc.returncode, proc.stderr.strip()[:200]
             )
@@ -431,8 +571,15 @@ class MacAXHelperProvider:
         try:
             data = json.loads(proc.stdout)
         except json.JSONDecodeError as exc:
+            self._last_status = "error"
             logger.warning("Failed to parse mac-ax-helper JSON: %s", exc)
             return None
+
+        # A subprocess success (returncode 0) clears the circuit even when the
+        # payload is empty — an empty tree is logged but is not a confirmed timeout.
+        self._last_status = "ok"
+        if target is not None and self._circuit is not None:
+            self._circuit.record_success(target)
 
         data = _strip_frame_fields(data)
         return AXCaptureResult(
@@ -448,7 +595,14 @@ class MacAXHelperProvider:
         )
 
 
-def create_provider(*, depth: int = 8, timeout: int = 3, raw: bool = False) -> AXProvider:
+def create_provider(
+    *,
+    depth: int = 8,
+    timeout: int = 3,
+    raw: bool = False,
+    circuit_failures: int = 2,
+    circuit_seconds: float = 120.0,
+) -> AXProvider:
     if platform.system() != "Darwin":
         return UnavailableAXProvider(f"unsupported platform: {platform.system()}")
     helper = _resolve_helper_path()
@@ -457,4 +611,7 @@ def create_provider(*, depth: int = 8, timeout: int = 3, raw: bool = False) -> A
             "mac-ax-helper not found. Build it: bash resources/build-mac-ax-helper.sh"
         )
     logger.info("AX capture initialized: %s", helper)
-    return MacAXHelperProvider(helper_path=helper, depth=depth, timeout=timeout, raw=raw)
+    circuit = AXTimeoutCircuit(failure_threshold=circuit_failures, open_seconds=circuit_seconds)
+    return MacAXHelperProvider(
+        helper_path=helper, depth=depth, timeout=timeout, raw=raw, circuit=circuit
+    )

@@ -479,7 +479,9 @@ def test_daemon_onboarding_capture_forces_a_fresh_record_past_dedup(
         "visible_text": "  ready",
     }
     written: list[Path] = []
-    monkeypatch.setattr(scheduler, "_build_capture", lambda cfg, provider, trigger: output)
+    monkeypatch.setattr(
+        scheduler, "_build_capture", lambda cfg, provider, trigger, **kwargs: output
+    )
 
     def write(_out: dict) -> Path:
         path = paths.capture_buffer_dir() / f"fresh-{len(written)}.json"

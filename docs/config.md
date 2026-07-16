@@ -134,6 +134,9 @@ screenshot_max_width = 1920
 screenshot_jpeg_quality = 80
 ax_depth = 100
 ax_timeout_seconds = 3
+window_context_cache_seconds = 5.0   # reuse recent watcher window identity instead of AppleScript
+ax_timeout_circuit_failures = 2      # consecutive confirmed AX timeouts (per pid+bundle) before opening
+ax_timeout_circuit_seconds = 120.0   # how long an open circuit skips the helper before a half-open probe
 
 enable_ocr_fallback = true
 ocr_policy = "enabled"               # auto | enabled | disabled
@@ -181,6 +184,24 @@ cmux_source_enabled = true
   Screenshots degrade before AX/OCR text and whole-record deletion.
 - `cmux_source_enabled` reads visible terminal text through cmux's local,
   read-only socket because GPU terminal content is AX-poor.
+- `window_context_cache_seconds` bounds the fast path: a capture reuses the
+  frontmost window identity (`pid`/`app`/`bundle`/`title`) carried by a recent
+  watcher event or a remembered AppleScript result instead of shelling out to
+  `osascript` every tick. A cached entry is used only while no older than this
+  many seconds and only when it does not conflict with the triggering event's
+  bundle/pid; otherwise capture falls back to a fresh AppleScript lookup. The
+  resolved source is logged as `meta_source=ax|watcher|cache|applescript`.
+- `ax_timeout_circuit_failures` / `ax_timeout_circuit_seconds` govern a
+  process-local circuit breaker keyed by `(pid, bundle_id)`. The `mac-ax-helper`
+  subprocess is killed after `ax_timeout_seconds + 1` seconds; after this many
+  consecutive confirmed timeouts for one app the circuit opens for this many
+  seconds, during which no helper runs. A single half-open probe is allowed once
+  the deadline elapses; success closes the circuit, another timeout reopens it.
+  A restarted process (new pid) and other bundles keep independent state. While a
+  circuit is open the AX tree — and therefore the secure-input signal — is
+  unknown, so that capture is metadata-only: it sets `ax_unavailable`,
+  `ax_skip_reason="circuit_open"`, `secure_state_unknown`, and persists neither a
+  screenshot nor OCR.
 
 ## Timeline and sessions
 
