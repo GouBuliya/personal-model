@@ -18,6 +18,8 @@ import pytest
 
 from persome.capture import ax_capture
 from persome.capture.ax_capture import (
+    AXTarget,
+    AXTimeoutCircuit,
     MacAXHelperProvider,
     UnavailableAXProvider,
     _strip_frame_fields,
@@ -269,3 +271,163 @@ def test_real_provider_smoke_does_not_raise() -> None:
     # Must return AXCaptureResult or None (permission denied), never raise.
     result = provider.capture_frontmost()
     assert result is None or isinstance(result, AXCaptureResult)
+
+
+# --- subprocess deadline --------------------------------------------------------
+
+
+def test_subprocess_timeout_is_ax_timeout_plus_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _run(args, **kwargs):  # noqa: ANN001, ANN003
+        captured["timeout"] = kwargs.get("timeout")
+        return subprocess.CompletedProcess(args, 0, stdout=json.dumps({"apps": []}), stderr="")
+
+    provider = MacAXHelperProvider(helper_path="/fake/mac-ax-helper", depth=8, timeout=3)
+    monkeypatch.setattr(ax_capture.subprocess, "run", _run)
+    provider.capture_frontmost()
+    assert captured["timeout"] == 4.0
+
+
+def test_last_status_reflects_outcomes(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = MacAXHelperProvider(helper_path="/fake/mac-ax-helper", depth=8, timeout=3)
+    monkeypatch.setattr(ax_capture.subprocess, "run", _fake_run_returning(json.dumps({"apps": []})))
+    provider.capture_frontmost()
+    assert provider.last_status == "ok"
+    monkeypatch.setattr(ax_capture.subprocess, "run", _fake_run_returning("", returncode=1))
+    provider.capture_frontmost()
+    assert provider.last_status == "error"
+
+
+# --- AXTimeoutCircuit -----------------------------------------------------------
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 500.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def tick(self, s: float) -> None:
+        self.now += s
+
+
+def _target(pid: int = 42, bundle: str = "com.tencent.WeWorkMac") -> AXTarget:
+    return AXTarget(pid=pid, bundle_id=bundle)
+
+
+def test_one_timeout_leaves_circuit_closed() -> None:
+    circuit = AXTimeoutCircuit(failure_threshold=2, open_seconds=120.0, clock=_Clock())
+    t = _target()
+    assert circuit.allow(t)
+    circuit.record_timeout(t)
+    assert circuit.allow(t)  # still closed after a single timeout
+
+
+def test_two_timeouts_open_circuit_for_120s() -> None:
+    clock = _Clock()
+    circuit = AXTimeoutCircuit(failure_threshold=2, open_seconds=120.0, clock=clock)
+    t = _target()
+    circuit.record_timeout(t)
+    circuit.record_timeout(t)
+    assert circuit.allow(t) is False
+    clock.tick(119.9)
+    assert circuit.allow(t) is False
+    clock.tick(0.2)  # deadline elapsed → one half-open probe allowed
+    assert circuit.allow(t) is True
+
+
+def test_open_circuit_prevents_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = _Clock()
+    circuit = AXTimeoutCircuit(failure_threshold=2, open_seconds=120.0, clock=clock)
+    provider = MacAXHelperProvider(
+        helper_path="/fake/mac-ax-helper", depth=8, timeout=3, circuit=circuit
+    )
+    t = _target()
+
+    def _timeout(args, **kwargs):  # noqa: ANN001, ANN003
+        raise subprocess.TimeoutExpired(cmd=args, timeout=4)
+
+    monkeypatch.setattr(ax_capture.subprocess, "run", _timeout)
+    provider.capture_frontmost(target=t)
+    provider.capture_frontmost(target=t)  # opens the circuit
+
+    calls = {"n": 0}
+
+    def _counting(args, **kwargs):  # noqa: ANN001, ANN003
+        calls["n"] += 1
+        return subprocess.CompletedProcess(args, 0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(ax_capture.subprocess, "run", _counting)
+    assert provider.capture_frontmost(target=t) is None
+    assert provider.last_status == "circuit_open"
+    assert calls["n"] == 0  # no subprocess while open
+
+
+def test_different_bundles_have_independent_state() -> None:
+    circuit = AXTimeoutCircuit(failure_threshold=2, open_seconds=120.0, clock=_Clock())
+    a = _target(pid=1, bundle="com.a")
+    b = _target(pid=2, bundle="com.b")
+    circuit.record_timeout(a)
+    circuit.record_timeout(a)
+    assert circuit.allow(a) is False
+    assert circuit.allow(b) is True
+
+
+def test_restarted_pid_receives_independent_state() -> None:
+    circuit = AXTimeoutCircuit(failure_threshold=2, open_seconds=120.0, clock=_Clock())
+    old = _target(pid=1, bundle="com.same")
+    new = _target(pid=2, bundle="com.same")  # same bundle, new process
+    circuit.record_timeout(old)
+    circuit.record_timeout(old)
+    assert circuit.allow(old) is False
+    assert circuit.allow(new) is True
+
+
+def test_success_clears_timeout_state() -> None:
+    circuit = AXTimeoutCircuit(failure_threshold=2, open_seconds=120.0, clock=_Clock())
+    t = _target()
+    circuit.record_timeout(t)
+    circuit.record_success(t)
+    circuit.record_timeout(t)
+    assert circuit.allow(t) is True  # count was reset, so one timeout stays closed
+
+
+def test_half_open_timeout_reopens_circuit() -> None:
+    clock = _Clock()
+    circuit = AXTimeoutCircuit(failure_threshold=2, open_seconds=120.0, clock=clock)
+    t = _target()
+    circuit.record_timeout(t)
+    circuit.record_timeout(t)  # open
+    clock.tick(120.1)
+    assert circuit.allow(t) is True  # half-open probe
+    circuit.record_timeout(t)  # probe times out
+    assert circuit.allow(t) is False  # reopened
+    clock.tick(119.0)
+    assert circuit.allow(t) is False
+
+
+def test_non_timeout_errors_do_not_open_circuit(monkeypatch: pytest.MonkeyPatch) -> None:
+    circuit = AXTimeoutCircuit(failure_threshold=2, open_seconds=120.0, clock=_Clock())
+    provider = MacAXHelperProvider(
+        helper_path="/fake/mac-ax-helper", depth=8, timeout=3, circuit=circuit
+    )
+    t = _target()
+    monkeypatch.setattr(ax_capture.subprocess, "run", _fake_run_returning("", returncode=1))
+    provider.capture_frontmost(target=t)
+    provider.capture_frontmost(target=t)
+    assert circuit.allow(t) is True  # errors fail open, never count
+
+
+def test_empty_bundle_bypasses_circuit_tracking() -> None:
+    circuit = AXTimeoutCircuit(failure_threshold=2, open_seconds=120.0, clock=_Clock())
+    t = AXTarget(pid=42, bundle_id="")  # missing bundle → untracked
+    circuit.record_timeout(t)
+    circuit.record_timeout(t)
+    assert circuit.allow(t) is True
+    # Missing pid is equally untracked.
+    t2 = AXTarget(pid=None, bundle_id="com.x")
+    circuit.record_timeout(t2)
+    circuit.record_timeout(t2)
+    assert circuit.allow(t2) is True
