@@ -1,0 +1,959 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Persome Personal Memory：从 AX Tree 到 Agent Context</title>
+  <style>
+    :root {
+      --ink: #1f2430;
+      --muted: #687386;
+      --line: #e4e8f0;
+      --bg: #f5f7fa;
+      --surface: #ffffff;
+      --surface-soft: #f9fafc;
+      --brand: #315fce;
+      --brand-strong: #24479b;
+      --brand-soft: #edf3ff;
+      --violet: #7651b6;
+      --good: #16805b;
+      --good-soft: #ecf8f3;
+      --warn: #a66517;
+      --warn-soft: #fff7e8;
+      --danger: #b23b4a;
+      --danger-soft: #fff0f2;
+      --code: #111827;
+      --code-text: #e5edf8;
+      --radius: 14px;
+      --shadow: 0 1px 3px rgba(16, 24, 40, .05);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      font-size: 16px;
+      line-height: 1.75;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button, input { font: inherit; }
+    a { color: var(--brand); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code {
+      padding: 1px 6px;
+      border-radius: 5px;
+      background: #edf0f5;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .9em;
+    }
+
+    .wrap { width: min(1000px, calc(100% - 40px)); margin: 0 auto; }
+    .hero {
+      color: #fff;
+      background: linear-gradient(135deg, #17233f, #315fce 62%, #7651b6);
+      padding: 52px 0 40px;
+    }
+    .kicker {
+      font-size: 13px;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      opacity: .82;
+    }
+    .hero h1 {
+      margin: .25em 0 .08em;
+      font-size: clamp(30px, 5vw, 43px);
+      line-height: 1.2;
+      letter-spacing: -.5px;
+    }
+    .hero .subtitle {
+      margin: .3em 0 1.15em;
+      max-width: 760px;
+      font-size: 18px;
+      opacity: .94;
+    }
+    .meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 13px; }
+    .meta span {
+      padding: 5px 11px;
+      border-radius: 20px;
+      background: rgba(255, 255, 255, .13);
+    }
+
+    .toc {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      gap: 5px;
+      overflow-x: auto;
+      padding: 10px 20px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, .94);
+      backdrop-filter: blur(10px);
+      white-space: nowrap;
+    }
+    .toc a {
+      padding: 4px 10px;
+      border-radius: 16px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .toc a:hover, .toc a.active {
+      color: #fff;
+      background: var(--brand);
+      text-decoration: none;
+    }
+
+    main { padding: 28px 0 70px; }
+    section {
+      margin: 22px 0;
+      padding: 27px 30px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      scroll-margin-top: 70px;
+    }
+    h2 {
+      margin: .05em 0 .65em;
+      padding-bottom: .34em;
+      border-bottom: 2px solid var(--brand-soft);
+      font-size: 26px;
+      line-height: 1.35;
+    }
+    h3 { margin: 1.35em 0 .45em; color: #27334a; font-size: 19px; }
+    p { margin: .58em 0; }
+    ul, ol { margin: .5em 0 .8em; padding-left: 1.4em; }
+    li { margin: .28em 0; }
+
+    .insight {
+      margin: 14px 0;
+      padding: 15px 18px;
+      border: 1px solid #d7e2ff;
+      border-radius: 12px;
+      background: linear-gradient(90deg, #eef4ff, #f8f4ff);
+      font-size: 15.5px;
+    }
+    .glossary {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin: 14px 0;
+    }
+    .term {
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--brand);
+      border-radius: 10px;
+      background: var(--surface-soft);
+      font-size: 14.5px;
+    }
+    .term b { color: var(--brand-strong); }
+    .term .en { color: var(--muted); font-size: 12px; font-weight: 400; }
+
+    .cards2, .cards3 {
+      display: grid;
+      gap: 14px;
+      margin: 14px 0;
+    }
+    .cards2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cards3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card {
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface-soft);
+      font-size: 14.5px;
+    }
+    .card .ct { margin-bottom: 6px; color: #27334a; font-weight: 800; }
+
+    .formula, pre {
+      overflow-x: auto;
+      margin: 12px 0;
+      padding: 13px 16px;
+      border: 1px solid #dde4ef;
+      border-left: 3px solid var(--brand);
+      border-radius: 9px;
+      background: #f5f7fb;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 14px;
+      line-height: 1.65;
+      white-space: pre-wrap;
+    }
+    pre.dark {
+      color: var(--code-text);
+      background: var(--code);
+      border-color: var(--code);
+    }
+
+    .callout {
+      margin: 14px 0;
+      padding: 14px 17px;
+      border: 1px solid #d8e5ff;
+      border-left: 4px solid var(--brand);
+      border-radius: 11px;
+      background: #f3f7ff;
+    }
+    .callout.warn {
+      border-color: #f2d7a9;
+      border-left-color: var(--warn);
+      background: var(--warn-soft);
+    }
+    .callout .ct { margin-bottom: 5px; font-weight: 800; }
+
+    .flow-shell {
+      margin-top: 16px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--surface-soft);
+    }
+    .lane + .lane { margin-top: 18px; }
+    .lane-head { display: flex; align-items: baseline; gap: 9px; margin-bottom: 9px; }
+    .lane-name {
+      padding: 3px 10px;
+      border-radius: 14px;
+      color: #fff;
+      background: var(--brand);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .lane[data-lane="recall"] .lane-name { background: var(--violet); }
+    .lane-note { color: var(--muted); font-size: 13px; }
+    .stage-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 3px 0 9px;
+    }
+    .stage {
+      width: 145px;
+      min-width: 145px;
+      min-height: 64px;
+      padding: 8px 10px;
+      cursor: pointer;
+      text-align: left;
+      color: var(--ink);
+      border: 1px solid #cfd6e3;
+      border-radius: 8px;
+      background: #fff;
+    }
+    .stage:hover { border-color: var(--brand); }
+    .stage.active {
+      color: #fff;
+      border-color: var(--brand);
+      background: var(--brand);
+    }
+    .lane[data-lane="recall"] .stage.active {
+      border-color: var(--violet);
+      background: var(--violet);
+    }
+    .stage b { display: block; font-size: 13px; }
+    .stage small { display: block; margin-top: 3px; opacity: .72; line-height: 1.35; }
+    .arrow { color: #9ba6b7; font-size: 20px; }
+    .flow-bridge {
+      margin: 13px 0;
+      padding: 10px 13px;
+      border-left: 3px solid var(--violet);
+      color: #4d3b6f;
+      background: #f7f3ff;
+      font-size: 14px;
+    }
+    .stage-detail {
+      display: none;
+      margin-top: 16px;
+      padding: 18px;
+      border: 1px solid #d6deec;
+      border-radius: 12px;
+      background: #fff;
+    }
+    .stage-detail.open { display: block; }
+    .detail-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .detail-head h3 { margin: 0; }
+    .detail-badge {
+      padding: 3px 9px;
+      border-radius: 12px;
+      color: var(--brand-strong);
+      background: var(--brand-soft);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .io-grid, .detail-grid {
+      display: grid;
+      gap: 14px;
+      margin-top: 13px;
+    }
+    .io-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .detail-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .detail-block {
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--surface-soft);
+      font-size: 14px;
+    }
+    .detail-block h4 { margin: 0 0 5px; font-size: 14px; }
+    .child-flow {
+      display: flex;
+      align-items: stretch;
+      gap: 8px;
+      overflow-x: auto;
+      margin: 13px 0;
+      padding-bottom: 5px;
+    }
+    .child {
+      width: 170px;
+      min-width: 170px;
+      padding: 10px 11px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #fff;
+      font-size: 13px;
+    }
+    .child b { display: block; margin-bottom: 4px; }
+    .child span { color: var(--muted); }
+
+    details {
+      margin: 10px 0;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--surface-soft);
+    }
+    summary {
+      padding: 10px 13px;
+      cursor: pointer;
+      color: var(--brand-strong);
+      font-weight: 700;
+    }
+    .details-body { padding: 0 13px 13px; }
+
+    .section-lead { color: var(--muted); }
+    .chapter-template {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 9px;
+      margin: 12px 0;
+    }
+    .chapter-template span {
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-soft);
+      text-align: center;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    footer {
+      width: min(1000px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 0 0 35px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 760px) {
+      .wrap { width: min(100% - 24px, 1000px); }
+      section { padding: 21px 18px; }
+      .glossary, .cards2, .cards3, .io-grid, .detail-grid, .chapter-template {
+        grid-template-columns: 1fr;
+      }
+      .hero { padding: 38px 0 31px; }
+      .hero .subtitle { font-size: 16px; }
+    }
+
+    @media print {
+      :root { --bg: #fff; }
+      body { background: #fff; font-size: 12px; }
+      .hero { color: #111; background: #fff; padding: 18px 0; }
+      .toc, .flow-controls { display: none !important; }
+      section {
+        break-inside: auto;
+        margin: 11px 0;
+        padding: 17px 20px;
+        box-shadow: none;
+      }
+      h2, h3 { break-after: avoid; }
+      .card, .term, .callout, details, pre, .flow-shell { break-inside: avoid; }
+      details > .details-body { display: block !important; }
+      .stage-detail { display: block !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="wrap">
+      <div class="kicker">技术分享 · Personal Model Runtime</div>
+      <h1>Persome Personal Memory</h1>
+      <p class="subtitle">从 AX Tree 到 Agent Context：Memory 如何形成、如何召回、如何回到证据</p>
+      <div class="meta">
+        <span>面向：团队工程师</span>
+        <span>时长：60 分钟</span>
+        <span>案例：小张、小李、项目 A/B/C</span>
+        <span>边界：Prediction / Training 作为展望</span>
+      </div>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="报告目录">
+    <a href="#opening">开篇</a>
+    <a href="#flow">交互主图</a>
+    <a href="#example">走一个实例</a>
+    <a href="#collection">数据收集</a>
+    <a href="#state">状态形成</a>
+    <a href="#formation">Memory 沉淀</a>
+    <a href="#recall">Memory Recall</a>
+    <a href="#delivery">Agent 交付</a>
+    <a href="#evaluation">评测</a>
+    <a href="#lessons">工程复盘</a>
+    <a href="#outlook">展望</a>
+  </nav>
+
+  <main class="wrap">
+    <section id="opening">
+      <h2>开篇 · Personal Memory 是什么、为什么需要它</h2>
+      <div class="insight">
+        <b>一句话：</b>普通 Agent 只能看见当前会话；Personal Memory 让它在进入任务时，就知道当前进度、相关人物和用户反复表现出的工作方式，而且每一条判断都能回到证据。
+      </div>
+
+      <h3>先对齐几个术语</h3>
+      <div class="glossary">
+        <div class="term"><b>AX Tree</b> <span class="en">观测来源</span><br>macOS Accessibility 暴露的窗口、控件、焦点和文本结构。它不是 Memory。</div>
+        <div class="term"><b>Event</b> <span class="en">变化信号</span><br>窗口切换、输入、点击或内容变化，只说明“发生了变化”。</div>
+        <div class="term"><b>Capture</b> <span class="en">证据帧</span><br>系统在某个时刻保存的前台应用、焦点元素、可见文本和 URL。</div>
+        <div class="term"><b>Personal Memory</b> <span class="en">长期结构</span><br>从多次活动中形成的事实、关系和行为模式，可被检查、修正和召回。</div>
+        <div class="term"><b>Memory Formation</b> <span class="en">形成</span><br>Event 经过过滤、状态构造和证据门禁，逐步进入 Personal Memory。</div>
+        <div class="term"><b>Memory Recall</b> <span class="en">召回</span><br>当前情境从 Personal Memory 中选择相关部分，组织成 Agent Context。</div>
+      </div>
+
+      <h3>为什么普通 Agent 不能直接接着昨天工作？</h3>
+      <p>第二天，小张重新打开 Claude Code，继续处理昨天没有完成的项目 A。对一个普通 Agent 来说，这是一次新的会话。它只看得到当前仓库和小张刚刚输入的内容。</p>
+      <div class="formula">现在做到哪里？
+这件事正在和谁一起做？
+自己通常会怎样推进这类修改？</div>
+      <div class="cards2">
+        <div class="card">
+          <div class="ct">① 会话上下文会重置</div>
+          昨天的任务进度和协作信息不会自动进入今天的 Claude Code。用户必须重复解释。
+        </div>
+        <div class="card">
+          <div class="ct">② 活动日志不等于个人结构</div>
+          即使保存了昨天的全部屏幕内容，系统仍不知道哪些是项目状态、稳定关系或反复出现的做法。
+        </div>
+      </div>
+
+      <h3>Persome 怎么解决？</h3>
+      <p>目标不是把更多日志塞进 Prompt，而是让活动先形成可以长期使用的结构，再由当前任务选择相关部分。</p>
+      <div class="cards2">
+        <div class="card">
+          <div class="ct">Memory Formation</div>
+          App / AX Tree → Event → Capture → 当前状态 → Personal Memory
+        </div>
+        <div class="card">
+          <div class="ct">Memory Recall</div>
+          当前情境 → Memory Attention Heads → 相关结构 → Agent Context
+        </div>
+      </div>
+
+      <h3>整条技术主线只做三件事</h3>
+      <div class="cards3">
+        <div class="card"><div class="ct">① 看清楚</div>从连续、重复、敏感的 Mac 事件中保留真正有意义的证据。</div>
+        <div class="card"><div class="ct">② 谨慎沉淀</div>LLM 可以提出候选，但事实、关系和行为模式必须经过门禁与重复证据。</div>
+        <div class="card"><div class="ct">③ 在正确时刻召回</div>当前项目、人物和任务决定哪些 Memory 应该进入 Agent Context。</div>
+      </div>
+    </section>
+
+    <section id="flow">
+      <h2>交互主图 · Memory 形成与 Memory Recall</h2>
+      <p class="section-lead">点击任一阶段。页面会展开它的横向子流程、纵向机制、不变量和埋点，并定位到对应章节。</p>
+
+      <div class="flow-shell">
+        <div class="lane" data-lane="formation">
+          <div class="lane-head">
+            <span class="lane-name">主线 A：Memory 形成</span>
+            <span class="lane-note">数据从 AX Tree 进入系统，最终沉淀为事实、关系和行为模式</span>
+          </div>
+          <div class="stage-row">
+            <button class="stage" data-stage="collect" aria-expanded="false"><b>数据收集</b><small>App → AX Tree</small></button><span class="arrow">→</span>
+            <button class="stage" data-stage="filter" aria-expanded="false"><b>事件过滤</b><small>Firehose → Trigger</small></button><span class="arrow">→</span>
+            <button class="stage" data-stage="normalize" aria-expanded="false"><b>S1 证据帧</b><small>AX Tree → Capture</small></button><span class="arrow">→</span>
+            <button class="stage" data-stage="state" aria-expanded="false"><b>状态形成</b><small>Capture → Event Memory</small></button><span class="arrow">→</span>
+            <button class="stage" data-stage="delta" aria-expanded="false"><b>Memory 提炼</b><small>State → Proposal</small></button><span class="arrow">→</span>
+            <button class="stage" data-stage="sediment" aria-expanded="false"><b>Memory 沉淀</b><small>Fact → Pattern</small></button>
+          </div>
+        </div>
+
+        <div class="flow-bridge">形成线的终点是可寻址的 Personal Memory。Recall 线不会重放全部历史，而是让当前情境选择相关结构。</div>
+
+        <div class="lane" data-lane="recall">
+          <div class="lane-head">
+            <span class="lane-name">主线 B：Memory Recall</span>
+            <span class="lane-note">当前情境通过多个 Memory Attention Heads 召回并交付带引用的上下文</span>
+          </div>
+          <div class="stage-row">
+            <button class="stage" data-stage="present" aria-expanded="false"><b>当前情境</b><small>Present → Q</small></button><span class="arrow">→</span>
+            <button class="stage" data-stage="heads" aria-expanded="false"><b>Attention Heads</b><small>Q → Candidate Pools</small></button><span class="arrow">→</span>
+            <button class="stage" data-stage="fuse" aria-expanded="false"><b>候选融合</b><small>Pools → Ranked Hits</small></button><span class="arrow">→</span>
+            <button class="stage" data-stage="chains" aria-expanded="false"><b>关系链与引用</b><small>Hits → Evidence</small></button><span class="arrow">→</span>
+            <button class="stage" data-stage="deliver" aria-expanded="false"><b>Agent Context</b><small>Evidence → MCP</small></button>
+          </div>
+        </div>
+
+        <div id="stage-detail" class="stage-detail" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <section id="example">
+      <h2>0 · 走一个实例：Agent 最终应该知道什么</h2>
+      <p class="section-lead">先不讲 Point、Line、Face，也不讲检索算法。先站在 Agent 的位置，确定最终需要拿到什么。</p>
+
+      <h3>场景：第二天重新打开 Claude Code</h3>
+      <p>小张再次进入项目 A 的仓库。Claude Code 此刻需要的不是昨天的完整流水，而是与当前工作直接相关的一块个人上下文：</p>
+      <pre class="dark">项目 A 当前正在处理数据解析稳定性。昨天已经完成重试路径修复，
+相关测试通过；接下来还需要补浏览器验证和完整测试。[事实引用 1]
+
+小李是项目 A 的主要协作者，最近参与了数据契约和重试方案的讨论。
+[事实引用 2]
+
+小张在跨模块修改前通常先复现问题、补回归测试，再扩大修改范围。
+[事实引用 3]</pre>
+
+      <p>第一句话是刚刚发生、可以被验证的项目状态。第二句话来自多次协作。第三句话只有在多个任务中出现相同顺序后，才有资格成为模式。</p>
+
+      <div class="glossary">
+        <div class="term"><b>近期事实（Fact）</b><br>某件具体事情当前是什么状态。</div>
+        <div class="term"><b>人物关系（Relation）</b><br>人与人、人与项目之间存在什么稳定联系。</div>
+        <div class="term"><b>行为模式（Behavior Pattern）</b><br>同一种做法是否跨任务反复出现。</div>
+        <div class="term"><b>事实引用</b><br>它不是第四种 Memory，而是每一句判断的证据入口。</div>
+      </div>
+
+      <div class="formula">Recall 中的一句话
+→ 对应的 Fact / Relation / Behavior Pattern
+→ 支撑它的一个或多个低层 Fact
+→ 每个 Fact 对应的 Raw Evidence</div>
+
+      <details>
+        <summary>[事实引用 1] 近期项目事实</summary>
+        <div class="details-body">
+          <pre>Fact
+  项目 A 的重试路径已完成修复，相关测试通过。
+
+Raw Evidence
+  [Claude Code · owner-authored]
+  “重试路径已经修复，相关测试通过。”
+
+  [Terminal · tool result]
+  “tests passed”
+
+Evidence Scope
+  当前项目 A Session，重试路径相关窗口</pre>
+        </div>
+      </details>
+
+      <details>
+        <summary>[事实引用 2] 人物与项目关系</summary>
+        <div class="details-body">
+          <pre>Relation
+  self knows 小李，label = collaborator
+  self participates_in 项目 A
+  小李 participates_in 与项目 A 相关的多个 Activity
+
+Supporting Facts
+  小李参与了项目 A 的数据契约讨论。
+  小李与小张共同检查了重试方案。
+  小李在多个项目 A Session 中持续出现。
+
+Raw Evidence
+  [Chat · 小李 received]
+  “数据契约部分我来一起看。”
+
+  [Claude Code · owner-authored]
+  “和小李对齐重试方案后继续修改。”</pre>
+        </div>
+      </details>
+
+      <details>
+        <summary>[事实引用 3] 行为模式</summary>
+        <div class="details-body">
+          <pre>Behavior Pattern
+  小张在跨模块修改前通常先复现问题并补回归测试。
+
+Supporting Facts
+  项目 A：先复现重试失败，再修改实现。
+  项目 B：先补解析回归测试，再调整数据结构。
+  项目 C：先运行完整门禁，再扩大重构范围。
+
+Raw Evidence
+  每条 Supporting Fact 分别引用对应 Session 中的小张输入、
+  测试命令与结果，以及最终完成状态。</pre>
+        </div>
+      </details>
+
+      <div class="callout warn">
+        <div class="ct">当前实现边界</div>
+        Memory Delta 已保存 Quote、Session 和时间窗口，但 Point 没有直接保存精确 capture_id，Timeline 也只保存 capture_count。逐句 Fact 到 Raw Capture 的 lineage 仍需补齐。
+      </div>
+    </section>
+
+    <section id="collection">
+      <h2>1 · Event 不是 Memory：Mac 上的现实如何留下证据</h2>
+      <p>普通 Cocoa、Electron、浏览器、聊天应用和终端暴露的信号并不相同。本章解释 AX、应用解析器、本地 socket 与 OCR 各自负责什么，以及数据进入系统前必须守住的隐私边界。</p>
+      <div class="chapter-template"><span>原理</span><span>怎么做</span><span>数据与局限</span><span>相对前一步的改进</span></div>
+    </section>
+
+    <section id="state">
+      <h2>2 · “现在”如何形成：连续事件如何变成有边界的状态</h2>
+      <p>沿着 S0 去重、S1 Capture、一分钟 Timeline、确定性 Session 和五分钟 Reducer，解释连续、重复的桌面事件如何变成可重放的当前状态。</p>
+      <div class="chapter-template"><span>原理</span><span>怎么做</span><span>数据与局限</span><span>相对前一步的改进</span></div>
+    </section>
+
+    <section id="formation">
+      <h2>3 · “过去”如何沉淀：事实、关系和行为模式如何形成</h2>
+      <p>区分 Event Memory 与 Personal Memory，解释 Memory Delta、确定性 Gate，以及 Point、Line、Face、Volume、Root 的形成速度和证据门槛。</p>
+      <div class="chapter-template"><span>原理</span><span>怎么做</span><span>数据与局限</span><span>相对前一步的改进</span></div>
+    </section>
+
+    <section id="recall">
+      <h2>4 · 当前情境如何激活个人结构</h2>
+      <p>当前项目、人物、应用和任务构成 Recall 的问题。多个 Memory Attention Heads 从不同地址轴产生候选，再融合成相关结果，而不是按时间倒出昨天的全部活动。</p>
+      <div class="chapter-template"><span>原理</span><span>怎么做</span><span>数据与局限</span><span>相对前一步的改进</span></div>
+    </section>
+
+    <section id="delivery">
+      <h2>5 · Memory 如何交付给 Agent</h2>
+      <p>召回结果需要被裁剪、组织并通过 MCP 交付。每条陈述附带 Fact 与 Raw Evidence，不相关画像、未证实推断和完整屏幕流水继续留在模型之外。</p>
+      <div class="chapter-template"><span>原理</span><span>怎么做</span><span>数据与局限</span><span>相对前一步的改进</span></div>
+    </section>
+
+    <section id="evaluation">
+      <h2>6 · 如何证明它没有丢、没有编，而且真的有用</h2>
+      <p>运行埋点证明系统如何工作，标注评测回答结果是否正确。本章分别测量事件漏斗、信息保留、Gate 准确率、引用覆盖、Recall 相关性、延迟、成本和故障恢复。</p>
+      <div class="chapter-template"><span>测量对象</span><span>指标口径</span><span>需要的埋点</span><span>不能得出的结论</span></div>
+    </section>
+
+    <section id="lessons">
+      <h2>7 · 工程复盘：哪些方法可以迁移到下一套系统</h2>
+      <p>分层压缩、LLM Proposal 与确定性写入分离、证据优先、双速生长、可恢复水位线和显式降级，是这套系统最值得复用的工程方法。</p>
+    </section>
+
+    <section id="outlook">
+      <h2>8 · 展望：从 Recall 走向 Predict Your Next State</h2>
+      <p>当前系统已经建立 Formation、Recall 和证据基础。Prediction、Feedback、Credit Assignment 与 Training Loop 仍需要持续数据和行为级评测。</p>
+      <div class="callout">
+        <div class="ct">诚实边界</div>
+        这份分享先证明机制如何形成、如何恢复、如何引用。它不把“能够准确预测一个人的下一状态”写成已经完成的实验结果。
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    Persome Personal Memory 技术分享。页面为单文件 HTML，可直接通过 file:// 打开；无外部依赖与网络请求。
+  </footer>
+
+  <script>
+    const stageDetails = {
+      collect: {
+        title: "数据收集",
+        lane: "Memory 形成",
+        question: "不同类型的 Mac 应用，怎样留下可以继续处理的原始证据？",
+        input: "前台应用、窗口、焦点、键盘与鼠标变化",
+        output: "AX Tree、触发原因、窗口元数据和必要时的本地像素证据",
+        children: [
+          ["mac-ax-watcher", "订阅窗口、应用、输入和点击等 AX 事件。"],
+          ["mac-ax-helper", "触发后重新读取前台窗口 AX Tree。"],
+          ["App-aware parser", "浏览器折叠 chrome，聊天应用保留发送方向。"],
+          ["cmux socket", "GPU 终端直接读取本地 surface。"],
+          ["OCR fallback", "AX 内容不足时在隔离本地进程识别。"]
+        ],
+        mechanisms: ["普通 Cocoa 与 Electron 走通用 AX", "浏览器优先 AXWebArea 与地址栏", "聊天 App 保留 sender、direction、time、body"],
+        invariants: ["密码输入框保守抑制", "OCR 只在本机运行", "采集到的是证据，不是 Memory"],
+        metrics: ["事件类型计数", "按 App 的 AX 非空率", "OCR 触发与成功率", "secure-input 抑制次数"],
+        boundary: "",
+        section: "collection"
+      },
+      filter: {
+        title: "事件过滤",
+        lane: "Memory 形成",
+        question: "怎样减少重复事件，又不把真正的焦点变化和用户输入丢掉？",
+        input: "Watcher 连续产生的 AX 与交互事件",
+        output: "允许进入 Capture Worker 的少量触发事件",
+        children: [
+          ["事件分类", "焦点、应用、点击和输入立即触发。"],
+          ["事件去重", "相同事件、应用和窗口短时间丢弃。"],
+          ["Debounce", "连续 AXValueChanged 只保留最后一次。"],
+          ["Capture gap", "非焦点事件受最小采集间隔限制。"],
+          ["内容指纹", "内容不变时不写 Capture，也不刷新 Session。"]
+        ],
+        mechanisms: ["同窗口去重与最小采集间隔分工", "单线程有界 Capture Worker", "内容指纹排除时间和截图"],
+        invariants: ["焦点变化绕过普通间隔", "静态屏幕不能维持 Session", "队列溢出必须计数"],
+        metrics: ["seen / skipped / debounced", "各类 dedup 原因", "queue dropped", "完整事件漏斗"],
+        boundary: "",
+        section: "collection"
+      },
+      normalize: {
+        title: "S1 证据帧",
+        lane: "Memory 形成",
+        question: "怎样把不同应用的 AX 结构投影成统一证据帧？",
+        input: "AX Tree、窗口元数据和可选 cmux/OCR 文本",
+        output: "focused_element、visible_text、url 与 Capture JSON",
+        children: [
+          ["隐私门", "先检查 secure input。"],
+          ["Focused element", "保留当前输入上下文。"],
+          ["Visible text", "按 App 类型压缩 UI chrome。"],
+          ["URL", "浏览器从地址栏结构读取。"],
+          ["JSON + FTS", "原始记录和搜索投影一起写入。"]
+        ],
+        mechanisms: ["Focused element 表示输入焦点", "Visible text 表示阅读面", "Raw AX 留给审计"],
+        invariants: ["placeholder 不能当用户输入", "缺密钥时截图失败关闭", "S1 不做长期语义判断"],
+        metrics: ["字段完整率", "文本长度与截断率", "Capture/FTS 一致率", "按 App 的字节规模"],
+        boundary: "",
+        section: "collection"
+      },
+      state: {
+        title: "状态形成",
+        lane: "Memory 形成",
+        question: "连续证据帧怎样获得时间边界，并变成“这段时间发生了什么”？",
+        input: "按时间排序的 S1 Captures",
+        output: "一分钟 Timeline、确定性 Session 与 Event Memory",
+        children: [
+          ["Timeline", "墙钟一分钟窗口，归一化并保留逐字证据。"],
+          ["Session", "idle、soft cut、maximum duration 划定边界。"],
+          ["Reducer", "每五分钟只处理新窗口。"],
+          ["Event Memory", "记录活动并提供时间与 App breadcrumb。"]
+        ],
+        mechanisms: ["Timeline normalize，Reducer compress", "Session 是处理边界", "flush_end 支持增量归约"],
+        invariants: ["跨重启可重放", "失败时不能静默丢窗口", "Event Memory 不等于 Personal Memory"],
+        metrics: ["形成漏斗", "压缩率与证据保留率", "P50/P95 延迟", "heuristic fallback"],
+        boundary: "Timeline 当前保存 capture_count，但没有精确 Capture ID 列表。",
+        section: "state"
+      },
+      delta: {
+        title: "Memory 提炼",
+        lane: "Memory 形成",
+        question: "哪些当前状态有资格成为长期 Fact、Relation 或 Event？",
+        input: "Timeline Window、Focus Evidence 与身份 Roster",
+        output: "经过确定性门禁的 Memory Delta",
+        children: [
+          ["LLM Proposal", "提出 entity、assertion、relation、event。"],
+          ["Quote Gate", "候选必须逐字引用窗口证据。"],
+          ["Identity Gate", "身份必须来自 Roster 或当前窗口。"],
+          ["Predicate Gate", "关系使用封闭谓词。"],
+          ["Persist before apply", "先保存再确定性写入。"]
+        ],
+        mechanisms: ["LLM 有提议权，没有写入权", "移除 assistant/system/preview 证据", "记录 apply_status"],
+        invariants: ["无 Quote 或低置信候选丢弃", "失败不推进 delta_end", "恢复不重复调用 LLM"],
+        metrics: ["proposed/admitted/dropped", "按 Gate 拆分原因", "LLM 成本与延迟", "apply retry"],
+        boundary: "",
+        section: "formation"
+      },
+      sediment: {
+        title: "Memory 沉淀",
+        lane: "Memory 形成",
+        question: "一次事实怎样进入模型，多次事实又怎样形成行为模式？",
+        input: "通过 Gate 的实体、断言、关系和跨 Session 证据",
+        output: "Point、Line、Face、Volume、Root",
+        children: [
+          ["Point", "可寻址的实体或事实。"],
+          ["Line", "演化关系或实体关系。"],
+          ["Face", "同一领域的局部行为模式。"],
+          ["Volume", "跨领域重复的高层结构。"],
+          ["Root", "至多一个当前综合入口。"]
+        ],
+        mechanisms: ["Point/Line 走快速路径", "高层结构走慢速 Build", "Shadow 保存未证实候选"],
+        invariants: ["一次事件不能生成模式", "高层必须由低层张成", "输入不足时 degraded"],
+        metrics: ["各层状态数量", "晋升耗时", "独立证据覆盖", "Fact→Raw citation coverage"],
+        boundary: "Point Receipt 主要回到 Point 自身；精确 Raw Capture lineage 尚未闭合。",
+        section: "formation"
+      },
+      present: {
+        title: "当前情境",
+        lane: "Memory Recall",
+        question: "再次打开 Claude Code 时，什么构成这次 Recall 的问题？",
+        input: "查询、项目名、人物、应用、时间与最近屏幕上下文",
+        output: "不调用 LLM 的 Multi-slot Q",
+        children: [
+          ["What", "保留原始查询文本。"],
+          ["Who", "从身份 Roster 扫描人物。"],
+          ["Where", "识别 Cursor、Terminal 等场景。"],
+          ["When", "解析日期和相对时间。"]
+        ],
+        mechanisms: ["Present 是唯一提问者", "显式实体与扫描结果同一入口", "无法解析的 Slot 留空"],
+        invariants: ["Q 构建不调用网络", "当前上下文不生成新事实", "Slot 是增强信号"],
+        metrics: ["Slot 非空率", "身份歧义率", "场景覆盖率", "Q 构建耗时"],
+        boundary: "生产 Recall 由 MCP 查询显式触发，不是每次切换窗口都自动注入 Prompt。",
+        section: "recall"
+      },
+      heads: {
+        title: "Memory Attention Heads",
+        lane: "Memory Recall",
+        question: "当前情境的不同部分，分别应该从 Memory 中寻找什么？",
+        input: "Multi-slot Q 与可寻址的 Personal Memory",
+        output: "人物、场景、时间、词法和语义候选池",
+        children: [
+          ["Who Head", "按身份和关联实体寻找。"],
+          ["Where Head", "按 App 与工作场景寻找。"],
+          ["When Head", "按时间窗口寻找近期事实。"],
+          ["Lexical Head", "BM25 处理精确词项。"],
+          ["Semantic Head", "向量召回同义表达。"]
+        ],
+        mechanisms: ["Slot 为空时 Head 不投票", "多个 Head 读取同一 Memory", "贡献由候选池和融合体现"],
+        invariants: ["这是检索头，不是 Transformer 参数", "人物走统一身份解析", "向量 Head 可关闭"],
+        metrics: ["每个 Head 候选数", "独有命中与 Top-K 贡献", "消融对比", "各 Head 延迟"],
+        boundary: "文档中的 Weight Attention 是架构语言；当前代码是 Multi-slot Q、检索池与融合排序。",
+        section: "recall"
+      },
+      fuse: {
+        title: "候选融合",
+        lane: "Memory Recall",
+        question: "多个 Head 给出不同候选后，怎样形成稳定且不过度重复的结果集？",
+        input: "Who、Where、When、BM25 与 Semantic 候选池",
+        output: "经过 RRF 与可选 MMR 的 Top-K Hits",
+        children: [
+          ["Pool scoring", "各检索池独立排名。"],
+          ["RRF", "按排名融合不同分数空间。"],
+          ["Temporal bounds", "显式时间优先。"],
+          ["MMR", "需要覆盖面时降低重复。"]
+        ],
+        mechanisms: ["关联检索是单一生产入口", "Slot 加票而非硬过滤", "Top-K 是关系链 Anchor"],
+        invariants: ["失败可降级", "排序可离线复现", "多样性不是默认牺牲相关性"],
+        metrics: ["Recall@K / MRR / NDCG", "RRF 前后变化", "重复率", "端到端延迟"],
+        boundary: "",
+        section: "recall"
+      },
+      chains: {
+        title: "关系链与事实引用",
+        lane: "Memory Recall",
+        question: "召回一个 Fact 后，怎样补齐它与用户、项目、人物和原始证据的关系？",
+        input: "Top-K Hits、Relation Lines 与 Receipts",
+        output: "关系链、Supporting Facts 与引用指针",
+        children: [
+          ["Anchor", "召回命中作为起点。"],
+          ["Graph walk", "沿有效 Line 拉取路径。"],
+          ["Supporting Facts", "为 Pattern 补低层事实。"],
+          ["Receipt", "把引用绑定到具体 Claim。"]
+        ],
+        mechanisms: ["链路失败仍返回基础 Hits", "高层 Pattern 引用多个 Fact", "引用附着到句子"],
+        invariants: ["无证据链的判断降低措辞", "引用不泄露无关 Raw", "不推断第三方人格"],
+        metrics: ["citation coverage", "断链率", "Fact→Raw 解析率", "展开时延"],
+        boundary: "当前可回到 Point、Quote、Session 或 Event Receipt；逐 Claim 精确 Capture ID 待补。",
+        section: "delivery"
+      },
+      deliver: {
+        title: "Agent Context 交付",
+        lane: "Memory Recall",
+        question: "怎样把 Recall 变成 Claude Code 可以使用、又不会污染决策的上下文？",
+        input: "Ranked Hits、关系链、事实引用与当前任务",
+        output: "精简、分层、带引用的 Personal Context",
+        children: [
+          ["Context assembly", "组合任务、人物、关系和模式。"],
+          ["Budget", "优先保留当前任务相关信息。"],
+          ["Citation", "把证据绑定到对应句子。"],
+          ["MCP", "通过专用工具交付。"],
+          ["Claude Code", "客户端决定何时调用。"]
+        ],
+        mechanisms: ["Recall 不生成行动建议", "MCP 工具保留能力边界", "预算优先保留引用"],
+        invariants: ["Recall 与 Prediction 分开", "无关画像不进入", "低置信信息降级或省略"],
+        metrics: ["Context Token 规模", "实际使用比例", "人工相关性", "MCP 端到端延迟"],
+        boundary: "MCP 提供 Recall 能力，Claude Code 是否主动调用仍由客户端行为决定。",
+        section: "delivery"
+      }
+    };
+
+    const stageButtons = [...document.querySelectorAll(".stage")];
+    const detail = document.getElementById("stage-detail");
+
+    function list(items) {
+      return `<ul>${items.map((item) => `<li>${item}</li>`).join("")}</ul>`;
+    }
+
+    function childFlow(children) {
+      return `<div class="child-flow">${children.map(([title, text], index) => `
+        <div class="child"><b>${title}</b><span>${text}</span></div>
+        ${index < children.length - 1 ? '<span class="arrow">→</span>' : ""}
+      `).join("")}</div>`;
+    }
+
+    function selectStage(id) {
+      const stage = stageDetails[id];
+      const button = document.querySelector(`[data-stage="${id}"]`);
+      const wasActive = button.classList.contains("active");
+
+      stageButtons.forEach((item) => {
+        item.classList.remove("active");
+        item.setAttribute("aria-expanded", "false");
+      });
+
+      if (wasActive) {
+        detail.classList.remove("open");
+        detail.innerHTML = "";
+        return;
+      }
+
+      button.classList.add("active");
+      button.setAttribute("aria-expanded", "true");
+      detail.innerHTML = `
+        <div class="detail-head">
+          <h3>${stage.title}</h3>
+          <span class="detail-badge">${stage.lane}</span>
+        </div>
+        <p><b>${stage.question}</b></p>
+        <div class="io-grid">
+          <div class="detail-block"><h4>输入</h4>${stage.input}</div>
+          <div class="detail-block"><h4>输出</h4>${stage.output}</div>
+        </div>
+        <h3>横向展开：子阶段</h3>
+        ${childFlow(stage.children)}
+        <div class="detail-grid">
+          <div class="detail-block"><h4>具体机制</h4>${list(stage.mechanisms)}</div>
+          <div class="detail-block"><h4>必须守住的不变量</h4>${list(stage.invariants)}</div>
+          <div class="detail-block"><h4>需要的埋点与评测</h4>${list(stage.metrics)}</div>
+        </div>
+        ${stage.boundary ? `<div class="callout warn"><div class="ct">当前实现边界</div>${stage.boundary}</div>` : ""}
+      `;
+      detail.classList.add("open");
+      setTimeout(() => {
+        document.getElementById(stage.section)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 80);
+    }
+
+    stageButtons.forEach((button) => {
+      button.addEventListener("click", () => selectStage(button.dataset.stage));
+    });
+
+    const tocLinks = [...document.querySelectorAll(".toc a")];
+    const sections = tocLinks
+      .map((link) => document.querySelector(link.getAttribute("href")))
+      .filter(Boolean);
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (!visible) return;
+      tocLinks.forEach((link) => {
+        link.classList.toggle("active", link.getAttribute("href") === `#${visible.target.id}`);
+      });
+    }, { rootMargin: "-20% 0px -68% 0px", threshold: [0, .2, .5] });
+    sections.forEach((section) => observer.observe(section));
+
+    let printOpenState = [];
+    window.addEventListener("beforeprint", () => {
+      printOpenState = [...document.querySelectorAll("details")].map((item) => item.open);
+      document.querySelectorAll("details").forEach((item) => { item.open = true; });
+    });
+    window.addEventListener("afterprint", () => {
+      document.querySelectorAll("details").forEach((item, index) => {
+        item.open = Boolean(printOpenState[index]);
+      });
+    });
+  </script>
+</body>
+</html>
